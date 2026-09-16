@@ -4,6 +4,7 @@ use std::fmt;
 
 use crate::curation::config::CurationConfig;
 use crate::curation::rules::Curated;
+use crate::curation::rules::curate;
 use crate::model::Catalog;
 use crate::model::ShipIndex;
 
@@ -36,7 +37,7 @@ pub enum Problem {
     DuplicateExclude { index: ShipIndex },
     #[error("{index} is both excluded and kept")]
     ExcludedAndKept { index: ShipIndex },
-    #[error("{index} is kept but is still out of the pool, so the keep entry does nothing")]
+    #[error("{index} is kept, but keeping it changes nothing")]
     KeepHasNoEffect { index: ShipIndex },
     #[error("{index} counts as a copy of {base}, but {base} is not in the pool")]
     BaseNotInPool { index: ShipIndex, base: ShipIndex },
@@ -63,7 +64,7 @@ pub fn validate(catalog: &Catalog, config: &CurationConfig, curated: &Curated) -
         unknown_indices(catalog, config),
         duplicate_excludes(config),
         excluded_and_kept(config),
-        ineffective_keeps(config, curated),
+        ineffective_keeps(catalog, config, curated),
         missing_bases(catalog, curated),
         lookalike_problems(config, curated),
         pool_state(curated),
@@ -144,13 +145,29 @@ fn excluded_and_kept(config: &CurationConfig) -> Vec<Problem> {
         .collect()
 }
 
-fn ineffective_keeps(config: &CurationConfig, curated: &Curated) -> Vec<Problem> {
+fn ineffective_keeps(
+    catalog: &Catalog,
+    config: &CurationConfig,
+    curated: &Curated,
+) -> Vec<Problem> {
+    if config.keep.is_empty() {
+        return Vec::new();
+    }
+    let without_keeps = curate(
+        catalog,
+        &CurationConfig {
+            keep: Vec::new(),
+            ..config.clone()
+        },
+    );
     let excluded: BTreeSet<&ShipIndex> = config.exclude.iter().map(|entry| &entry.index).collect();
     config
         .keep
         .iter()
+        .filter(|entry| catalog.get(&entry.index).is_some() && !excluded.contains(&entry.index))
         .filter(|entry| {
-            curated.removed.contains_key(&entry.index) && !excluded.contains(&entry.index)
+            !(curated.pool.contains(&entry.index)
+                && without_keeps.removed.contains_key(&entry.index))
         })
         .map(|entry| Problem::KeepHasNoEffect {
             index: entry.index.clone(),

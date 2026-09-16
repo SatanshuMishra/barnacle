@@ -240,3 +240,14 @@ fn a_keep_that_changes_nothing_is_reported() {
         }]
     );
 }
+
+#[test]
+fn a_keep_on_a_ship_no_rule_removes_is_reported() {
+    let ships = vec![ship("PBSC507", "Belfast", "special", 7, "c866")];
+    assert_eq!(
+        problems(ships, &reviewed("[[keep]]\nindex = \"PBSC507\"")),
+        vec![Problem::KeepHasNoEffect {
+            index: index("PBSC507")
+        }]
+    );
+}

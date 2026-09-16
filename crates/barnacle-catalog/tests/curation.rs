@@ -283,13 +283,13 @@ fn manual_exclusions_are_never_chosen_as_a_base() {
     );
     let curated = curate(
         &ships,
-        &config("[[exclude]]\nindex = \"PASD019\"\nreason = \"bad_silhouette\""),
+        &config("[[exclude]]\nindex = \"PASD019\"\nreason = \"carbon_copy\""),
     );
     assert!(curated.pool.contains(&index("PASD704")));
     assert_eq!(
         curated.removed[&index("PASD019")],
         Removal::Manual {
-            reason: ExcludeReason::BadSilhouette,
+            reason: ExcludeReason::CarbonCopy,
             base: None
         }
     );
@@ -314,4 +314,95 @@ fn a_silhouette_shared_only_by_reskins_has_no_base() {
         Removal::CollaborationPrefix
     );
     assert!(curated.variants_of(&index("PJSC705")).is_empty());
+}
+
+#[test]
+fn a_ship_sharing_a_bad_silhouette_leaves_the_pool() {
+    let ships = catalog(
+        1,
+        vec![
+            ship("PASD019", "Clemson", "upgradeable", 4, "db18"),
+            ship("PASD704", "DD 214", "specialUnsellable", 4, "db18"),
+            ship("PBSC507", "Belfast", "special", 7, "c866"),
+        ],
+    );
+    let curated = curate(
+        &ships,
+        &config("[[exclude]]\nindex = \"PASD019\"\nreason = \"bad_silhouette\""),
+    );
+    assert_eq!(
+        curated.removed[&index("PASD704")],
+        Removal::SharesBadSilhouette {
+            with: index("PASD019")
+        }
+    );
+    assert_eq!(
+        curated.pool.iter().map(|i| i.as_str()).collect::<Vec<_>>(),
+        ["PBSC507"]
+    );
+}
+
+#[test]
+fn a_copy_of_a_variant_points_at_the_pool_base() {
+    let ships = catalog(
+        1,
+        vec![
+            ship("PASB518", "Massachusetts", "special", 8, "23ba"),
+            ship("PASB598", "Massachusetts B", "special", 8, "ebd0"),
+            ship("PASB798", "Massachusetts Golden", "special", 8, "ebd0"),
+        ],
+    );
+    let curated = curate(&ships, &config(""));
+    assert_eq!(
+        curated.removed[&index("PASB598")],
+        Removal::VariantSuffix {
+            base: index("PASB518")
+        }
+    );
+    assert_eq!(
+        curated.removed[&index("PASB798")],
+        Removal::CopyOf {
+            via: index("PASB598"),
+            base: index("PASB518")
+        }
+    );
+    assert_eq!(
+        curated.variants_of(&index("PASB518")),
+        vec![&index("PASB598"), &index("PASB798")]
+    );
+}
+
+#[test]
+fn an_excluded_ship_is_never_a_variant_base() {
+    let ships = catalog(
+        1,
+        vec![
+            ship("PASB518", "Massachusetts", "special", 8, "23ba"),
+            ship("PASB598", "Massachusetts B", "special", 8, "ebd0"),
+        ],
+    );
+    let curated = curate(
+        &ships,
+        &config("[[exclude]]\nindex = \"PASB518\"\nreason = \"carbon_copy\""),
+    );
+    assert!(curated.pool.contains(&index("PASB598")));
+}
+
+#[test]
+fn copies_explain_their_chain() {
+    assert_eq!(
+        Removal::CopyOf {
+            via: index("PASB598"),
+            base: index("PASB518")
+        }
+        .to_string(),
+        "copy of PASB598, which is a copy of PASB518"
+    );
+    assert_eq!(
+        Removal::SharesBadSilhouette {
+            with: index("PASD019")
+        }
+        .to_string(),
+        "same silhouette as PASD019, which is excluded for bad silhouette art"
+    );
 }

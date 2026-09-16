@@ -20,8 +20,15 @@ pub enum Removal {
     IdenticalSilhouette {
         base: ShipIndex,
     },
+    SharesBadSilhouette {
+        with: ShipIndex,
+    },
     CollaborationPrefix,
     VariantSuffix {
+        base: ShipIndex,
+    },
+    CopyOf {
+        via: ShipIndex,
         base: ShipIndex,
     },
     Manual {
@@ -33,11 +40,14 @@ pub enum Removal {
 impl Removal {
     pub fn base(&self) -> Option<&ShipIndex> {
         match self {
-            Self::IdenticalSilhouette { base } | Self::VariantSuffix { base } => Some(base),
+            Self::IdenticalSilhouette { base }
+            | Self::VariantSuffix { base }
+            | Self::CopyOf { base, .. } => Some(base),
             Self::Manual { base, .. } => base.as_ref(),
             Self::GroupNotAllowed
             | Self::NoEnglishName
             | Self::NoSilhouette
+            | Self::SharesBadSilhouette { .. }
             | Self::CollaborationPrefix => None,
         }
     }
@@ -50,8 +60,15 @@ impl fmt::Display for Removal {
             Self::NoEnglishName => f.write_str("no English name"),
             Self::NoSilhouette => f.write_str("no silhouette"),
             Self::IdenticalSilhouette { base } => write!(f, "same silhouette as {base}"),
+            Self::SharesBadSilhouette { with } => write!(
+                f,
+                "same silhouette as {with}, which is excluded for bad silhouette art"
+            ),
             Self::CollaborationPrefix => f.write_str("collaboration reskin"),
             Self::VariantSuffix { base } => write!(f, "variant of {base}"),
+            Self::CopyOf { via, base } => {
+                write!(f, "copy of {via}, which is a copy of {base}")
+            }
             Self::Manual {
                 reason,
                 base: Some(base),
@@ -171,6 +188,63 @@ fn basic_removal(ship: &Ship, config: &CurationConfig) -> Option<Removal> {
     }
 }
 
+fn shares_bad_silhouette(
+    candidates: &[Candidate<'_>],
+    bad: &BTreeMap<&str, &ShipIndex>,
+    kept: &BTreeSet<&ShipIndex>,
+    excluded: &BTreeSet<&ShipIndex>,
+) -> BTreeMap<ShipIndex, Removal> {
+    candidates
+        .iter()
+        .filter(|candidate| {
+            !kept.contains(candidate.index()) && !excluded.contains(candidate.index())
+        })
+        .filter_map(|candidate| {
+            let with = bad.get(candidate.silhouette)?;
+            Some((
+                candidate.index().clone(),
+                Removal::SharesBadSilhouette {
+                    with: (*with).clone(),
+                },
+            ))
+        })
+        .collect()
+}
+
+fn final_base(
+    removed: &BTreeMap<ShipIndex, Removal>,
+    pool: &BTreeSet<ShipIndex>,
+    start: &ShipIndex,
+) -> Option<ShipIndex> {
+    std::iter::successors(Some(start), |current| {
+        removed.get(*current).and_then(Removal::base)
+    })
+    .take(removed.len() + 1)
+    .find(|candidate| pool.contains(*candidate))
+    .cloned()
+}
+
+fn resolve_chains(
+    removed: &BTreeMap<ShipIndex, Removal>,
+    pool: &BTreeSet<ShipIndex>,
+) -> BTreeMap<ShipIndex, Removal> {
+    removed
+        .iter()
+        .map(|(index, removal)| {
+            let resolved = removal
+                .base()
+                .filter(|via| !pool.contains(*via))
+                .and_then(|via| {
+                    final_base(removed, pool, via).map(|base| Removal::CopyOf {
+                        via: via.clone(),
+                        base,
+                    })
+                });
+            (index.clone(), resolved.unwrap_or_else(|| removal.clone()))
+        })
+        .collect()
+}
+
 fn identical_silhouettes(
     candidates: &[Candidate<'_>],
     kept: &BTreeSet<&ShipIndex>,
@@ -269,8 +343,20 @@ pub fn curate(catalog: &Catalog, config: &CurationConfig) -> Curated {
         .filter_map(Candidate::from_ship)
         .collect();
 
-    let identical = identical_silhouettes(&candidates, &kept, &excluded);
-    let after_identical = without(&candidates, &identical);
+    let bad: BTreeMap<&str, &ShipIndex> = config
+        .exclude
+        .iter()
+        .filter(|entry| entry.reason == ExcludeReason::BadSilhouette)
+        .filter_map(|entry| {
+            let silhouette = catalog.get(&entry.index)?.silhouette.as_ref()?;
+            Some((silhouette.sha256.as_str(), &entry.index))
+        })
+        .collect();
+
+    let shared_bad = shares_bad_silhouette(&candidates, &bad, &kept, &excluded);
+    let after_bad = without(&candidates, &shared_bad);
+    let identical = identical_silhouettes(&after_bad, &kept, &excluded);
+    let after_identical = without(&after_bad, &identical);
     let collaboration = collaboration_prefixes(&after_identical, &kept);
     let after_collaboration = without(&after_identical, &collaboration);
     let suffixes = variant_suffixes(&after_collaboration, &kept, &excluded);
@@ -278,15 +364,17 @@ pub fn curate(catalog: &Catalog, config: &CurationConfig) -> Curated {
 
     let removed: BTreeMap<ShipIndex, Removal> = basic
         .into_iter()
+        .chain(shared_bad)
         .chain(identical)
         .chain(collaboration)
         .chain(suffixes)
         .chain(manual)
         .collect();
-    let pool = candidates
+    let pool: BTreeSet<ShipIndex> = candidates
         .iter()
         .map(|candidate| candidate.index().clone())
         .filter(|index| !removed.contains_key(index))
         .collect();
+    let removed = resolve_chains(&removed, &pool);
     Curated { pool, removed }
 }
