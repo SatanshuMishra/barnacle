@@ -1,0 +1,10 @@
+groups = [
+    "start",
+    "special",
+    "specialUnsellable",
+    "ultimate",
+    "upgradeable",
+    "upgradeableExclusive",
+    "upgradeableUltimate",
+    "superShip",
+]
