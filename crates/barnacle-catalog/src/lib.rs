@@ -1,4 +1,5 @@
 pub mod curation;
+pub mod diff;
 pub mod model;
 pub mod names;
 
