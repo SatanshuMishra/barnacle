@@ -59,11 +59,12 @@ pub enum StoreError {
     NoCatalogs,
     #[error("catalog revisions for {build_dir} have run out of numbers")]
     RevisionOverflow { build_dir: String },
-    #[error("the catalog build failed and its staging directory {dir} could not be removed")]
-    BuildFailedAndLeftStaging {
+    #[error("{source}; its staging directory {dir} could not be removed either: {cleanup}")]
+    LeftStaging {
         dir: PathBuf,
         #[source]
-        source: ExtractError,
+        source: Box<StoreError>,
+        cleanup: std::io::Error,
     },
     #[error(transparent)]
     Extract(#[from] ExtractError),
@@ -84,6 +85,13 @@ fn parse_number(text: &str) -> Option<u32> {
         && text.bytes().all(|byte| byte.is_ascii_digit())
         && (text == "0" || !text.starts_with('0'));
     canonical.then(|| text.parse().ok()).flatten()
+}
+
+fn staged_name(directory: &str) -> Option<&str> {
+    directory
+        .strip_prefix(STAGING_PREFIX)?
+        .rsplit_once('-')
+        .map(|(name, _)| name)
 }
 
 fn parse_catalog_name(name: &str) -> Option<CatalogName<'_>> {
@@ -202,7 +210,8 @@ impl DataDir {
         let names = self.directory_names()?;
         let latest = names
             .iter()
-            .filter_map(|name| parse_catalog_name(name))
+            .map(|name| staged_name(name).unwrap_or(name))
+            .filter_map(parse_catalog_name)
             .filter(|parsed| parsed.build_dir == build_dir)
             .map(|parsed| parsed.revision)
             .max();
@@ -221,6 +230,13 @@ impl DataDir {
     }
 
     pub fn publish(&self, staged: StagedCatalog, catalog: &Catalog) -> Result<String, StoreError> {
+        match self.write_and_move(&staged, catalog) {
+            Ok(()) => Ok(staged.name),
+            Err(error) => Err(self.discard_after(staged, error)),
+        }
+    }
+
+    fn write_and_move(&self, staged: &StagedCatalog, catalog: &Catalog) -> Result<(), StoreError> {
         let file = staged.dir.join(CATALOG_FILE);
         let json = catalog
             .to_json()
@@ -230,12 +246,18 @@ impl DataDir {
             })?;
         std::fs::write(&file, json).map_err(io_error(file))?;
         let target = self.catalog_dir(&staged.name);
-        std::fs::rename(&staged.dir, &target).map_err(io_error(target))?;
-        Ok(staged.name)
+        std::fs::rename(&staged.dir, &target).map_err(io_error(target))
     }
 
-    pub fn discard(&self, staged: StagedCatalog) -> Result<(), StoreError> {
-        std::fs::remove_dir_all(&staged.dir).map_err(io_error(staged.dir))
+    pub fn discard_after(&self, staged: StagedCatalog, error: StoreError) -> StoreError {
+        match std::fs::remove_dir_all(&staged.dir) {
+            Ok(()) => error,
+            Err(cleanup) => StoreError::LeftStaging {
+                dir: staged.dir,
+                source: Box::new(error),
+                cleanup,
+            },
+        }
     }
 
     pub fn load(&self, name: &str) -> Result<Catalog, StoreError> {
@@ -349,12 +371,6 @@ pub fn build(data: &DataDir, downloaded: &Downloaded) -> Result<Built, StoreErro
             let name = data.publish(staged, &catalog)?;
             Ok(Built { name, catalog })
         }
-        Err(source) => {
-            let dir = staged.dir.clone();
-            match data.discard(staged) {
-                Ok(()) => Err(StoreError::Extract(source)),
-                Err(_) => Err(StoreError::BuildFailedAndLeftStaging { dir, source }),
-            }
-        }
+        Err(source) => Err(data.discard_after(staged, StoreError::Extract(source))),
     }
 }

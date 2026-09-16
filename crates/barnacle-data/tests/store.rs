@@ -136,10 +136,11 @@ fn built_catalogs_are_ordered_by_build_then_revision() {
 fn non_canonical_catalog_names_are_ignored() {
     let (_root, data) = data_dir_with(&[
         "15.8.0_13187581",
-        "15.8.0_13187581_r01",
-        "15.8.0_13187581_r+1",
+        "15.8.0_13187581_r02",
+        "15.8.0_13187581_r+3",
         "15.8.0_13187581_r0",
-        "15.8.0_013187581_r1",
+        "15.8.0_013187581_r4",
+        "15.8.0_+13187581_r5",
         "15.8.0_13187581_r1",
     ]);
     assert_eq!(data.built().unwrap(), ["15.8.0_13187581_r1"]);
@@ -246,4 +247,28 @@ fn build_directories_from_the_remote_index_are_checked() {
         check_build_dir(&entry("../x", 1, "../x_1")),
         Err(StoreError::UnsafeBuildDir { .. })
     ));
+}
+
+#[test]
+fn concurrent_builds_choose_different_revisions() {
+    let (_root, data) = data_dir_with(&["15.8.0_13187581_r1"]);
+    let first = data.stage_catalog("15.8.0_13187581").unwrap();
+    let second = data.stage_catalog("15.8.0_13187581").unwrap();
+    assert_eq!(first.name, "15.8.0_13187581_r2");
+    assert_eq!(second.name, "15.8.0_13187581_r3");
+}
+
+#[test]
+fn a_failed_publish_removes_its_staging_directory() {
+    let (_root, data) = data_dir_with(&[]);
+    let staged = data.stage_catalog("15.8.0_13187581").unwrap();
+    let staging_dir = staged.dir.clone();
+    write(
+        &data.catalog_dir("15.8.0_13187581_r1").join("partial.png"),
+        b"left by another process",
+    );
+    let error = data.publish(staged, &empty_catalog(13187581)).err();
+    assert!(matches!(error, Some(StoreError::Io { .. })));
+    assert!(!staging_dir.exists());
+    assert_eq!(catalog_entries(&data), ["15.8.0_13187581_r1"]);
 }

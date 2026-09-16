@@ -150,24 +150,26 @@ fn ineffective_keeps(
     config: &CurationConfig,
     curated: &Curated,
 ) -> Vec<Problem> {
-    if config.keep.is_empty() {
-        return Vec::new();
-    }
-    let without_keeps = curate(
-        catalog,
-        &CurationConfig {
-            keep: Vec::new(),
-            ..config.clone()
-        },
-    );
     let excluded: BTreeSet<&ShipIndex> = config.exclude.iter().map(|entry| &entry.index).collect();
     config
         .keep
         .iter()
         .filter(|entry| catalog.get(&entry.index).is_some() && !excluded.contains(&entry.index))
         .filter(|entry| {
+            let without_this_keep = curate(
+                catalog,
+                &CurationConfig {
+                    keep: config
+                        .keep
+                        .iter()
+                        .filter(|other| other.index != entry.index)
+                        .cloned()
+                        .collect(),
+                    ..config.clone()
+                },
+            );
             !(curated.pool.contains(&entry.index)
-                && without_keeps.removed.contains_key(&entry.index))
+                && without_this_keep.removed.contains_key(&entry.index))
         })
         .map(|entry| Problem::KeepHasNoEffect {
             index: entry.index.clone(),

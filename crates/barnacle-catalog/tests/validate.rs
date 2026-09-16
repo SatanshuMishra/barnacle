@@ -251,3 +251,32 @@ fn a_keep_on_a_ship_no_rule_removes_is_reported() {
         }]
     );
 }
+
+#[test]
+fn a_keep_that_protects_a_copy_validates_clean() {
+    let ships = vec![
+        ship("PGSD710", "Georg Hoffmann", "upgradeable", 10, "1e02"),
+        ship(
+            "PGSD720",
+            "Georg Hoffmann Golden",
+            "upgradeable",
+            10,
+            "1e02",
+        ),
+    ];
+    assert_eq!(
+        problems(ships, &reviewed("[[keep]]\nindex = \"PGSD720\"")),
+        vec![]
+    );
+}
+
+#[test]
+fn a_keep_needed_only_alongside_another_keep_is_not_reported() {
+    let ships = vec![
+        ship("PASD019", "Clemson", "upgradeable", 4, "db18"),
+        ship("PASD704", "DD 214", "special", 4, "db18"),
+        ship("PASD714", "DD 214 Golden", "special", 4, "x1"),
+    ];
+    let tables = "[[keep]]\nindex = \"PASD704\"\n\n[[keep]]\nindex = \"PASD714\"";
+    assert_eq!(problems(ships, &reviewed(tables)), vec![]);
+}
