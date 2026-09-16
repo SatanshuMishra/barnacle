@@ -14,8 +14,10 @@ cargo run --release -p barnacle-data -- diff
 Review the new ships the diff lists, edit `curation/ships.toml`, set `reviewed_through` to the new build number, then:
 
 ```bash
-cargo run --release -p barnacle-data -- use <version>_<build>
+cargo run --release -p barnacle-data -- use <version>_<build>_r<n>
 ```
+
+Every `sync` builds into a new `data/catalog/<version>_<build>_r<n>` directory, so it never changes the catalog the bot is using. `use` makes a validated catalog the one the bot loads on its next start.
 
 Downloaded game data and built catalogs live in `data/`, which is never committed.
 

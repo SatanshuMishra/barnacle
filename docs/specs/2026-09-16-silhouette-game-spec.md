@@ -54,7 +54,7 @@ barnacle-data: Dump::open -> vfs
    gui/ships_silhouettes/<index>.png --> SHA-256 --> silhouette hash
         |
         v
-data/catalog/<version>_<build>/catalog.json + silhouettes/ (composited PNGs)
+data/catalog/<version>_<build>_r<n>/catalog.json + silhouettes/ (composited PNGs; a new revision directory for every build)
         |
         v
 barnacle-bot loads the catalog named by data/catalog/current at startup
@@ -242,13 +242,13 @@ Romanization stays even with English-only answers, because some English names co
 cargo run -p barnacle-data -- sync
 ```
 
-`sync` calls `wows_data_mgr::download_repo::check_for_updates` and `download_build` for the newest published build, then builds the catalog. `sync` alone changes nothing the bot serves.
+`sync` reads the data repository at its current commit, pinned for the whole run, so the commit recorded in the catalog is the one the files came from. It calls `wows_data_mgr::download_repo::check_for_updates` to refresh a cached build that upstream changed, then `download_build` for the newest published build, and builds the catalog into a new `data/catalog/<version>_<build>_r<n>` directory. `sync` alone changes nothing the bot serves, because it never writes into an existing catalog directory.
 
 ```bash
 cargo run -p barnacle-data -- diff
 ```
 
-`diff` lists new, removed and regrouped ships, what the automatic rules did with each new ship, look-alike candidates, and every curation entry that no longer resolves. A person reviews the new ships, updates `curation/ships.toml` and raises `reviewed_through`. Once `validate` passes, `data/catalog/current` is switched to the new build and the bot is restarted. Nothing is copied by hand and no game install is needed.
+`diff` lists new, removed and regrouped ships, what the automatic rules did with each new ship, look-alike candidates, and every curation entry that no longer resolves. A person reviews the new ships, updates `curation/ships.toml` and raises `reviewed_through`. Once `validate` passes, `use <version>_<build>_r<n>` switches `data/catalog/current` to the new catalog and the bot is restarted. Nothing is copied by hand and no game install is needed.
 
 When WG releases a version before landaire/wows-replay-data publishes it, the bot keeps serving the previous catalog. That is correct behaviour, not an outage. A person with a game install can run `wows-data-mgr dump-renderer-data` to produce the same layout locally.
 

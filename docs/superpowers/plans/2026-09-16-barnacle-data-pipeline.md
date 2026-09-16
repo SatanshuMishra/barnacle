@@ -3362,3 +3362,22 @@ Where the implementation departs from the steps above:
 | 8 | `actions/checkout@v7` | Current major release on 2026-09-16 |
 | 8 | Dependabot groups `wowsunpack`, `wows-data-mgr`, `pickled` and `rootcause` into one pull request | They must move together; the lockfile test fails until `versions.rs` is updated, which is intended |
 | 8 | The README's Wargaming notice is written in Barnacle's own words | It states non-affiliation as policy section 2.5 requires, without reproducing Wargaming's text; the owner can swap in the recommended wording from the policy page |
+
+### Review follow-up (2026-09-16)
+
+An independent review of `79d54c7..93b6751` returned 11 findings. All were fixed in later commits on this branch:
+
+| Finding | Fix |
+|---|---|
+| wowsunpack silently skips ships it cannot parse | `ExtractError::UnparsedShips`, plus `NoShips`, `NoSilhouettes` and `NoEnglishNames`; `tests/build_catalog.rs` runs `build_catalog` on synthetic GameParams through `MemoryFS` |
+| `sync` overwrote the catalog the bot serves | Catalogs live in `data/catalog/<version>_<build>_r<n>`; every build reserves a new revision directory |
+| Provenance could name the wrong data commit | Downloads are pinned to the recorded commit; `check_for_updates` forces a refresh when upstream changed a cached build |
+| An empty pool validated clean | `Problem::EmptyPool` |
+| Excluded ships and reskins could become bases | Base selection skips manual exclusions and collaboration reskins; `Problem::BaseNotInPool` |
+| Unknown-index check untested for most sections | Test covering `exclude`, `keep` and `aliases` |
+| Duplicate inside one lookalike group misreported | `Problem::DuplicateInLookalikeGroup` |
+| Ineffective `keep` entries were silent | `Problem::KeepHasNoEffect` |
+| Malformed GameParams wrapper was ignored | `PaperError::UnexpectedRoot` |
+| Remote build directory names were trusted | `check_build_dir` requires `<version>_<build>` as a single path component |
+
+Found on real 15.8.0 data after the plan was written: WG added the `premium`, `experimental` and `coopOnly` groups (`premium` is now allowed), WG silhouettes are dark and need a light background (now seafoam `#D3E6E1`), and year-suffix lookalike candidates must share a ship class.
