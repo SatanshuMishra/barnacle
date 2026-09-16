@@ -261,6 +261,8 @@ When WG releases a version before landaire/wows-replay-data publishes it, the bo
 
 Pins use exact versions (`=0.45.0`). The crates are 0.x and bump together, so a range buys nothing and hides which version produced a catalog.
 
+`pickled` and `reqwest` are used directly but must match the versions the toolkit uses, because their types cross into toolkit calls. Dependabot is told to ignore their breaking releases, so when a toolkit release moves either one, the toolkit pull request fails to compile and is fixed by bumping them in that same pull request. `rootcause` is not a direct dependency for the same reason: a rootcause 0.13 bump broke the build on 2026-09-16 while the toolkit still returned 0.12 reports.
+
 ## 8. Testing
 
 | Layer | What is tested | How |

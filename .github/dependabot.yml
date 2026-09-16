@@ -9,8 +9,12 @@ updates:
         patterns:
           - wowsunpack
           - wows-data-mgr
-          - pickled
-          - rootcause
+    ignore:
+      - dependency-name: pickled
+      - dependency-name: reqwest
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
   - package-ecosystem: github-actions
     directory: /
     schedule:
