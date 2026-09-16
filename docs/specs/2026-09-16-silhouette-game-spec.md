@@ -54,7 +54,7 @@ barnacle-data: Dump::open -> vfs
    gui/ships_silhouettes/<index>.png --> SHA-256 --> silhouette hash
         |
         v
-data/catalog/<version>_<build>/catalog.json + silhouettes/ (composited PNGs)
+data/catalog/<version>_<build>_r<n>/catalog.json + silhouettes/ (composited PNGs; a new revision directory for every build)
         |
         v
 barnacle-bot loads the catalog named by data/catalog/current at startup
@@ -113,11 +113,12 @@ None of these lists is copied from track's `guess.toml` (section 11). Track's li
 Applied in order when the catalog is built. A ship removed by rules 3-5 is a **variant** of a base ship: it is never drawn, and its names count as correct answers whenever its base ship is drawn.
 
 1. **Group.** Drop any ship whose group is not in `groups`. This removes every test ship, since `Vehicle::is_test_ship()` is true for every `demo*` group.
-2. **Name and silhouette.** Drop any ship without an English name (it cannot be answered) or without a silhouette file.
+2. **Name and silhouette.** Drop any ship without an English name (it cannot be answered) or without a silhouette file. Also drop every ship whose silhouette file is identical to one excluded for bad art, since it shares the same bad image.
 3. **Identical silhouette.** Group ships whose silhouette files hash the same. Keep one base per group: the one in `upgradeable`, `start` or `special`, in that order, then the lowest index.
 4. **Collaboration prefix.** A ship whose English name starts with the word `ARP`, `AL`, `HSF`, `BA` or `STAR` is a collaboration reskin. Its base is the ship with the identical silhouette if rule 3 found one; otherwise it is excluded with no base, so no extra names are accepted.
 5. **Variant suffix.** A ship whose English name ends with the word `B`, `Golden`, `CLR` or `Beta`, where the name without that word is another eligible ship's name, is a variant of that ship.
-6. **Manual.** Apply `exclude`, then `keep`.
+6. **Manual.** Apply `exclude`, then `keep`. A manually excluded ship is never chosen as a base by rules 3 and 5.
+7. **Chains.** When a removed ship's base was itself removed, it points through to the first base that is in the pool, recorded as a copy of a copy.
 
 Rules 4 and 5 are narrow on purpose. Matching any ship whose name contains another ship's name is unsafe: it would wrongly pair Black Swan with Black, Konig Albert with Konig, and Vampire II with Vampire (13.11 data).
 
@@ -242,13 +243,13 @@ Romanization stays even with English-only answers, because some English names co
 cargo run -p barnacle-data -- sync
 ```
 
-`sync` calls `wows_data_mgr::download_repo::check_for_updates` and `download_build` for the newest published build, then builds the catalog. `sync` alone changes nothing the bot serves.
+`sync` reads the data repository at its current commit, pinned for the whole run, so the commit recorded in the catalog is the one the files came from. It calls `download_build` for the newest published build with a forced refresh, which re-reads the build's manifest but keeps content already stored, so upstream changes are always picked up for the cost of one small request. The catalog is built in a hidden staging directory and renamed to `data/catalog/<version>_<build>_r<n>` only when complete; a failed build removes its staging directory. `sync` alone changes nothing the bot serves, because it never writes into an existing catalog directory. Directories without the `_r<n>` suffix are ignored.
 
 ```bash
 cargo run -p barnacle-data -- diff
 ```
 
-`diff` lists new, removed and regrouped ships, what the automatic rules did with each new ship, look-alike candidates, and every curation entry that no longer resolves. A person reviews the new ships, updates `curation/ships.toml` and raises `reviewed_through`. Once `validate` passes, `data/catalog/current` is switched to the new build and the bot is restarted. Nothing is copied by hand and no game install is needed.
+`diff` lists new, removed and regrouped ships, what the automatic rules did with each new ship, look-alike candidates, and every curation entry that no longer resolves. A person reviews the new ships, updates `curation/ships.toml` and raises `reviewed_through`. Once `validate` passes, `use <version>_<build>_r<n>` switches `data/catalog/current` to the new catalog and the bot is restarted. Nothing is copied by hand and no game install is needed.
 
 When WG releases a version before landaire/wows-replay-data publishes it, the bot keeps serving the previous catalog. That is correct behaviour, not an outage. A person with a game install can run `wows-data-mgr dump-renderer-data` to produce the same layout locally.
 
@@ -293,6 +294,9 @@ Steps 1-3 and the first catalog are planned in detail in `docs/superpowers/plans
 | Q4 | Which game defaults? | Decided 2026-09-16: section 5 as written, with the command kept as `/guess` and historical as an on/off option |
 | Q5 | Which names count as answers? | Decided 2026-09-16: English only |
 | Q6 | Where does the bot run? | Decided 2026-09-16: locally, as one process (section 2.2) |
+| Q7 | Which ship groups are allowed in 15.8.0? | Decided 2026-09-16: `premium` is allowed (14 owned ships moved there from `special`); `experimental` (6 paper ships) and `coopOnly` (1 copy of Schlieffen) are not |
+| Q8 | Silhouette background? | Decided 2026-09-16: seafoam `#D3E6E1`. WG's own background is parchment `#C8C2B4` and its silhouettes are dark brown `#261D1A`, so the background must be light; seafoam was chosen over parchment and mist as nautical and distinct from WG's look |
+| Q9 | May CC0-1.0 dependencies be used? | Decided 2026-09-16: yes. The `encoding` index crates pulled in by `gettext`, which wowsunpack requires, are CC0-1.0 |
 
 ## 11. Licensing
 
@@ -333,6 +337,7 @@ Every dependency must allow Apache-2.0 distribution. CI enforces this with a lic
 | `poise` | MIT | [crates.io](https://crates.io/crates/poise) |
 | `serenity` | ISC | [crates.io](https://crates.io/crates/serenity) |
 | `sqlx` | MIT OR Apache-2.0 | [crates.io](https://crates.io/crates/sqlx) |
+| `encoding` index crates (via `gettext`) | CC0-1.0 | `cargo deny check licenses` on 2026-09-16 |
 
 ### 11.4 Wargaming's assets and marks
 

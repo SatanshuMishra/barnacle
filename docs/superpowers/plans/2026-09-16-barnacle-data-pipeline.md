@@ -3348,3 +3348,56 @@ git commit -m "chore: add license, CI, dependency updates and curation seed"
 Not covered here, by design: near-identical and model-path look-alike candidates (spec 4.4 items 2-3, not needed for launch), the catalog equivalence check (spec 7.2 step 3, which needs a cached game build in CI and belongs with Plan 3), the upstream `is_paper_ship` pull request (spec 9, step 8), and everything in spec sections 5 and 6 (Plans 2 and 3).
 
 Deviations from the first spec draft, already written back into the spec: `ShipGroup` and `Nation` are string newtypes rather than enums, since the allowlist is configured as strings and the diff reports unseen groups; ship names and silhouettes are `Option` structs; a ship with no English name is removed; `reviewed_through` is optional; the cleaning rule drops the middle dot, which no English name uses; and extraction lives in `barnacle-data`, so `barnacle-catalog` stays free of the toolkit.
+
+## Execution notes (2026-09-16)
+
+Where the implementation departs from the steps above:
+
+| Task | Change | Why |
+|---|---|---|
+| 1-7 | Code is formatted with rustfmt's defaults, so it wraps at 100 columns instead of the plan's longer lines | `cargo fmt --all --check` is part of every task's check |
+| 3 | Added `identical_silhouettes_never_prefer_a_reskin_name` (Shinonome B / Shinonome, Jean Bart / Jean Bart B) | The plan's examples always had the real ship at the lowest index, so the reskin-name part of the ranking was untested. Five real identical-silhouette pairs depend on it. Removing that part of the ranking makes the new test fail. |
+| 7 | Download progress uses `done.is_multiple_of(250)` | Clippy on Rust 1.97 rejects `done % 250 == 0` |
+| 7 | The Task 7 commit landed before clippy passed; a follow-up `fix(data)` commit corrected it | Clippy's exit code was hidden by a pipe; later checks run with `pipefail` |
+| 8 | `actions/checkout@v7` | Current major release on 2026-09-16 |
+| 8 | Dependabot groups `wowsunpack`, `wows-data-mgr`, `pickled` and `rootcause` into one pull request | They must move together; the lockfile test fails until `versions.rs` is updated, which is intended |
+| 8 | The README's Wargaming notice is written in Barnacle's own words | It states non-affiliation as policy section 2.5 requires, without reproducing Wargaming's text; the owner can swap in the recommended wording from the policy page |
+
+### Review follow-up (2026-09-16)
+
+An independent review of `79d54c7..93b6751` returned 11 findings, one per row below. All were fixed in later commits on this branch:
+
+| Finding | Fix |
+|---|---|
+| wowsunpack silently skips ships it cannot parse | `ExtractError::UnparsedShips`, plus `NoShips`, `NoSilhouettes` and `NoEnglishNames` |
+| The only catalog-build test needed real data and never ran in CI | `tests/build_catalog.rs` runs `build_catalog` on synthetic GameParams through `MemoryFS` |
+| `sync` overwrote the catalog the bot serves | Catalogs live in `data/catalog/<version>_<build>_r<n>`; every build reserves a new revision directory |
+| Provenance could name the wrong data commit | Downloads are pinned to the recorded commit; `check_for_updates` forces a refresh when upstream changed a cached build |
+| An empty pool validated clean | `Problem::EmptyPool` |
+| Excluded ships and reskins could become bases | Base selection skips manual exclusions and collaboration reskins; `Problem::BaseNotInPool` |
+| Unknown-index check untested for most sections | Test covering `exclude`, `keep` and `aliases` |
+| Duplicate inside one lookalike group misreported | `Problem::DuplicateInLookalikeGroup` |
+| Ineffective `keep` entries were silent | `Problem::KeepHasNoEffect` |
+| Malformed GameParams wrapper was ignored | `PaperError::UnexpectedRoot` |
+| Remote build directory names were trusted | `check_build_dir` requires `<version>_<build>` as a single path component |
+
+Found on real 15.8.0 data after the plan was written: WG added the `premium`, `experimental` and `coopOnly` groups (`premium` is now allowed), WG silhouettes are dark and need a light background (now seafoam `#D3E6E1`), and year-suffix lookalike candidates must share a ship class.
+
+A second review of `93b6751..9df56a2` returned 10 findings, all fixed in `4abd028` and `96e366c`:
+
+| Finding | Fix |
+|---|---|
+| A ship sharing a bad-silhouette file became a base and stayed in the pool | `Removal::SharesBadSilhouette` removes every ship with that file |
+| Rule 3 could pick a base that rule 5 then removed | Chains resolve to the pool base as `Removal::CopyOf { via, base }` |
+| `download` and `build` were untested | `tests/download.rs` runs `download_from` against a local HTTP server; `tests/store.rs` builds twice from a plain dump directory |
+| Catalog names accepted `+`, leading zeros and colliding keys; the revision counter could overflow | Canonical digits only, ordering keyed by build, revision and name, `StoreError::RevisionOverflow` |
+| The update check missed unregistered builds and cost an extra API call | `download_build` is always called with a forced refresh |
+| A failed build left a numbered directory; `catalog.json` was not written atomically | Builds run in a hidden staging directory renamed into place on success |
+| `KeepHasNoEffect` missed keeps on ships no rule removes | Curation is re-run without keeps to find keeps that change nothing |
+| The variant-suffix exclusion filter was untested | `an_excluded_ship_is_never_a_variant_base`, verified by mutation |
+| A non-dictionary wrapper was reported as a bad root | `PaperError::UnexpectedWrapper` |
+| The first follow-up table had 10 rows for 11 findings | The merged row is now two rows |
+
+Mutation checks run during the fixes: removing the reskin-name ranking, the variant-base exclusion filter, the forced refresh, or the build-directory check each makes a test fail.
+
+A third review of `4abd028` and `96e366c` returned 5 findings, fixed in `bd049a0`: each `keep` is now judged by removing only that entry; a test proves a working `keep` validates clean; staging directories count as taken revisions and a failed publish removes its staging directory; a cleanup failure keeps its cause (`StoreError::LeftStaging`); and the canonical-name test uses names that cannot collide. Mutation checks confirm the canonical-digit check and the keep-effect check are each guarded by a test.

@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "Apache-2.0"
+repository = "https://github.com/SatanshuMishra/barnacle"
+
+[workspace.dependencies]
+barnacle-catalog = { path = "crates/barnacle-catalog" }
+wowsunpack = { version = "=0.45.0", default-features = false, features = ["parsing", "vfs"] }
+wows-data-mgr = { version = "=0.21.0", default-features = false, features = ["download"] }
+pickled = "=2.0.0-alpha10"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
+rootcause = "0.12"
+clap = { version = "4", features = ["derive"] }
+deunicode = "1"
+gettext = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+toml = "1"

@@ -1,0 +1,25 @@
+[package]
+name = "barnacle-data"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+barnacle-catalog.workspace = true
+clap.workspace = true
+gettext.workspace = true
+image.workspace = true
+pickled.workspace = true
+reqwest.workspace = true
+rootcause.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+wows-data-mgr.workspace = true
+wowsunpack.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
