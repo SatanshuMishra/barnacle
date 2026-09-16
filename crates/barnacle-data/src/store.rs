@@ -159,7 +159,7 @@ pub async fn download(data: &DataDir, requested: Option<u32>) -> Result<Download
     let store = data.store();
     std::fs::create_dir_all(&store).map_err(io_error(store.clone()))?;
     let progress = |done: u64, total: u64| {
-        if total > 0 && (done == total || done % 250 == 0) {
+        if total > 0 && (done == total || done.is_multiple_of(250)) {
             eprintln!("downloaded {done} of {total} objects");
         }
     };
