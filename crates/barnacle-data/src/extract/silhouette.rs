@@ -7,7 +7,10 @@ use sha2::Sha256;
 pub const BACKGROUND: Rgba<u8> = Rgba([0xD3, 0xE6, 0xE1, 0xFF]);
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 pub fn composite(
