@@ -288,7 +288,7 @@ pub async fn download(data: &DataDir, requested: Option<u32>) -> Result<Download
     download_from(&client, &base, &commit, &data.store(), requested).await
 }
 
-fn remote_error(report: rootcause::Report) -> StoreError {
+fn remote_error(report: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> StoreError {
     StoreError::Remote(report.into())
 }
 

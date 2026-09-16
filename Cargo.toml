@@ -15,7 +15,6 @@ wowsunpack = { version = "=0.45.0", default-features = false, features = ["parsi
 wows-data-mgr = { version = "=0.21.0", default-features = false, features = ["download"] }
 pickled = "=2.0.0-alpha10"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
-rootcause = "0.13"
 clap = { version = "4", features = ["derive"] }
 deunicode = "1"
 gettext = "0.4"
