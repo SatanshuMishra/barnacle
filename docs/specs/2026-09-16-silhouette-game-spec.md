@@ -294,6 +294,9 @@ Steps 1-3 and the first catalog are planned in detail in `docs/superpowers/plans
 | Q4 | Which game defaults? | Decided 2026-09-16: section 5 as written, with the command kept as `/guess` and historical as an on/off option |
 | Q5 | Which names count as answers? | Decided 2026-09-16: English only |
 | Q6 | Where does the bot run? | Decided 2026-09-16: locally, as one process (section 2.2) |
+| Q7 | Which ship groups are allowed in 15.8.0? | Decided 2026-09-16: `premium` is allowed (14 owned ships moved there from `special`); `experimental` (6 paper ships) and `coopOnly` (1 copy of Schlieffen) are not |
+| Q8 | Silhouette background? | Decided 2026-09-16: seafoam `#D3E6E1`. WG's own background is parchment `#C8C2B4` and its silhouettes are dark brown `#261D1A`, so the background must be light; seafoam was chosen over parchment and mist as nautical and distinct from WG's look |
+| Q9 | May CC0-1.0 dependencies be used? | Decided 2026-09-16: yes. The `encoding` index crates pulled in by `gettext`, which wowsunpack requires, are CC0-1.0 |
 
 ## 11. Licensing
 
@@ -334,6 +337,7 @@ Every dependency must allow Apache-2.0 distribution. CI enforces this with a lic
 | `poise` | MIT | [crates.io](https://crates.io/crates/poise) |
 | `serenity` | ISC | [crates.io](https://crates.io/crates/serenity) |
 | `sqlx` | MIT OR Apache-2.0 | [crates.io](https://crates.io/crates/sqlx) |
+| `encoding` index crates (via `gettext`) | CC0-1.0 | `cargo deny check licenses` on 2026-09-16 |
 
 ### 11.4 Wargaming's assets and marks
 
