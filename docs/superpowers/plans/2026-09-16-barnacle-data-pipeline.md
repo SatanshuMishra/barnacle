@@ -3399,3 +3399,5 @@ A second review of `93b6751..9df56a2` returned 10 findings, all fixed in `4abd02
 | The first follow-up table had 10 rows for 11 findings | The merged row is now two rows |
 
 Mutation checks run during the fixes: removing the reskin-name ranking, the variant-base exclusion filter, the forced refresh, or the build-directory check each makes a test fail.
+
+A third review of `4abd028` and `96e366c` returned 5 findings, fixed in `bd049a0`: each `keep` is now judged by removing only that entry; a test proves a working `keep` validates clean; staging directories count as taken revisions and a failed publish removes its staging directory; a cleanup failure keeps its cause (`StoreError::LeftStaging`); and the canonical-name test uses names that cannot collide. Mutation checks confirm the canonical-digit check and the keep-effect check are each guarded by a test.
