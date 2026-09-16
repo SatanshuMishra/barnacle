@@ -4,6 +4,7 @@ pub mod silhouette;
 pub mod translations;
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::Path;
 
@@ -33,6 +34,14 @@ pub enum ExtractError {
     NoPaperFlag { index: ShipIndex },
     #[error("GameParams lists {listed} ships but only {unique} distinct indices")]
     DuplicateIndex { listed: usize, unique: usize },
+    #[error("wowsunpack could not parse these ships: {indices:?}")]
+    UnparsedShips { indices: Vec<String> },
+    #[error("GameParams contains no ships")]
+    NoShips,
+    #[error("no ship has a silhouette; the game data is incomplete")]
+    NoSilhouettes,
+    #[error("no ship has an English name; the translation catalog does not match")]
+    NoEnglishNames,
 }
 
 pub struct BuildInputs<'a> {
@@ -60,6 +69,18 @@ pub fn build_catalog(inputs: BuildInputs<'_>) -> Result<Catalog, ExtractError> {
     let game_params = read(inputs.vfs, "content/GameParams.data")?;
     let paper = paper::paper_flags(game_params.clone())?;
     let typed = params::typed_ships(game_params)?;
+    let parsed: BTreeSet<&str> = typed.iter().map(|ship| ship.index.as_str()).collect();
+    let unparsed: Vec<String> = paper
+        .keys()
+        .filter(|index| !parsed.contains(index.as_str()))
+        .cloned()
+        .collect();
+    if !unparsed.is_empty() {
+        return Err(ExtractError::UnparsedShips { indices: unparsed });
+    }
+    if typed.is_empty() {
+        return Err(ExtractError::NoShips);
+    }
     let names = translations::EnglishNames::load(inputs.english_mo)?;
     let silhouettes = inputs.output_dir.join("silhouettes");
     std::fs::create_dir_all(&silhouettes)?;
@@ -109,6 +130,12 @@ pub fn build_catalog(inputs: BuildInputs<'_>) -> Result<Catalog, ExtractError> {
             listed,
             unique: by_index.len(),
         });
+    }
+    if by_index.values().all(|ship| ship.silhouette.is_none()) {
+        return Err(ExtractError::NoSilhouettes);
+    }
+    if by_index.values().all(|ship| ship.name.is_none()) {
+        return Err(ExtractError::NoEnglishNames);
     }
     Ok(Catalog {
         provenance: inputs.provenance,

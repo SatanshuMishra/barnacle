@@ -16,6 +16,19 @@ def ship(index, paper):
     return entry
 
 
+def parsable(index, name, level, paper):
+    return {
+        "id": 4181604048,
+        "index": index,
+        "name": name,
+        "isPaperShip": paper,
+        "level": level,
+        "group": "upgradeable",
+        "ShipUpgradeInfo": {},
+        "typeinfo": {"type": "Ship", "nation": "USA", "species": "Battleship"},
+    }
+
+
 def game_params(root):
     return zlib.compress(pickle.dumps(root, protocol=2))[::-1]
 
@@ -50,6 +63,25 @@ ships = {
 (HERE / "mini_gameparams_missing_flag.data").write_bytes(
     game_params({"": {**ships, "PJSB018_Yamato": ship("PJSB018", None)}})
 )
+(HERE / "mini_gameparams_bad_wrapper.data").write_bytes(
+    game_params({"": "not a dictionary", **ships})
+)
+
+colorado = parsable("PASB008", "PASB008_Colorado", 7, False)
+vermont = parsable("PASB110", "PASB110_Vermont", 10, True)
+torpedo = ships["PAPT001_Torpedo"]
+
+(HERE / "catalog_ok.data").write_bytes(
+    game_params({"": {"PASB008_Colorado": colorado, "PASB110_Vermont": vermont, "PAPT001_Torpedo": torpedo}})
+)
+(HERE / "catalog_unparsable.data").write_bytes(
+    game_params({"": {"PASB008_Colorado": colorado, "PJSB018_Yamato": ship("PJSB018", False)}})
+)
+(HERE / "catalog_duplicate.data").write_bytes(
+    game_params({"": {"PASB008_Colorado": colorado, "PASB008_Colorado_Copy": colorado}})
+)
+(HERE / "catalog_no_ships.data").write_bytes(game_params({"": {"PAPT001_Torpedo": torpedo}}))
+(HERE / "mini_en_empty.mo").write_bytes(mo_file({"": "Content-Type: text/plain; charset=UTF-8\n"}))
 (HERE / "mini_en.mo").write_bytes(
     mo_file(
         {

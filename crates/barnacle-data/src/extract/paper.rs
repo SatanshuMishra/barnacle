@@ -39,8 +39,11 @@ fn as_dict(value: &Value) -> Option<Shared<pickled::Dict>> {
 
 fn params_dict(root: &Value) -> Option<Shared<pickled::Dict>> {
     if let Some(dict) = as_dict(root) {
-        let wrapped = dict.inner().get(&key("")).and_then(as_dict);
-        return Some(wrapped.unwrap_or(dict));
+        let wrapper = dict.inner().get(&key("")).cloned();
+        return match wrapper {
+            Some(wrapped) => as_dict(&wrapped),
+            None => Some(dict),
+        };
     }
     let first = root
         .list_ref()
