@@ -4,7 +4,7 @@ use image::RgbaImage;
 use sha2::Digest;
 use sha2::Sha256;
 
-pub const BACKGROUND: Rgba<u8> = Rgba([0x0B, 0x1F, 0x33, 0xFF]);
+pub const BACKGROUND: Rgba<u8> = Rgba([0xD3, 0xE6, 0xE1, 0xFF]);
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
