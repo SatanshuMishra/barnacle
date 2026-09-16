@@ -1,4 +1,5 @@
 pub mod model;
+pub mod names;
 
 pub use model::Catalog;
 pub use model::ModelError;
