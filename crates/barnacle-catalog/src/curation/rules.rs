@@ -174,12 +174,15 @@ fn basic_removal(ship: &Ship, config: &CurationConfig) -> Option<Removal> {
 fn identical_silhouettes(
     candidates: &[Candidate<'_>],
     kept: &BTreeSet<&ShipIndex>,
+    excluded: &BTreeSet<&ShipIndex>,
 ) -> BTreeMap<ShipIndex, Removal> {
     group_by(candidates, |candidate| candidate.silhouette)
         .into_values()
         .filter(|members| members.len() > 1)
         .flat_map(|members| {
-            let base = best_base(members.iter().copied());
+            let base = best_base(members.iter().copied().filter(|member| {
+                !member.collaboration_prefix() && !excluded.contains(member.index())
+            }));
             members
                 .into_iter()
                 .filter_map(|member| {
@@ -210,6 +213,7 @@ fn collaboration_prefixes(
 fn variant_suffixes(
     candidates: &[Candidate<'_>],
     kept: &BTreeSet<&ShipIndex>,
+    excluded: &BTreeSet<&ShipIndex>,
 ) -> BTreeMap<ShipIndex, Removal> {
     let by_name = group_by(candidates, |candidate| candidate.tokens.as_slice());
     candidates
@@ -217,11 +221,9 @@ fn variant_suffixes(
         .filter(|candidate| !kept.contains(candidate.index()))
         .filter_map(|candidate| {
             let stem = candidate.variant_stem()?;
-            let others = by_name
-                .get(stem)?
-                .iter()
-                .copied()
-                .filter(|other| other.index() != candidate.index());
+            let others = by_name.get(stem)?.iter().copied().filter(|other| {
+                other.index() != candidate.index() && !excluded.contains(other.index())
+            });
             let base = best_base(others)?;
             Some((
                 candidate.index().clone(),
@@ -254,6 +256,7 @@ fn manual_exclusions(
 
 pub fn curate(catalog: &Catalog, config: &CurationConfig) -> Curated {
     let kept: BTreeSet<&ShipIndex> = config.keep.iter().map(|entry| &entry.index).collect();
+    let excluded: BTreeSet<&ShipIndex> = config.exclude.iter().map(|entry| &entry.index).collect();
     let basic: BTreeMap<ShipIndex, Removal> = catalog
         .ships
         .iter()
@@ -266,11 +269,11 @@ pub fn curate(catalog: &Catalog, config: &CurationConfig) -> Curated {
         .filter_map(Candidate::from_ship)
         .collect();
 
-    let identical = identical_silhouettes(&candidates, &kept);
+    let identical = identical_silhouettes(&candidates, &kept, &excluded);
     let after_identical = without(&candidates, &identical);
     let collaboration = collaboration_prefixes(&after_identical, &kept);
     let after_collaboration = without(&after_identical, &collaboration);
-    let suffixes = variant_suffixes(&after_collaboration, &kept);
+    let suffixes = variant_suffixes(&after_collaboration, &kept, &excluded);
     let manual = manual_exclusions(catalog, config, &basic);
 
     let removed: BTreeMap<ShipIndex, Removal> = basic

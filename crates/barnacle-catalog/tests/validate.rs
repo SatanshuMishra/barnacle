@@ -62,7 +62,10 @@ fn a_lookalike_naming_a_missing_ship_is_reported() {
 
 #[test]
 fn a_ship_excluded_twice_is_reported() {
-    let ships = vec![ship("PASA898", "AL Hornet", "special", 8, "c1")];
+    let ships = vec![
+        ship("PASA898", "AL Hornet", "special", 8, "c1"),
+        ship("PBSC507", "Belfast", "special", 7, "c866"),
+    ];
     let tables = "[[exclude]]\nindex = \"PASA898\"\nreason = \"carbon_copy\"\n\n[[exclude]]\nindex = \"PASA898\"\nreason = \"carbon_copy\"";
     assert_eq!(
         problems(ships, &reviewed(tables)),
@@ -74,7 +77,10 @@ fn a_ship_excluded_twice_is_reported() {
 
 #[test]
 fn excluded_and_kept_and_unknown_bases_are_reported() {
-    let ships = vec![ship("PJSC708", "ARP Takao", "special", 8, "91e9")];
+    let ships = vec![
+        ship("PJSC708", "ARP Takao", "special", 8, "91e9"),
+        ship("PBSC507", "Belfast", "special", 7, "c866"),
+    ];
     let tables = "[[exclude]]\nindex = \"PJSC708\"\nreason = \"carbon_copy\"\nbase = \"PJSC038\"\n\n[[keep]]\nindex = \"PJSC708\"";
     assert_eq!(
         problems(ships, &reviewed(tables)),
@@ -144,5 +150,93 @@ fn problems_read_as_sentences() {
     assert_eq!(
         Problem::NotReviewed { build: BUILD }.to_string(),
         "curation has never been reviewed; review build 13187581 and set reviewed_through"
+    );
+}
+
+#[test]
+fn unknown_indices_are_reported_for_every_section() {
+    let ships = vec![ship("PBSC507", "Belfast", "special", 7, "c866")];
+    let tables = "[[exclude]]\nindex = \"PASA898\"\nreason = \"carbon_copy\"\n\n[[keep]]\nindex = \"PGSD720\"\n\n[[aliases]]\nindex = \"PRSB110\"\nnames = [\"kreml\"]";
+    assert_eq!(
+        problems(ships, &reviewed(tables)),
+        vec![
+            Problem::UnknownIndex {
+                section: Section::Exclude,
+                index: index("PASA898")
+            },
+            Problem::UnknownIndex {
+                section: Section::Keep,
+                index: index("PGSD720")
+            },
+            Problem::UnknownIndex {
+                section: Section::Aliases,
+                index: index("PRSB110")
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_removed_ship_must_point_at_a_base_in_the_pool() {
+    let ships = vec![
+        ship("PJSC705", "ARP Myoko", "special", 7, "a1"),
+        ship("PJSC708", "ARP Takao", "special", 8, "a2"),
+        ship("PJSC709", "ARP Haguro", "special", 7, "a3"),
+        ship("PBSC507", "Belfast", "special", 7, "c866"),
+    ];
+    let tables = "[[exclude]]\nindex = \"PJSC708\"\nreason = \"carbon_copy\"\nbase = \"PJSC708\"\n\n[[exclude]]\nindex = \"PJSC705\"\nreason = \"carbon_copy\"\nbase = \"PJSC709\"";
+    assert_eq!(
+        problems(ships, &reviewed(tables)),
+        vec![
+            Problem::BaseNotInPool {
+                index: index("PJSC705"),
+                base: index("PJSC709")
+            },
+            Problem::BaseNotInPool {
+                index: index("PJSC708"),
+                base: index("PJSC708")
+            },
+        ]
+    );
+}
+
+#[test]
+fn an_empty_pool_is_a_problem() {
+    let ships = vec![ship("PASS910", "Balao 2", "demoWithoutStatsPrem", 10, "a1")];
+    assert_eq!(problems(ships, &reviewed("")), vec![Problem::EmptyPool]);
+}
+
+#[test]
+fn a_duplicate_inside_one_lookalike_group_is_named_as_such() {
+    let ships = vec![ship("PBSC507", "Belfast", "special", 7, "c866")];
+    assert_eq!(
+        problems(
+            ships,
+            &reviewed("[[lookalikes]]\nships = [\"PBSC507\", \"PBSC507\"]")
+        ),
+        vec![
+            Problem::DuplicateInLookalikeGroup {
+                position: 1,
+                index: index("PBSC507")
+            },
+            Problem::LookalikeGroupTooSmall {
+                position: 1,
+                eligible: 1
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_keep_that_changes_nothing_is_reported() {
+    let ships = vec![
+        ship("PASS910", "Balao 2", "demoWithoutStatsPrem", 10, "a1"),
+        ship("PBSC507", "Belfast", "special", 7, "c866"),
+    ];
+    assert_eq!(
+        problems(ships, &reviewed("[[keep]]\nindex = \"PASS910\"")),
+        vec![Problem::KeepHasNoEffect {
+            index: index("PASS910")
+        }]
     );
 }

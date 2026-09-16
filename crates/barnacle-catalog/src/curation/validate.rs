@@ -36,12 +36,20 @@ pub enum Problem {
     DuplicateExclude { index: ShipIndex },
     #[error("{index} is both excluded and kept")]
     ExcludedAndKept { index: ShipIndex },
+    #[error("{index} is kept but is still out of the pool, so the keep entry does nothing")]
+    KeepHasNoEffect { index: ShipIndex },
+    #[error("{index} counts as a copy of {base}, but {base} is not in the pool")]
+    BaseNotInPool { index: ShipIndex, base: ShipIndex },
+    #[error("lookalike group {position} lists {index} more than once")]
+    DuplicateInLookalikeGroup { position: usize, index: ShipIndex },
     #[error("{index} appears in more than one lookalike group")]
     InSeveralLookalikeGroups { index: ShipIndex },
     #[error("{index} is in a lookalike group but is not in the pool")]
     LookalikeNotInPool { index: ShipIndex },
     #[error("lookalike group {position} has {eligible} ship(s) in the pool; it needs at least 2")]
     LookalikeGroupTooSmall { position: usize, eligible: usize },
+    #[error("no ship is left in the pool")]
+    EmptyPool,
     #[error("curation has never been reviewed; review build {build} and set reviewed_through")]
     NotReviewed { build: u32 },
     #[error(
@@ -55,7 +63,10 @@ pub fn validate(catalog: &Catalog, config: &CurationConfig, curated: &Curated) -
         unknown_indices(catalog, config),
         duplicate_excludes(config),
         excluded_and_kept(config),
+        ineffective_keeps(config, curated),
+        missing_bases(catalog, curated),
         lookalike_problems(config, curated),
+        pool_state(curated),
         review_state(catalog, config),
     ]
     .into_iter()
@@ -133,32 +144,87 @@ fn excluded_and_kept(config: &CurationConfig) -> Vec<Problem> {
         .collect()
 }
 
+fn ineffective_keeps(config: &CurationConfig, curated: &Curated) -> Vec<Problem> {
+    let excluded: BTreeSet<&ShipIndex> = config.exclude.iter().map(|entry| &entry.index).collect();
+    config
+        .keep
+        .iter()
+        .filter(|entry| {
+            curated.removed.contains_key(&entry.index) && !excluded.contains(&entry.index)
+        })
+        .map(|entry| Problem::KeepHasNoEffect {
+            index: entry.index.clone(),
+        })
+        .collect()
+}
+
+fn missing_bases(catalog: &Catalog, curated: &Curated) -> Vec<Problem> {
+    curated
+        .removed
+        .iter()
+        .filter_map(|(index, removal)| {
+            let base = removal.base()?;
+            (catalog.get(base).is_some() && !curated.pool.contains(base)).then(|| {
+                Problem::BaseNotInPool {
+                    index: index.clone(),
+                    base: base.clone(),
+                }
+            })
+        })
+        .collect()
+}
+
 fn lookalike_problems(config: &CurationConfig, curated: &Curated) -> Vec<Problem> {
-    let members = || config.lookalikes.iter().flat_map(|group| &group.ships);
-    let several = repeated(members())
-        .into_iter()
-        .map(|index| Problem::InSeveralLookalikeGroups { index });
-    let outside = members()
-        .filter(|index| curated.removed.contains_key(*index))
-        .map(|index| Problem::LookalikeNotInPool {
-            index: index.clone(),
-        });
-    let small = config
+    let groups: Vec<BTreeSet<&ShipIndex>> = config
+        .lookalikes
+        .iter()
+        .map(|group| group.ships.iter().collect())
+        .collect();
+    let duplicated = config
         .lookalikes
         .iter()
         .enumerate()
-        .filter_map(|(position, group)| {
-            let eligible = group
-                .ships
-                .iter()
-                .filter(|index| curated.pool.contains(*index))
-                .count();
-            (eligible < 2).then_some(Problem::LookalikeGroupTooSmall {
-                position: position + 1,
-                eligible,
+        .flat_map(|(position, group)| {
+            repeated(group.ships.iter()).into_iter().map(move |index| {
+                Problem::DuplicateInLookalikeGroup {
+                    position: position + 1,
+                    index,
+                }
             })
         });
-    several.chain(outside).chain(small).collect()
+    let several = repeated(groups.iter().flatten().copied())
+        .into_iter()
+        .map(|index| Problem::InSeveralLookalikeGroups { index });
+    let outside = groups
+        .iter()
+        .flatten()
+        .filter(|index| curated.removed.contains_key(**index))
+        .map(|index| Problem::LookalikeNotInPool {
+            index: (*index).clone(),
+        });
+    let small = groups.iter().enumerate().filter_map(|(position, group)| {
+        let eligible = group
+            .iter()
+            .filter(|index| curated.pool.contains(**index))
+            .count();
+        (eligible < 2).then_some(Problem::LookalikeGroupTooSmall {
+            position: position + 1,
+            eligible,
+        })
+    });
+    duplicated
+        .chain(several)
+        .chain(outside)
+        .chain(small)
+        .collect()
+}
+
+fn pool_state(curated: &Curated) -> Vec<Problem> {
+    if curated.pool.is_empty() {
+        vec![Problem::EmptyPool]
+    } else {
+        Vec::new()
+    }
 }
 
 fn review_state(catalog: &Catalog, config: &CurationConfig) -> Vec<Problem> {

@@ -271,3 +271,47 @@ fn removals_explain_themselves() {
         "excluded by curation: bad silhouette"
     );
 }
+
+#[test]
+fn manual_exclusions_are_never_chosen_as_a_base() {
+    let ships = catalog(
+        1,
+        vec![
+            ship("PASD019", "Clemson", "upgradeable", 4, "db18"),
+            ship("PASD704", "DD 214", "specialUnsellable", 4, "db18"),
+        ],
+    );
+    let curated = curate(
+        &ships,
+        &config("[[exclude]]\nindex = \"PASD019\"\nreason = \"bad_silhouette\""),
+    );
+    assert!(curated.pool.contains(&index("PASD704")));
+    assert_eq!(
+        curated.removed[&index("PASD019")],
+        Removal::Manual {
+            reason: ExcludeReason::BadSilhouette,
+            base: None
+        }
+    );
+}
+
+#[test]
+fn a_silhouette_shared_only_by_reskins_has_no_base() {
+    let ships = catalog(
+        1,
+        vec![
+            ship("PJSC705", "ARP Myoko", "special", 7, "a7a7"),
+            ship("PJSC709", "ARP Haguro", "special", 7, "a7a7"),
+        ],
+    );
+    let curated = curate(&ships, &config(""));
+    assert_eq!(
+        curated.removed[&index("PJSC705")],
+        Removal::CollaborationPrefix
+    );
+    assert_eq!(
+        curated.removed[&index("PJSC709")],
+        Removal::CollaborationPrefix
+    );
+    assert!(curated.variants_of(&index("PJSC705")).is_empty());
+}
