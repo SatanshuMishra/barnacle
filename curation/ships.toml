@@ -1,6 +1,7 @@
 groups = [
     "start",
     "special",
+    "premium",
     "specialUnsellable",
     "ultimate",
     "upgradeable",
