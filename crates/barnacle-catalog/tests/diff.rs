@@ -1,5 +1,7 @@
 mod common;
 
+use barnacle_catalog::Ship;
+use barnacle_catalog::ShipClass;
 use barnacle_catalog::ShipGroup;
 use barnacle_catalog::curation::CurationConfig;
 use barnacle_catalog::curation::curate;
@@ -78,4 +80,23 @@ fn year_suffixed_refits_are_lookalike_candidates_until_grouped() {
     ))
     .unwrap();
     assert!(year_refit_candidates(&ships, &grouped, &curate(&ships, &grouped)).is_empty());
+}
+
+#[test]
+fn a_year_suffix_on_a_different_class_of_ship_is_not_a_lookalike() {
+    let battleship = |value, name, tier, hash| Ship {
+        class: ShipClass::Battleship,
+        ..ship(value, name, "special", tier, hash)
+    };
+    let ships = catalog(
+        13187581,
+        vec![
+            battleship("PBSB205", "Tiger", 5, "t1"),
+            ship("PBSC518", "Tiger '59", "special", 8, "t2"),
+            battleship("PBSB104", "Orion", 4, "o1"),
+            ship("PBSC716", "Orion '44", "special", 7, "o2"),
+        ],
+    );
+    let config = CurationConfig::from_toml("groups = [\"special\"]").unwrap();
+    assert!(year_refit_candidates(&ships, &config, &curate(&ships, &config)).is_empty());
 }

@@ -92,7 +92,9 @@ pub fn year_refit_candidates(
         .filter_map(|(refit, tokens)| {
             let (year, stem) = tokens.split_last()?;
             let is_year = year.len() == 2 && year.bytes().all(|byte| byte.is_ascii_digit());
-            let original = by_name.get(stem).filter(|_| is_year && !stem.is_empty())?;
+            let original = by_name
+                .get(stem)
+                .filter(|original| is_year && !stem.is_empty() && original.class == refit.class)?;
             let grouped = config.lookalikes.iter().any(|group| {
                 group.ships.contains(&original.index) && group.ships.contains(&refit.index)
             });
