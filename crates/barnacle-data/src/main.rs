@@ -101,13 +101,8 @@ fn run(cli: &Cli) -> Result<ExitCode, AppError> {
                 .map_err(AppError::Runtime)?;
             let downloaded = runtime.block_on(download(&data, *requested))?;
             let built = build(&data, &downloaded)?;
-            let source = if downloaded.refreshed {
-                "refreshed game data"
-            } else {
-                "game data"
-            };
             println!(
-                "built catalog {} with {} ships from {source} at commit {}; next: barnacle-data diff",
+                "built catalog {} with {} ships from data commit {}; next: barnacle-data diff",
                 built.name,
                 built.catalog.ships.len(),
                 downloaded.data_repo_commit

@@ -41,9 +41,9 @@ fn bytes_that_are_not_game_params_are_a_decode_error() {
 }
 
 #[test]
-fn a_wrapper_key_that_is_not_a_dictionary_is_an_unexpected_root() {
+fn a_wrapper_key_that_is_not_a_dictionary_is_an_unexpected_wrapper() {
     assert!(matches!(
         paper_flags(fixture("mini_gameparams_bad_wrapper.data")),
-        Err(PaperError::UnexpectedRoot)
+        Err(PaperError::UnexpectedWrapper)
     ));
 }

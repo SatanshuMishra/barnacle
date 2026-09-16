@@ -13,6 +13,8 @@ pub enum PaperError {
     Decode(#[from] GameDataError),
     #[error("GameParams root is not a dictionary, list or tuple")]
     UnexpectedRoot,
+    #[error("GameParams has a wrapper entry that is not a dictionary")]
+    UnexpectedWrapper,
     #[error("ships without a boolean isPaperShip: {indices:?}")]
     MissingFlag { indices: Vec<String> },
 }
@@ -37,22 +39,23 @@ fn as_dict(value: &Value) -> Option<Shared<pickled::Dict>> {
     }
 }
 
-fn params_dict(root: &Value) -> Option<Shared<pickled::Dict>> {
+fn params_dict(root: &Value) -> Result<Shared<pickled::Dict>, PaperError> {
     if let Some(dict) = as_dict(root) {
         let wrapper = dict.inner().get(&key("")).cloned();
         return match wrapper {
-            Some(wrapped) => as_dict(&wrapped),
-            None => Some(dict),
+            Some(wrapped) => as_dict(&wrapped).ok_or(PaperError::UnexpectedWrapper),
+            None => Ok(dict),
         };
     }
-    let first = root
-        .list_ref()
+    root.list_ref()
         .and_then(|list| list.inner().first().cloned())
         .or_else(|| {
             root.tuple_ref()
                 .and_then(|tuple| tuple.inner().first().cloned())
-        })?;
-    as_dict(&first)
+        })
+        .as_ref()
+        .and_then(as_dict)
+        .ok_or(PaperError::UnexpectedRoot)
 }
 
 fn string_field(entry: &pickled::Dict, name: &str) -> Option<String> {
@@ -72,7 +75,7 @@ fn is_ship(entry: &pickled::Dict) -> bool {
 
 pub fn paper_flags(game_params: Vec<u8>) -> Result<BTreeMap<String, bool>, PaperError> {
     let root = game_params_to_pickle(game_params)?;
-    let params = params_dict(&root).ok_or(PaperError::UnexpectedRoot)?;
+    let params = params_dict(&root)?;
     let ships: Vec<(String, Option<bool>)> = params
         .inner()
         .values()
