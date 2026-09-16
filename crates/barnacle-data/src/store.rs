@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
+use std::path::Component;
+use std::path::Path;
 use std::path::PathBuf;
 
 use barnacle_catalog::Catalog;
@@ -16,6 +18,7 @@ use crate::versions;
 const CATALOG_FILE: &str = "catalog.json";
 const CURRENT_FILE: &str = "current";
 const ENGLISH_CATALOG: &str = "translations/en/LC_MESSAGES/global.mo";
+const RAW_GITHUB: &str = "https://raw.githubusercontent.com/";
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -39,6 +42,16 @@ pub enum StoreError {
     NoPublishedBuilds,
     #[error("build {build} is not in the game data repository's index")]
     BuildNotInIndex { build: u32 },
+    #[error("asked for build {requested} but the repository returned build {downloaded}")]
+    UnexpectedBuild { requested: u32, downloaded: u32 },
+    #[error(
+        "the repository index names build directory {dir:?}, which is not a safe directory name"
+    )]
+    UnsafeBuildDir { dir: String },
+    #[error("the repository tip {commit:?} is not a commit id")]
+    UnexpectedCommit { commit: String },
+    #[error("the game data repository URL {url} is not a raw GitHub main-branch URL")]
+    UnexpectedRepoUrl { url: String },
     #[error("build directory {dir} has no English translation catalog")]
     NoEnglishCatalog { dir: String },
     #[error("no catalog has been built yet; run `barnacle-data sync`")]
@@ -49,6 +62,50 @@ pub enum StoreError {
 
 fn io_error(path: PathBuf) -> impl FnOnce(std::io::Error) -> StoreError {
     move |source| StoreError::Io { path, source }
+}
+
+struct CatalogName<'a> {
+    build_dir: &'a str,
+    build: u32,
+    revision: u32,
+}
+
+fn parse_catalog_name(name: &str) -> Option<CatalogName<'_>> {
+    let (build_dir, revision) = name.rsplit_once("_r")?;
+    let (_, build) = build_dir.rsplit_once('_')?;
+    Some(CatalogName {
+        build_dir,
+        build: build.parse().ok()?,
+        revision: revision.parse().ok()?,
+    })
+}
+
+pub fn pinned_base_url(base: &str, commit: &str) -> Result<String, StoreError> {
+    let is_commit = commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if !is_commit {
+        return Err(StoreError::UnexpectedCommit {
+            commit: commit.to_owned(),
+        });
+    }
+    base.strip_suffix("/main")
+        .filter(|repo| repo.starts_with(RAW_GITHUB))
+        .map(|repo| format!("{repo}/{commit}"))
+        .ok_or_else(|| StoreError::UnexpectedRepoUrl {
+            url: base.to_owned(),
+        })
+}
+
+pub fn check_build_dir(entry: &BuildEntry) -> Result<(), StoreError> {
+    let expected = format!("{}_{}", entry.version, entry.build);
+    let components: Vec<Component<'_>> = Path::new(&entry.dir).components().collect();
+    let single_name = matches!(components.as_slice(), [Component::Normal(_)]);
+    if entry.dir == expected && single_name {
+        Ok(())
+    } else {
+        Err(StoreError::UnsafeBuildDir {
+            dir: entry.dir.clone(),
+        })
+    }
 }
 
 pub struct DataDir {
@@ -86,7 +143,7 @@ impl DataDir {
         std::fs::write(&path, format!("{name}\n")).map_err(io_error(path))
     }
 
-    pub fn built(&self) -> Result<Vec<String>, StoreError> {
+    fn directory_names(&self) -> Result<Vec<String>, StoreError> {
         let root = self.catalogs();
         let listing = match std::fs::read_dir(&root) {
             Ok(listing) => listing,
@@ -96,20 +153,45 @@ impl DataDir {
         let entries = listing
             .collect::<Result<Vec<_>, _>>()
             .map_err(io_error(root))?;
-        let by_build: BTreeMap<u32, String> = entries
+        Ok(entries
             .iter()
-            .filter(|entry| entry.path().join(CATALOG_FILE).is_file())
-            .filter_map(|entry| {
-                let name = entry.file_name().into_string().ok()?;
-                let build = name.rsplit_once('_')?.1.parse().ok()?;
-                Some((build, name))
+            .filter(|entry| entry.path().is_dir())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect())
+    }
+
+    pub fn built(&self) -> Result<Vec<String>, StoreError> {
+        let names = self.directory_names()?;
+        let ordered: BTreeMap<(u32, u32), &String> = names
+            .iter()
+            .filter(|name| self.catalog_dir(name).join(CATALOG_FILE).is_file())
+            .filter_map(|name| {
+                let parsed = parse_catalog_name(name)?;
+                Some(((parsed.build, parsed.revision), name))
             })
             .collect();
-        Ok(by_build.into_values().collect())
+        Ok(ordered.into_values().cloned().collect())
     }
 
     pub fn newest(&self) -> Result<String, StoreError> {
         self.built()?.pop().ok_or(StoreError::NoCatalogs)
+    }
+
+    pub fn reserve_catalog_dir(&self, build_dir: &str) -> Result<(String, PathBuf), StoreError> {
+        let root = self.catalogs();
+        std::fs::create_dir_all(&root).map_err(io_error(root.clone()))?;
+        let names = self.directory_names()?;
+        let revision = names
+            .iter()
+            .filter_map(|name| parse_catalog_name(name))
+            .filter(|parsed| parsed.build_dir == build_dir)
+            .map(|parsed| parsed.revision)
+            .max()
+            .map_or(1, |latest| latest + 1);
+        let name = format!("{build_dir}_r{revision}");
+        let path = root.join(&name);
+        std::fs::create_dir(&path).map_err(io_error(path.clone()))?;
+        Ok((name, path))
     }
 
     pub fn load(&self, name: &str) -> Result<Catalog, StoreError> {
@@ -133,15 +215,19 @@ impl DataDir {
 pub struct Downloaded {
     pub entry: BuildEntry,
     pub data_repo_commit: String,
+    pub refreshed: bool,
 }
 
 pub async fn download(data: &DataDir, requested: Option<u32>) -> Result<Downloaded, StoreError> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("barnacle-data/", env!("CARGO_PKG_VERSION")))
         .build()?;
-    let base = download_repo::DEFAULT_REPO_BASE_URL;
     let remote = |report: rootcause::Report| StoreError::Remote(report.into());
-    let index = download_repo::fetch_builds_index(&client, base)
+    let commit = download_repo::fetch_repo_tip(&client)
+        .await
+        .map_err(remote)?;
+    let base = pinned_base_url(download_repo::DEFAULT_REPO_BASE_URL, &commit)?;
+    let index = download_repo::fetch_builds_index(&client, &base)
         .await
         .map_err(remote)?;
     let target = match requested {
@@ -153,31 +239,56 @@ pub async fn download(data: &DataDir, requested: Option<u32>) -> Result<Download
             .max()
             .ok_or(StoreError::NoPublishedBuilds)?,
     };
-    let data_repo_commit = download_repo::fetch_repo_tip(&client)
-        .await
-        .map_err(remote)?;
+    let entry = index
+        .find_by_build(target)
+        .cloned()
+        .ok_or(StoreError::BuildNotInIndex { build: target })?;
+    check_build_dir(&entry)?;
+
     let store = data.store();
     std::fs::create_dir_all(&store).map_err(io_error(store.clone()))?;
+    let stale = download_repo::check_for_updates(&client, &base, &store, None)
+        .await
+        .map_err(remote)?;
+    let refreshed = stale
+        .updates
+        .iter()
+        .any(|update| update.build == entry.build);
     let progress = |done: u64, total: u64| {
         if total > 0 && (done == total || done.is_multiple_of(250)) {
             eprintln!("downloaded {done} of {total} objects");
         }
     };
-    let build =
-        download_repo::download_build(&client, base, &store, target, None, false, &progress)
-            .await
-            .map_err(remote)?;
-    let entry = index
-        .find_by_build(build)
-        .cloned()
-        .ok_or(StoreError::BuildNotInIndex { build })?;
+    let downloaded = download_repo::download_build(
+        &client,
+        &base,
+        &store,
+        entry.build,
+        None,
+        refreshed,
+        &progress,
+    )
+    .await
+    .map_err(remote)?;
+    if downloaded != entry.build {
+        return Err(StoreError::UnexpectedBuild {
+            requested: entry.build,
+            downloaded,
+        });
+    }
     Ok(Downloaded {
         entry,
-        data_repo_commit,
+        data_repo_commit: commit,
+        refreshed,
     })
 }
 
-pub fn build(data: &DataDir, downloaded: &Downloaded) -> Result<Catalog, StoreError> {
+pub struct Built {
+    pub name: String,
+    pub catalog: Catalog,
+}
+
+pub fn build(data: &DataDir, downloaded: &Downloaded) -> Result<Built, StoreError> {
     let entry = &downloaded.entry;
     let dump = Dump::open(&data.store().join(&entry.dir));
     let english_mo =
@@ -185,8 +296,7 @@ pub fn build(data: &DataDir, downloaded: &Downloaded) -> Result<Catalog, StoreEr
             .ok_or_else(|| StoreError::NoEnglishCatalog {
                 dir: entry.dir.clone(),
             })?;
-    let output_dir = data.catalog_dir(&entry.dir);
-    std::fs::create_dir_all(&output_dir).map_err(io_error(output_dir.clone()))?;
+    let (name, output_dir) = data.reserve_catalog_dir(&entry.dir)?;
     let vfs = dump.vfs();
     let catalog = build_catalog(BuildInputs {
         vfs: &vfs,
@@ -200,6 +310,6 @@ pub fn build(data: &DataDir, downloaded: &Downloaded) -> Result<Catalog, StoreEr
         },
         output_dir: &output_dir,
     })?;
-    data.save(&entry.dir, &catalog)?;
-    Ok(catalog)
+    data.save(&name, &catalog)?;
+    Ok(Built { name, catalog })
 }
