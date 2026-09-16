@@ -255,13 +255,15 @@ When WG releases a version before landaire/wows-replay-data publishes it, the bo
 
 ### 7.2 A new wows-toolkit release
 
-1. A dependency bot (Renovate or Dependabot) opens a pull request bumping the pinned crate versions in the workspace `Cargo.toml`.
+1. A pull request bumps the pinned toolkit versions in the workspace `Cargo.toml` by hand, together with `pickled` and `reqwest` whenever the new toolkit versions move them.
 2. CI builds everything, runs the catalog tests against a small committed fixture, and rebuilds the catalog from the latest dump.
 3. A **catalog equivalence check** compares the new catalog with the one built by the previous toolkit version on the same game build. Any difference fails the check and is listed, so a parser regression cannot reach players unnoticed.
 
 Pins use exact versions (`=0.45.0`). The crates are 0.x and bump together, so a range buys nothing and hides which version produced a catalog.
 
-`pickled` and `reqwest` are used directly but must match the versions the toolkit uses, because their types cross into toolkit calls. Dependabot is told to ignore their breaking releases, so when a toolkit release moves either one, the toolkit pull request fails to compile and is fixed by bumping them in that same pull request. `rootcause` is not a direct dependency for the same reason: a rootcause 0.13 bump broke the build on 2026-09-16 while the toolkit still returned 0.12 reports.
+Dependabot cannot open that pull request. Every wows-data-mgr release from 0.19.0 to 0.21.0 requires the matching wowsunpack minor version, and Dependabot's Cargo support loosens one requirement at a time, so each exact pin blocks the other crate's update and no pull request appears. It still proposes a patch release of one crate when the other's requirement allows it. Nothing currently announces a new toolkit release.
+
+`pickled` and `reqwest` are used directly but must match the versions the toolkit uses, because their types cross into toolkit calls. Dependabot ignores every `pickled` update and every minor or major `reqwest` update, so both move only in a hand-made toolkit bump. `pickled` stays pinned exactly, because its pre-release tags order as text (`alpha9` sorts after `alpha11`), so a caret range would select the older, published `alpha9`. `rootcause` is not a direct dependency for the same reason: a rootcause 0.13 bump broke the build on 2026-09-16 while the toolkit still returned 0.12 reports.
 
 ## 8. Testing
 
