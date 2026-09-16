@@ -3348,3 +3348,17 @@ git commit -m "chore: add license, CI, dependency updates and curation seed"
 Not covered here, by design: near-identical and model-path look-alike candidates (spec 4.4 items 2-3, not needed for launch), the catalog equivalence check (spec 7.2 step 3, which needs a cached game build in CI and belongs with Plan 3), the upstream `is_paper_ship` pull request (spec 9, step 8), and everything in spec sections 5 and 6 (Plans 2 and 3).
 
 Deviations from the first spec draft, already written back into the spec: `ShipGroup` and `Nation` are string newtypes rather than enums, since the allowlist is configured as strings and the diff reports unseen groups; ship names and silhouettes are `Option` structs; a ship with no English name is removed; `reviewed_through` is optional; the cleaning rule drops the middle dot, which no English name uses; and extraction lives in `barnacle-data`, so `barnacle-catalog` stays free of the toolkit.
+
+## Execution notes (2026-09-16)
+
+Where the implementation departs from the steps above:
+
+| Task | Change | Why |
+|---|---|---|
+| 1-7 | Code is formatted with rustfmt's defaults, so it wraps at 100 columns instead of the plan's longer lines | `cargo fmt --all --check` is part of every task's check |
+| 3 | Added `identical_silhouettes_never_prefer_a_reskin_name` (Shinonome B / Shinonome, Jean Bart / Jean Bart B) | The plan's examples always had the real ship at the lowest index, so the reskin-name part of the ranking was untested. Five real identical-silhouette pairs depend on it. Removing that part of the ranking makes the new test fail. |
+| 7 | Download progress uses `done.is_multiple_of(250)` | Clippy on Rust 1.97 rejects `done % 250 == 0` |
+| 7 | The Task 7 commit landed before clippy passed; a follow-up `fix(data)` commit corrected it | Clippy's exit code was hidden by a pipe; later checks run with `pipefail` |
+| 8 | `actions/checkout@v7` | Current major release on 2026-09-16 |
+| 8 | Dependabot groups `wowsunpack`, `wows-data-mgr`, `pickled` and `rootcause` into one pull request | They must move together; the lockfile test fails until `versions.rs` is updated, which is intended |
+| 8 | The README's Wargaming notice is written in Barnacle's own words | It states non-affiliation as policy section 2.5 requires, without reproducing Wargaming's text; the owner can swap in the recommended wording from the policy page |
