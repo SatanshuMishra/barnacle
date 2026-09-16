@@ -113,11 +113,12 @@ None of these lists is copied from track's `guess.toml` (section 11). Track's li
 Applied in order when the catalog is built. A ship removed by rules 3-5 is a **variant** of a base ship: it is never drawn, and its names count as correct answers whenever its base ship is drawn.
 
 1. **Group.** Drop any ship whose group is not in `groups`. This removes every test ship, since `Vehicle::is_test_ship()` is true for every `demo*` group.
-2. **Name and silhouette.** Drop any ship without an English name (it cannot be answered) or without a silhouette file.
+2. **Name and silhouette.** Drop any ship without an English name (it cannot be answered) or without a silhouette file. Also drop every ship whose silhouette file is identical to one excluded for bad art, since it shares the same bad image.
 3. **Identical silhouette.** Group ships whose silhouette files hash the same. Keep one base per group: the one in `upgradeable`, `start` or `special`, in that order, then the lowest index.
 4. **Collaboration prefix.** A ship whose English name starts with the word `ARP`, `AL`, `HSF`, `BA` or `STAR` is a collaboration reskin. Its base is the ship with the identical silhouette if rule 3 found one; otherwise it is excluded with no base, so no extra names are accepted.
 5. **Variant suffix.** A ship whose English name ends with the word `B`, `Golden`, `CLR` or `Beta`, where the name without that word is another eligible ship's name, is a variant of that ship.
-6. **Manual.** Apply `exclude`, then `keep`.
+6. **Manual.** Apply `exclude`, then `keep`. A manually excluded ship is never chosen as a base by rules 3 and 5.
+7. **Chains.** When a removed ship's base was itself removed, it points through to the first base that is in the pool, recorded as a copy of a copy.
 
 Rules 4 and 5 are narrow on purpose. Matching any ship whose name contains another ship's name is unsafe: it would wrongly pair Black Swan with Black, Konig Albert with Konig, and Vampire II with Vampire (13.11 data).
 
@@ -242,7 +243,7 @@ Romanization stays even with English-only answers, because some English names co
 cargo run -p barnacle-data -- sync
 ```
 
-`sync` reads the data repository at its current commit, pinned for the whole run, so the commit recorded in the catalog is the one the files came from. It calls `wows_data_mgr::download_repo::check_for_updates` to refresh a cached build that upstream changed, then `download_build` for the newest published build, and builds the catalog into a new `data/catalog/<version>_<build>_r<n>` directory. `sync` alone changes nothing the bot serves, because it never writes into an existing catalog directory.
+`sync` reads the data repository at its current commit, pinned for the whole run, so the commit recorded in the catalog is the one the files came from. It calls `download_build` for the newest published build with a forced refresh, which re-reads the build's manifest but keeps content already stored, so upstream changes are always picked up for the cost of one small request. The catalog is built in a hidden staging directory and renamed to `data/catalog/<version>_<build>_r<n>` only when complete; a failed build removes its staging directory. `sync` alone changes nothing the bot serves, because it never writes into an existing catalog directory. Directories without the `_r<n>` suffix are ignored.
 
 ```bash
 cargo run -p barnacle-data -- diff

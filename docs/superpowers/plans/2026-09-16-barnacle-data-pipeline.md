@@ -3365,11 +3365,12 @@ Where the implementation departs from the steps above:
 
 ### Review follow-up (2026-09-16)
 
-An independent review of `79d54c7..93b6751` returned 11 findings. All were fixed in later commits on this branch:
+An independent review of `79d54c7..93b6751` returned 11 findings, one per row below. All were fixed in later commits on this branch:
 
 | Finding | Fix |
 |---|---|
-| wowsunpack silently skips ships it cannot parse | `ExtractError::UnparsedShips`, plus `NoShips`, `NoSilhouettes` and `NoEnglishNames`; `tests/build_catalog.rs` runs `build_catalog` on synthetic GameParams through `MemoryFS` |
+| wowsunpack silently skips ships it cannot parse | `ExtractError::UnparsedShips`, plus `NoShips`, `NoSilhouettes` and `NoEnglishNames` |
+| The only catalog-build test needed real data and never ran in CI | `tests/build_catalog.rs` runs `build_catalog` on synthetic GameParams through `MemoryFS` |
 | `sync` overwrote the catalog the bot serves | Catalogs live in `data/catalog/<version>_<build>_r<n>`; every build reserves a new revision directory |
 | Provenance could name the wrong data commit | Downloads are pinned to the recorded commit; `check_for_updates` forces a refresh when upstream changed a cached build |
 | An empty pool validated clean | `Problem::EmptyPool` |
@@ -3381,3 +3382,20 @@ An independent review of `79d54c7..93b6751` returned 11 findings. All were fixed
 | Remote build directory names were trusted | `check_build_dir` requires `<version>_<build>` as a single path component |
 
 Found on real 15.8.0 data after the plan was written: WG added the `premium`, `experimental` and `coopOnly` groups (`premium` is now allowed), WG silhouettes are dark and need a light background (now seafoam `#D3E6E1`), and year-suffix lookalike candidates must share a ship class.
+
+A second review of `93b6751..9df56a2` returned 10 findings, all fixed in `4abd028` and `96e366c`:
+
+| Finding | Fix |
+|---|---|
+| A ship sharing a bad-silhouette file became a base and stayed in the pool | `Removal::SharesBadSilhouette` removes every ship with that file |
+| Rule 3 could pick a base that rule 5 then removed | Chains resolve to the pool base as `Removal::CopyOf { via, base }` |
+| `download` and `build` were untested | `tests/download.rs` runs `download_from` against a local HTTP server; `tests/store.rs` builds twice from a plain dump directory |
+| Catalog names accepted `+`, leading zeros and colliding keys; the revision counter could overflow | Canonical digits only, ordering keyed by build, revision and name, `StoreError::RevisionOverflow` |
+| The update check missed unregistered builds and cost an extra API call | `download_build` is always called with a forced refresh |
+| A failed build left a numbered directory; `catalog.json` was not written atomically | Builds run in a hidden staging directory renamed into place on success |
+| `KeepHasNoEffect` missed keeps on ships no rule removes | Curation is re-run without keeps to find keeps that change nothing |
+| The variant-suffix exclusion filter was untested | `an_excluded_ship_is_never_a_variant_base`, verified by mutation |
+| A non-dictionary wrapper was reported as a bad root | `PaperError::UnexpectedWrapper` |
+| The first follow-up table had 10 rows for 11 findings | The merged row is now two rows |
+
+Mutation checks run during the fixes: removing the reskin-name ranking, the variant-base exclusion filter, the forced refresh, or the build-directory check each makes a test fail.
