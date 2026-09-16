@@ -1,3 +1,4 @@
+pub mod curation;
 pub mod model;
 pub mod names;
 
