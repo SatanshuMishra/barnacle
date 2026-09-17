@@ -93,6 +93,10 @@ fn a_config_error_never_repeats_what_the_file_contains() {
     for text in [
         "discord_token = \"MTIz.not-a-real-token\"\n\n[commands]\nscope = \"global\"\n",
         "discord_token = MTIz.not-a-real-token\n",
+        "[commands]\nscope = \"not-a-real-token\"\n",
+        "[commands]\nscope = \"guilds\"\nguilds = [\"not-a-real-token\"]\n",
+        "curation = 1234567890not-a-real-token\n[commands]\nscope = \"global\"\n",
+        "[commands]\nscope = \"global\"\nnot-a-real-token = 1\n",
     ] {
         let error = Config::from_toml(text).unwrap_err();
         assert!(matches!(error, ConfigError::Toml { .. }));
@@ -105,4 +109,14 @@ fn a_config_error_never_repeats_what_the_file_contains() {
         assert!(!chain.contains("not-a-real-token"));
         assert!(!format!("{error:?}").contains("not-a-real-token"));
     }
+}
+
+#[test]
+fn a_config_error_names_where_the_problem_is() {
+    let error = Config::from_toml("[commands]\nscope = \"everywhere\"\n").unwrap_err();
+    assert!(matches!(error, ConfigError::Toml { line: 2, column: 9 }));
+    assert_eq!(
+        error.to_string(),
+        "the config is not valid at line 2, column 9; compare it with barnacle.example.toml"
+    );
 }

@@ -1,4 +1,3 @@
-use std::ops::Range;
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -19,11 +18,10 @@ pub enum CommandScope {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("the config is not valid: {message}")]
-    Toml {
-        message: String,
-        span: Option<Range<usize>>,
-    },
+    #[error(
+        "the config is not valid at line {line}, column {column}; compare it with barnacle.example.toml"
+    )]
+    Toml { line: usize, column: usize },
     #[error("commands.scope is \"guilds\" but commands.guilds lists no server")]
     NoGuilds,
     #[error("commands.guilds contains 0, which is not a Discord server ID")]
@@ -60,9 +58,9 @@ enum ScopeName {
 
 impl Config {
     pub fn from_toml(text: &str) -> Result<Self, ConfigError> {
-        let file: ConfigFile = toml::from_str(text).map_err(|error| ConfigError::Toml {
-            message: error.message().to_owned(),
-            span: error.span(),
+        let file: ConfigFile = toml::from_str(text).map_err(|error| {
+            let (line, column) = position(text, error.span().map_or(0, |span| span.start));
+            ConfigError::Toml { line, column }
         })?;
         let commands = match (file.commands.scope, file.commands.guilds) {
             (ScopeName::Global, None) => CommandScope::Global,
@@ -87,6 +85,17 @@ impl Config {
     pub fn catalogs(&self) -> PathBuf {
         self.data_dir.join("catalog")
     }
+}
+
+fn position(text: &str, offset: usize) -> (usize, usize) {
+    let before = text.get(..offset).unwrap_or(text);
+    let line = before.matches('\n').count() + 1;
+    let column = before
+        .rsplit('\n')
+        .next()
+        .map_or(0, |last| last.chars().count())
+        + 1;
+    (line, column)
 }
 
 fn default_data_dir() -> PathBuf {
