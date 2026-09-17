@@ -4813,7 +4813,16 @@ An independent review of the executed branch found one high, four medium and fou
 | Config errors keep only the parser's message and span | `4220ee7` |
 | The first correct answer opens a 250 ms settle window (`SETTLE_WINDOW`), and the earliest message ID wins. `hear` now takes `self: &Arc<Self>`. Round tests wait out the window. | `09eda6e` |
 
-New tests (11): two stuck-call tests and six settle-window tests in `table`, and one each in `wiring`, `text` and `config`. The workspace now has 207 tests.
+New tests (11): two stuck-call tests and six settle-window tests in `table`, and one each in `wiring`, `text` and `config`. A second review then found three medium and three low problems, fixed in `3922c6c`, `4562a8f`, `ce02ee6` and `51bcc43`, with `2054a9c` rewriting the race test:
+
+- Config errors give only a line and column.
+- Threads need Send Messages in Threads.
+- A timed-out round post is deleted.
+- Cancel clicks get a silent acknowledgement, and refusals get a private follow-up.
+- The registration error leaves the cause to its chain.
+- The race test runs both orders, and `FakeStore::pausing` was removed.
+
+The workspace now has 209 tests.
 
 Two more steps for the owner's live checklist in Task 10:
 
