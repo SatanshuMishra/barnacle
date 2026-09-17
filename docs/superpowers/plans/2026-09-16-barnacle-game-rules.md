@@ -2198,3 +2198,18 @@ Pushing the branch and opening the pull request are separate steps, and only hap
   - The final workspace passed all 124 tests.
   - The replayed crate was file-for-file identical to the prototype that passed the deliberate-break checks.
 - **Not checked:** the commit steps. The replay ran outside git.
+
+## Changes after the code review (2026-09-16)
+
+An independent review of the executed branch found three defects and three test gaps that the plan's code and break checks had missed. The code on the branch now differs from the task listings above in these places, and the branch is the reference.
+
+| Finding | Change | Commit |
+|---|---|---|
+| A guess sent before the round's post could win in zero time | `Round::judge` also requires `guess.message > self.posted` | `2ac8502` |
+| The invoker answering their own round was untested | New round test | `2ac8502` |
+| A ship in two look-alike groups kept only the last group | The look-alike map is built with `group_by_key` over member pairs, so groups merge | `f8ab1ba` |
+| A variant listed in a look-alike group returned its look-alikes' names | `ShipBook::answers` returns an empty set for any ship not in the book before it looks at look-alikes | `f8ab1ba` |
+| No test for a look-alike's own variants and aliases, a copy of a variant, a baseless exclusion, or a rule-5 variant with its own silhouette | New answers tests | `f8ab1ba` |
+| The recent-ship skip could count the whole book instead of the eligible ships and no test noticed | New draw test with 20 eligible ships inside a 30-ship book | `161c0c7` |
+
+Each fix's test failed before the fix and passes after it. The fixes were then undone, and the new rules broken, one at a time; each change made its own new test fail and no other. The workspace passes 130 tests.
