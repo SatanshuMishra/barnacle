@@ -27,6 +27,7 @@ use crate::solves::SolveRecord;
 use crate::solves::SolveStore;
 
 pub const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(5);
+pub const SETTLE_WINDOW: Duration = Duration::from_millis(250);
 
 #[derive(Debug, thiserror::Error)]
 #[error("the Discord call failed")]
@@ -80,9 +81,15 @@ pub enum CancelOutcome {
     AlreadyOver,
 }
 
+struct Leader {
+    solve: Solve,
+    message: Snowflake,
+}
+
 struct Active {
     number: u64,
     round: Round,
+    leader: Option<Leader>,
 }
 
 #[derive(Default)]
@@ -154,6 +161,7 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
             active: Some(Active {
                 number,
                 round: draw.start(invoker, posted),
+                leader: None,
             }),
         };
         drop(seat);
@@ -162,7 +170,7 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
         StartOutcome::Started { number }
     }
 
-    pub async fn hear(&self, place: Place, guess: Guess<'_>) {
+    pub async fn hear(self: &Arc<Self>, place: Place, guess: Guess<'_>) {
         if guess.author_is_bot {
             return;
         }
@@ -170,22 +178,49 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
             return;
         };
         let mut seat = seat.lock().await;
-        let solved = seat
-            .active
-            .as_ref()
-            .and_then(|active| active.round.judge(&guess));
-        let Some(solve) = solved else {
+        let Some(active) = seat.active.as_mut() else {
             return;
         };
-        let Some(active) = seat.active.take() else {
+        let Some(solve) = active.round.judge(&guess) else {
+            return;
+        };
+        let first = active.leader.is_none();
+        let earlier = active
+            .leader
+            .as_ref()
+            .is_none_or(|leader| guess.message < leader.message);
+        if earlier {
+            active.leader = Some(Leader {
+                solve,
+                message: guess.message,
+            });
+        }
+        let number = active.number;
+        drop(seat);
+        if first {
+            let table = Arc::clone(self);
+            tokio::spawn(async move { table.settle(place, number).await });
+        }
+    }
+
+    async fn settle(&self, place: Place, number: u64) {
+        tokio::time::sleep(SETTLE_WINDOW).await;
+        let Some(seat) = self.existing_seat(place.channel) else {
+            return;
+        };
+        let mut seat = seat.lock().await;
+        let Some(active) = seat.active.take_if(|active| active.number == number) else {
+            return;
+        };
+        let Some(leader) = &active.leader else {
             return;
         };
         let record = SolveRecord {
             guild: place.guild,
-            user: solve.winner,
-            ship: solve.ship.clone(),
-            elapsed: solve.elapsed,
-            solved_at_ms: guess.message.unix_millis(),
+            user: leader.solve.winner,
+            ship: leader.solve.ship.clone(),
+            elapsed: leader.solve.elapsed,
+            solved_at_ms: leader.message.unix_millis(),
         };
         let personal_best = match self.solves.record(&record).await {
             Ok(best) => Some(best),
@@ -195,9 +230,9 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
             }
         };
         let ending = Ending::Solved {
+            solve: leader.solve.clone(),
             reveal: active.round.draw().reveal().clone(),
-            solve,
-            message: guess.message,
+            message: leader.message,
             personal_best,
         };
         self.announce_ending(place.channel, &active, &ending).await;
@@ -215,7 +250,7 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
         };
         let mut seat = seat.lock().await;
         let allowed = match &seat.active {
-            Some(active) if active.number == number => {
+            Some(active) if active.number == number && active.leader.is_none() => {
                 active.round.may_cancel(user, can_manage_messages)
             }
             Some(_) | None => return CancelOutcome::AlreadyOver,
@@ -280,7 +315,7 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
         let Some(active) = seat
             .active
             .as_ref()
-            .filter(|active| active.number == number)
+            .filter(|active| active.number == number && active.leader.is_none())
         else {
             return false;
         };
@@ -303,7 +338,7 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
         if seat
             .active
             .as_ref()
-            .is_none_or(|active| active.number != number)
+            .is_none_or(|active| active.number != number || active.leader.is_some())
         {
             return;
         }

@@ -73,6 +73,14 @@ fn seconds(value: u64) -> Duration {
     Duration::from_secs(value)
 }
 
+fn millis(value: u64) -> Duration {
+    Duration::from_millis(value)
+}
+
+async fn wait_millis(value: u64) {
+    tokio::time::sleep(millis(value)).await;
+}
+
 async fn wait(value: u64) {
     tokio::time::sleep(seconds(value)).await;
 }
@@ -118,7 +126,7 @@ async fn a_win_before_the_hint_ends_the_round_and_nothing_else_is_posted() {
     wait(60).await;
     let posted = discord.posted();
     assert_eq!(posted.len(), 1);
-    assert_eq!(posted[0].0, seconds(5));
+    assert_eq!(posted[0].0, millis(5_250));
     assert!(matches!(
         &posted[0].1,
         Posted::Ending {
@@ -143,7 +151,7 @@ async fn a_win_after_the_hint_follows_the_hint() {
     let posted = discord.posted();
     assert_eq!(posted.len(), 2);
     assert!(matches!(posted[0].1, Posted::Hint { .. }));
-    assert_eq!(posted[1].0, seconds(25));
+    assert_eq!(posted[1].0, millis(25_250));
     assert!(matches!(
         posted[1].1,
         Posted::Ending {
@@ -161,6 +169,8 @@ async fn a_busy_channel_refuses_a_second_round_until_the_first_ends() {
     table
         .hear(PLACE, guess(PLAYER, false, POSTED_AT + 1, "yamato"))
         .await;
+    assert!(matches!(start(&table, PLACE).await, StartOutcome::Busy));
+    wait(1).await;
     assert!(matches!(
         start(&table, PLACE).await,
         StartOutcome::Started { .. }
@@ -352,6 +362,7 @@ async fn a_win_is_recorded_with_its_server_player_ship_and_time() {
     table
         .hear(PLACE, guess(PLAYER, false, POSTED_AT + 4_000, "yamato"))
         .await;
+    wait(1).await;
     assert_eq!(
         store.saved(),
         [barnacle_bot::solves::SolveRecord {
@@ -372,6 +383,7 @@ async fn a_failing_discord_does_not_stop_rounds_from_ending_and_being_recorded()
     table
         .hear(PLACE, guess(PLAYER, false, POSTED_AT + 1, "yamato"))
         .await;
+    wait(1).await;
     assert!(matches!(
         start(&table, PLACE).await,
         StartOutcome::Started { .. }
@@ -387,6 +399,7 @@ async fn a_storage_failure_still_announces_the_win_without_a_best() {
     table
         .hear(PLACE, guess(PLAYER, false, POSTED_AT + 1, "yamato"))
         .await;
+    wait(1).await;
     assert!(matches!(
         discord.endings().as_slice(),
         [Ending::Solved {
@@ -457,7 +470,7 @@ async fn a_discord_call_that_never_finishes_is_abandoned_after_five_seconds() {
         .into_iter()
         .map(|(time, posted)| (time, matches!(posted, Posted::Hint { .. })))
         .collect();
-    assert_eq!(times, [(seconds(20), true), (seconds(25), false)]);
+    assert_eq!(times, [(seconds(20), true), (millis(25_250), false)]);
     assert!(matches!(
         start(&table, PLACE).await,
         StartOutcome::Started { .. }
@@ -479,4 +492,120 @@ async fn a_round_post_that_never_finishes_is_abandoned_after_five_seconds() {
         start(&table, PLACE).await,
         StartOutcome::Started { .. }
     ));
+}
+
+const RIVAL: UserId = UserId::new(400);
+
+fn winners(discord: &FakeDiscord) -> Vec<(UserId, Duration)> {
+    discord
+        .endings()
+        .into_iter()
+        .filter_map(|ending| match ending {
+            Ending::Solved { solve, .. } => Some((solve.winner, solve.elapsed)),
+            Ending::TimedOut { .. } | Ending::Cancelled { .. } => None,
+        })
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_earliest_correct_answer_wins_even_when_heard_second() {
+    let discord = FakeDiscord::new();
+    let store = FakeStore::default();
+    let table = yamato_table(discord.clone(), store.clone());
+    started(&table, PLACE).await;
+    wait(5).await;
+    table
+        .hear(PLACE, guess(RIVAL, false, POSTED_AT + 5_100, "yamato"))
+        .await;
+    table
+        .hear(PLACE, guess(PLAYER, false, POSTED_AT + 5_050, "yamato"))
+        .await;
+    wait(60).await;
+    assert_eq!(winners(&discord), [(PLAYER, millis(5_050))]);
+    assert_eq!(discord.endings().len(), 1);
+    assert_eq!(store.saved().len(), 1);
+    assert_eq!(store.saved()[0].user, PLAYER);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_later_correct_answer_does_not_replace_an_earlier_one() {
+    let discord = FakeDiscord::new();
+    let table = yamato_table(discord.clone(), FakeStore::default());
+    started(&table, PLACE).await;
+    wait(5).await;
+    table
+        .hear(PLACE, guess(PLAYER, false, POSTED_AT + 5_050, "yamato"))
+        .await;
+    wait_millis(100).await;
+    table
+        .hear(PLACE, guess(RIVAL, false, POSTED_AT + 5_100, "yamato"))
+        .await;
+    wait(60).await;
+    assert_eq!(winners(&discord), [(PLAYER, millis(5_050))]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_correct_answer_after_the_settle_window_changes_nothing() {
+    let discord = FakeDiscord::new();
+    let table = yamato_table(discord.clone(), FakeStore::default());
+    started(&table, PLACE).await;
+    wait(5).await;
+    table
+        .hear(PLACE, guess(RIVAL, false, POSTED_AT + 5_100, "yamato"))
+        .await;
+    wait(1).await;
+    table
+        .hear(PLACE, guess(PLAYER, false, POSTED_AT + 5_050, "yamato"))
+        .await;
+    wait(60).await;
+    assert_eq!(winners(&discord), [(RIVAL, millis(5_100))]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_round_being_settled_skips_its_hint_and_its_timeout() {
+    let discord = FakeDiscord::new();
+    let table = yamato_table(discord.clone(), FakeStore::default());
+    started(&table, PLACE).await;
+    wait_millis(19_900).await;
+    table
+        .hear(PLACE, guess(PLAYER, false, POSTED_AT + 19_900, "yamato"))
+        .await;
+    wait(60).await;
+    let posted = discord.posted();
+    assert_eq!(posted.len(), 1);
+    assert_eq!(posted[0].0, millis(20_150));
+    assert_eq!(winners(&discord), [(PLAYER, millis(19_900))]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_answer_just_before_the_timeout_still_wins() {
+    let discord = FakeDiscord::new();
+    let table = yamato_table(discord.clone(), FakeStore::default());
+    started(&table, PLACE).await;
+    wait_millis(29_900).await;
+    table
+        .hear(PLACE, guess(PLAYER, false, POSTED_AT + 29_900, "yamato"))
+        .await;
+    wait(60).await;
+    assert_eq!(discord.endings().len(), 1);
+    assert_eq!(winners(&discord), [(PLAYER, millis(29_900))]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cancel_while_a_win_is_settling_finds_the_round_over() {
+    let discord = FakeDiscord::new();
+    let table = yamato_table(discord.clone(), FakeStore::default());
+    let number = started(&table, PLACE).await;
+    wait(5).await;
+    table
+        .hear(PLACE, guess(PLAYER, false, POSTED_AT + 5_000, "yamato"))
+        .await;
+    wait_millis(100).await;
+    assert_eq!(
+        table.cancel(PLACE, number, INVOKER, false).await,
+        CancelOutcome::AlreadyOver
+    );
+    wait(60).await;
+    assert_eq!(winners(&discord), [(PLAYER, millis(5_000))]);
+    assert_eq!(discord.endings().len(), 1);
 }
