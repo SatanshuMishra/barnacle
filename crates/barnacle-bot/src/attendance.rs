@@ -15,6 +15,7 @@ use crate::attendance_store::PostState;
 use crate::attendance_store::Season;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
+use crate::ids::RoleId;
 use crate::schedule::Hour;
 use crate::schedule::Night;
 
@@ -26,6 +27,24 @@ pub struct BoardError(#[source] pub Box<dyn std::error::Error + Send + Sync>);
 pub enum Removal {
     Deleted,
     Gone,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    New,
+    Redraw,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClearScope {
+    All,
+    OutsideRange,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PostsReport {
+    pub touched: usize,
+    pub failures: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +80,7 @@ pub struct SignupView {
     pub codename: Option<String>,
     pub night: Night,
     pub open: bool,
+    pub ping: Option<RoleId>,
     pub hours: [HourTally; 4],
     pub rows: Vec<RosterRow>,
     pub hidden: usize,
@@ -231,8 +251,8 @@ impl<B: Board> Signups<B> {
                 night,
             };
             match self.store.post(season.id, night).await {
-                Ok(Some(_)) => continue,
-                Ok(None) => {}
+                Ok(Some(post)) if post.state != PostState::Removed => continue,
+                Ok(_) => {}
                 Err(_) => {
                     report.failures += 1;
                     continue;
@@ -247,7 +267,10 @@ impl<B: Board> Signups<B> {
                     }
                 }
                 Ok(None) => {
-                    let view = fresh_view(season, night, now_unix);
+                    let Ok(view) = self.view(season, night, now_unix).await else {
+                        report.failures += 1;
+                        continue;
+                    };
                     match self.board.send_post(season.channel, &view).await {
                         Ok(message) => {
                             if self.record(season.id, night, message, now_ms).await {
@@ -260,6 +283,68 @@ impl<B: Board> Signups<B> {
                     }
                 }
                 Err(_) => report.failures += 1,
+            }
+        }
+        report
+    }
+
+    pub async fn clear_posts(
+        self: &Arc<Self>,
+        season: &Season,
+        scope: ClearScope,
+        _now_unix: i64,
+    ) -> PostsReport {
+        let Ok(posts) = self.store.posts(season.id).await else {
+            return PostsReport {
+                touched: 0,
+                failures: 1,
+            };
+        };
+        let mut report = PostsReport::default();
+        for post in posts
+            .iter()
+            .filter(|post| post.state != PostState::Removed)
+            .filter(|post| match scope {
+                ClearScope::All => true,
+                ClearScope::OutsideRange => !season.range.holds(post.night),
+            })
+        {
+            match self.board.delete_post(season.channel, post.message).await {
+                Ok(Removal::Deleted | Removal::Gone) => {
+                    if self
+                        .store
+                        .set_post_state(season.id, post.night, PostState::Removed)
+                        .await
+                        .is_ok()
+                    {
+                        self.forget(post.message);
+                        report.touched += 1;
+                    } else {
+                        report.failures += 1;
+                    }
+                }
+                Err(_) => report.failures += 1,
+            }
+        }
+        report
+    }
+
+    pub async fn refresh_posts(self: &Arc<Self>, season: &Season, now_unix: i64) -> PostsReport {
+        let Ok(posts) = self.store.posts(season.id).await else {
+            return PostsReport {
+                touched: 0,
+                failures: 1,
+            };
+        };
+        let mut report = PostsReport::default();
+        for post in posts.iter().filter(|post| post.state != PostState::Removed) {
+            if self
+                .redraw(season, post.night, post.message, now_unix)
+                .await
+            {
+                report.touched += 1;
+            } else {
+                report.failures += 1;
             }
         }
         report
@@ -371,10 +456,6 @@ impl<B: Board> Signups<B> {
     }
 }
 
-fn fresh_view(season: &Season, night: Night, now_unix: i64) -> SignupView {
-    build_view(season, night, now_unix, &[])
-}
-
 fn build_view(season: &Season, night: Night, now_unix: i64, marks: &[Mark]) -> SignupView {
     let rows = roster_rows(marks);
     let hidden = rows.len().saturating_sub(ROSTER_LIMIT);
@@ -384,6 +465,7 @@ fn build_view(season: &Season, night: Night, now_unix: i64, marks: &[Mark]) -> S
         codename: season.codename.clone(),
         night,
         open: now_unix < night.start_unix(),
+        ping: season.ping_role,
         hours: std::array::from_fn(|index| tally(Hour::ALL[index], marks)),
         rows: rows.into_iter().take(ROSTER_LIMIT).collect(),
         hidden,
