@@ -4,13 +4,16 @@ use std::time::Duration;
 
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::solves::Profile;
+use barnacle_bot::solves::Ranking;
 use barnacle_bot::solves::SolveRecord;
 use barnacle_bot::solves::SolveStore;
 use barnacle_bot::solves::Solves;
 use barnacle_bot::solves::SolvesError;
+use barnacle_bot::solves::Standing;
 use barnacle_guess::UserId;
 use common::index;
 use common::memory_pool;
+use common::migrated_pool;
 use common::solves;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqlitePoolOptions;
@@ -152,4 +155,123 @@ async fn opening_a_migrated_file_works() {
     setup.close().await;
     let solves = Solves::open(&path).await.unwrap();
     assert!(solves.record(&win(GUILD, PLAYER, 1_000)).await.unwrap());
+}
+
+fn standing(user: u64, wins: u64, best_millis: u64) -> Standing {
+    Standing {
+        user: UserId::new(user),
+        wins,
+        best: Duration::from_millis(best_millis),
+    }
+}
+
+async fn contested_server() -> Solves {
+    let solves = solves().await;
+    let wins = [
+        (207, 2_000),
+        (201, 5_000),
+        (201, 6_000),
+        (201, 7_000),
+        (202, 4_000),
+        (202, 8_000),
+        (202, 9_000),
+        (203, 2_000),
+        (204, 3_000),
+        (204, 3_500),
+        (205, 2_000),
+        (205, 9_500),
+    ];
+    for (user, millis) in wins {
+        solves
+            .record(&win(GUILD, UserId::new(user), millis))
+            .await
+            .unwrap();
+    }
+    for _ in 0..4 {
+        solves
+            .record(&win(GuildId::new(2), UserId::new(206), 1_000))
+            .await
+            .unwrap();
+    }
+    solves
+}
+
+#[tokio::test]
+async fn most_wins_ranks_by_wins_then_best_time_then_player() {
+    let solves = contested_server().await;
+    assert_eq!(
+        solves
+            .leaderboard(GUILD, Ranking::MostWins, 10)
+            .await
+            .unwrap(),
+        [
+            standing(202, 3, 4_000),
+            standing(201, 3, 5_000),
+            standing(205, 2, 2_000),
+            standing(204, 2, 3_000),
+            standing(203, 1, 2_000),
+            standing(207, 1, 2_000),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn fastest_time_ranks_by_best_time_then_wins_then_player() {
+    let solves = contested_server().await;
+    assert_eq!(
+        solves
+            .leaderboard(GUILD, Ranking::FastestTime, 10)
+            .await
+            .unwrap(),
+        [
+            standing(205, 2, 2_000),
+            standing(203, 1, 2_000),
+            standing(207, 1, 2_000),
+            standing(204, 2, 3_000),
+            standing(202, 3, 4_000),
+            standing(201, 3, 5_000),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_leaderboard_stops_at_its_size_and_counts_only_its_server() {
+    let solves = contested_server().await;
+    assert_eq!(
+        solves
+            .leaderboard(GUILD, Ranking::FastestTime, 2)
+            .await
+            .unwrap(),
+        [standing(205, 2, 2_000), standing(203, 1, 2_000)]
+    );
+    assert_eq!(
+        solves
+            .leaderboard(GuildId::new(2), Ranking::MostWins, 10)
+            .await
+            .unwrap(),
+        [standing(206, 4, 1_000)]
+    );
+    assert!(
+        solves
+            .leaderboard(GuildId::new(3), Ranking::MostWins, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_negative_stored_player_id_is_reported() {
+    let pool = migrated_pool().await;
+    sqlx::raw_sql(
+        "INSERT INTO guess_solves (guild_id, user_id, ship_index, elapsed_ms, solved_at_ms) VALUES (1, -5, 'PJSB018', 1000, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let solves = Solves::with_pool(pool).await.unwrap();
+    assert!(matches!(
+        solves.leaderboard(GUILD, Ranking::MostWins, 10).await,
+        Err(SolvesError::Negative { value: -5 })
+    ));
 }

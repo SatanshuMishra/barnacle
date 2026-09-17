@@ -30,6 +30,8 @@ pub enum SolvesError {
     UnexpectedColumns { found: Vec<Column> },
     #[error("{value} does not fit in a SQLite integer")]
     OutOfRange { value: u128 },
+    #[error("guess_solves holds a negative value, {value}")]
+    Negative { value: i64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +55,20 @@ pub struct SolveRecord {
 pub struct Profile {
     pub wins: u64,
     pub best: Option<Duration>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Ranking {
+    #[default]
+    MostWins,
+    FastestTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Standing {
+    pub user: UserId,
+    pub wins: u64,
+    pub best: Duration,
 }
 
 pub trait SolveStore: Send + Sync + 'static {
@@ -115,6 +131,36 @@ impl Solves {
                 .map(Duration::from_millis),
         })
     }
+
+    pub async fn leaderboard(
+        &self,
+        guild: GuildId,
+        ranking: Ranking,
+        size: u32,
+    ) -> Result<Vec<Standing>, SolvesError> {
+        let query = match ranking {
+            Ranking::MostWins => sqlx::query_as(
+                "SELECT user_id, COUNT(*) AS wins, MIN(elapsed_ms) AS best FROM guess_solves WHERE guild_id = ? GROUP BY user_id ORDER BY wins DESC, best ASC, user_id ASC LIMIT ?",
+            ),
+            Ranking::FastestTime => sqlx::query_as(
+                "SELECT user_id, COUNT(*) AS wins, MIN(elapsed_ms) AS best FROM guess_solves WHERE guild_id = ? GROUP BY user_id ORDER BY best ASC, wins DESC, user_id ASC LIMIT ?",
+            ),
+        };
+        let rows: Vec<(i64, i64, i64)> = query
+            .bind(to_integer(guild.get().into())?)
+            .bind(i64::from(size))
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|(user, wins, best)| {
+                Ok(Standing {
+                    user: UserId::new(to_unsigned(user)?),
+                    wins: to_unsigned(wins)?,
+                    best: Duration::from_millis(to_unsigned(best)?),
+                })
+            })
+            .collect()
+    }
 }
 
 impl SolveStore for Solves {
@@ -161,6 +207,10 @@ async fn columns(pool: &SqlitePool) -> Result<Vec<Column>, SolvesError> {
             primary_key: primary_key != 0,
         })
         .collect())
+}
+
+fn to_unsigned(value: i64) -> Result<u64, SolvesError> {
+    u64::try_from(value).map_err(|_| SolvesError::Negative { value })
 }
 
 fn to_integer(value: u128) -> Result<i64, SolvesError> {
