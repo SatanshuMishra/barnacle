@@ -11,12 +11,20 @@ pub struct ChannelAccess {
     pub embed_links: bool,
     pub attach_files: bool,
     pub read_message_history: bool,
+    pub in_thread: bool,
 }
 
 pub fn missing_permissions(access: ChannelAccess) -> Vec<&'static str> {
     [
         (access.view_channel, "View Channel"),
-        (access.send_messages, "Send Messages"),
+        (
+            access.send_messages,
+            if access.in_thread {
+                "Send Messages in Threads"
+            } else {
+                "Send Messages"
+            },
+        ),
         (access.embed_links, "Embed Links"),
         (access.attach_files, "Attach Files"),
         (access.read_message_history, "Read Message History"),

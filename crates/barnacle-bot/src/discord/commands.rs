@@ -64,9 +64,25 @@ async fn private(ctx: Context<'_>, content: impl Into<String>) -> Result<(), Err
 }
 
 fn channel_access(ctx: Context<'_>) -> ChannelAccess {
-    let permissions = match ctx {
-        poise::Context::Application(app) => app.interaction.app_permissions,
-        poise::Context::Prefix(_) => None,
+    let (permissions, channel) = match ctx {
+        poise::Context::Application(app) => (
+            app.interaction.app_permissions,
+            app.interaction.channel.as_ref(),
+        ),
+        poise::Context::Prefix(_) => (None, None),
+    };
+    let in_thread = channel.is_some_and(|channel| {
+        matches!(
+            channel.kind,
+            serenity::ChannelType::PublicThread
+                | serenity::ChannelType::PrivateThread
+                | serenity::ChannelType::NewsThread
+        )
+    });
+    let send = if in_thread {
+        serenity::Permissions::SEND_MESSAGES_IN_THREADS
+    } else {
+        serenity::Permissions::SEND_MESSAGES
     };
     permissions.map_or(
         ChannelAccess {
@@ -75,15 +91,25 @@ fn channel_access(ctx: Context<'_>) -> ChannelAccess {
             embed_links: true,
             attach_files: true,
             read_message_history: true,
+            in_thread,
         },
         |granted| ChannelAccess {
             view_channel: granted.contains(serenity::Permissions::VIEW_CHANNEL),
-            send_messages: granted.contains(serenity::Permissions::SEND_MESSAGES),
+            send_messages: granted.contains(send),
             embed_links: granted.contains(serenity::Permissions::EMBED_LINKS),
             attach_files: granted.contains(serenity::Permissions::ATTACH_FILES),
             read_message_history: granted.contains(serenity::Permissions::READ_MESSAGE_HISTORY),
+            in_thread,
         },
     )
+}
+
+async fn remove_round_post(ctx: Context<'_>) {
+    if let poise::Context::Application(app) = ctx
+        && let Err(error) = app.interaction.delete_response(ctx.http()).await
+    {
+        tracing::error!(%error, "a round post that timed out could not be removed");
+    }
 }
 
 fn round_embed(draw: &Draw) -> serenity::CreateEmbed {
@@ -153,7 +179,10 @@ async fn guess(
         StartOutcome::Busy => private(ctx, text::ALREADY_RUNNING).await,
         StartOutcome::NoShips(_) => private(ctx, text::empty_pool(&options)).await,
         StartOutcome::PostFailed(error) => Err(error),
-        StartOutcome::PostTimedOut => Err("posting the round timed out".into()),
+        StartOutcome::PostTimedOut => {
+            remove_round_post(ctx).await;
+            Err("posting the round timed out".into())
+        }
     }
 }
 

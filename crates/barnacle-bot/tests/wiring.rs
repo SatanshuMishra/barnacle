@@ -40,6 +40,7 @@ fn missing_channel_permissions_are_named_in_order() {
         embed_links: true,
         attach_files: true,
         read_message_history: true,
+        in_thread: false,
     };
     assert!(wiring::missing_permissions(full).is_empty());
     assert_eq!(
@@ -59,5 +60,21 @@ fn missing_channel_permissions_are_named_in_order() {
             "Attach Files",
             "Read Message History"
         ]
+    );
+}
+
+#[test]
+fn a_thread_names_the_thread_sending_permission() {
+    let thread = ChannelAccess {
+        view_channel: true,
+        send_messages: false,
+        embed_links: true,
+        attach_files: true,
+        read_message_history: true,
+        in_thread: true,
+    };
+    assert_eq!(
+        wiring::missing_permissions(thread),
+        ["Send Messages in Threads"]
     );
 }
