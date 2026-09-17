@@ -148,6 +148,13 @@ pub fn empty_pool(options: &RoundOptions) -> String {
     }
 }
 
+pub fn missing_permissions(names: &[&str]) -> String {
+    format!(
+        "I need these permissions in this channel to run a round: {}.",
+        names.join(", ")
+    )
+}
+
 pub fn best_time(best: Option<Duration>) -> String {
     best.map(seconds).unwrap_or_else(|| NO_WINS_HERE.to_owned())
 }

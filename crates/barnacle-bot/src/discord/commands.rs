@@ -15,6 +15,7 @@ use crate::info;
 use crate::table::StartOutcome;
 use crate::text;
 use crate::wiring;
+use crate::wiring::ChannelAccess;
 
 const SILHOUETTE_FILE: &str = "silhouette.png";
 
@@ -62,6 +63,29 @@ async fn private(ctx: Context<'_>, content: impl Into<String>) -> Result<(), Err
     Ok(())
 }
 
+fn channel_access(ctx: Context<'_>) -> ChannelAccess {
+    let permissions = match ctx {
+        poise::Context::Application(app) => app.interaction.app_permissions,
+        poise::Context::Prefix(_) => None,
+    };
+    permissions.map_or(
+        ChannelAccess {
+            view_channel: true,
+            send_messages: true,
+            embed_links: true,
+            attach_files: true,
+            read_message_history: true,
+        },
+        |granted| ChannelAccess {
+            view_channel: granted.contains(serenity::Permissions::VIEW_CHANNEL),
+            send_messages: granted.contains(serenity::Permissions::SEND_MESSAGES),
+            embed_links: granted.contains(serenity::Permissions::EMBED_LINKS),
+            attach_files: granted.contains(serenity::Permissions::ATTACH_FILES),
+            read_message_history: granted.contains(serenity::Permissions::READ_MESSAGE_HISTORY),
+        },
+    )
+}
+
 fn round_embed(draw: &Draw) -> serenity::CreateEmbed {
     let embed = serenity::CreateEmbed::new()
         .title(text::ROUND_TITLE)
@@ -95,6 +119,10 @@ async fn guess(
     let Some(place) = place(ctx) else {
         return Ok(());
     };
+    let missing = wiring::missing_permissions(channel_access(ctx));
+    if !missing.is_empty() {
+        return private(ctx, text::missing_permissions(&missing)).await;
+    }
     let data = ctx.data();
     let options = wiring::round_options(min_tier, max_tier, historical);
     let invoker = UserId::new(ctx.author().id.get());
@@ -108,8 +136,16 @@ async fn guess(
                 .attachment(serenity::CreateAttachment::bytes(png, SILHOUETTE_FILE))
                 .components(vec![cancel_row(wiring::cancel_button_id(number), false)]);
             let handle = ctx.send(reply).await?;
-            let message = handle.message().await?;
-            Ok::<Snowflake, Error>(Snowflake::new(message.id.get()))
+            let posted = handle.message().await.map(|message| message.id);
+            match posted {
+                Ok(id) => Ok::<Snowflake, Error>(Snowflake::new(id.get())),
+                Err(error) => {
+                    if let Err(cleanup) = handle.delete(ctx).await {
+                        tracing::error!(%cleanup, "an untracked round post could not be removed");
+                    }
+                    Err(error.into())
+                }
+            }
         })
         .await;
     match outcome {
@@ -117,6 +153,7 @@ async fn guess(
         StartOutcome::Busy => private(ctx, text::ALREADY_RUNNING).await,
         StartOutcome::NoShips(_) => private(ctx, text::empty_pool(&options)).await,
         StartOutcome::PostFailed(error) => Err(error),
+        StartOutcome::PostTimedOut => Err("posting the round timed out".into()),
     }
 }
 

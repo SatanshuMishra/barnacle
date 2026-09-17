@@ -4,6 +4,29 @@ use barnacle_guess::RoundOptions;
 const CANCEL_PREFIX: &str = "barnacle-cancel:";
 pub const ENDED_BUTTON_ID: &str = "barnacle-cancel:ended";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ChannelAccess {
+    pub view_channel: bool,
+    pub send_messages: bool,
+    pub embed_links: bool,
+    pub attach_files: bool,
+    pub read_message_history: bool,
+}
+
+pub fn missing_permissions(access: ChannelAccess) -> Vec<&'static str> {
+    [
+        (access.view_channel, "View Channel"),
+        (access.send_messages, "Send Messages"),
+        (access.embed_links, "Embed Links"),
+        (access.attach_files, "Attach Files"),
+        (access.read_message_history, "Read Message History"),
+    ]
+    .into_iter()
+    .filter(|(granted, _)| !granted)
+    .map(|(_, name)| name)
+    .collect()
+}
+
 pub fn round_options(
     min_tier: Option<i64>,
     max_tier: Option<i64>,

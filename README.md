@@ -28,7 +28,7 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 1. In the [Discord Developer Portal](https://discord.com/developers/applications), create an application, add a bot to it, and copy the bot token.
 2. On the Bot page, turn on Message Content Intent under Privileged Gateway Intents. Barnacle reads chat messages to check answers.
 3. In the application settings, turn off Public Bot, so only you can add Barnacle to servers.
-4. Invite the bot with the `bot` and `applications.commands` scopes and the View Channels, Send Messages, Embed Links and Attach Files permissions.
+4. Invite the bot with the `bot` and `applications.commands` scopes and the View Channels, Send Messages, Embed Links, Attach Files and Read Message History permissions. Barnacle replies to the winning message, which needs Read Message History.
 5. Copy `barnacle.example.toml` to `barnacle.toml` and list the IDs of the servers to register commands in. Once the bot should work in every server you add it to, change the scope to `"global"` and remove `guilds`.
 6. Create the solves database once:
 

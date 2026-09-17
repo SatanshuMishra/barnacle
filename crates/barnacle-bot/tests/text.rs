@@ -206,3 +206,11 @@ fn about_names_the_data_and_carries_the_wargaming_notice() {
     assert!(about.contains("Barnacle 0.1.0"));
     assert!(about.ends_with(text::WARGAMING_NOTICE));
 }
+
+#[test]
+fn missing_permissions_are_listed_in_one_sentence() {
+    assert_eq!(
+        text::missing_permissions(&["Attach Files", "Read Message History"]),
+        "I need these permissions in this channel to run a round: Attach Files, Read Message History."
+    );
+}
