@@ -37,9 +37,7 @@ pub enum RunError {
         "Discord refused the Message Content intent; turn on Message Content Intent under Bot, Privileged Gateway Intents, in the Discord Developer Portal"
     )]
     MessageContentDisabled,
-    #[error(
-        "Discord refused to register the commands; check that the bot has joined every server in commands.guilds"
-    )]
+    #[error("Discord refused to register the commands")]
     Registration(#[source] serenity::Error),
     #[error("the Discord client failed")]
     Discord(#[source] serenity::Error),
