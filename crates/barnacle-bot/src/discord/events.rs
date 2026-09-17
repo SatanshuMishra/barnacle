@@ -53,6 +53,8 @@ pub async fn handle(
                 .as_ref()
                 .and_then(|member| member.permissions)
                 .is_some_and(|permissions| permissions.manage_messages());
+            let serenity_context = framework.serenity_context;
+            component.defer_ephemeral(serenity_context).await?;
             let outcome = data
                 .table
                 .cancel(
@@ -62,26 +64,33 @@ pub async fn handle(
                     can_manage_messages,
                 )
                 .await;
-            let response = match outcome {
-                CancelOutcome::Cancelled => serenity::CreateInteractionResponse::Acknowledge,
-                CancelOutcome::Refused => private_response(text::CANCEL_REFUSED),
-                CancelOutcome::AlreadyOver => private_response(text::ROUND_OVER),
-            };
-            component
-                .create_response(framework.serenity_context, response)
-                .await?;
+            match outcome {
+                CancelOutcome::Cancelled => component.delete_response(serenity_context).await?,
+                CancelOutcome::Refused => {
+                    private_edit(serenity_context, component, text::CANCEL_REFUSED).await?;
+                }
+                CancelOutcome::AlreadyOver => {
+                    private_edit(serenity_context, component, text::ROUND_OVER).await?;
+                }
+            }
             Ok(())
         }
         _ => Ok(()),
     }
 }
 
-fn private_response(content: &str) -> serenity::CreateInteractionResponse {
-    serenity::CreateInteractionResponse::Message(
-        serenity::CreateInteractionResponseMessage::new()
-            .content(content)
-            .ephemeral(true),
-    )
+async fn private_edit(
+    serenity_context: &serenity::Context,
+    component: &serenity::ComponentInteraction,
+    content: &str,
+) -> Result<(), serenity::Error> {
+    component
+        .edit_response(
+            serenity_context,
+            serenity::EditInteractionResponse::new().content(content),
+        )
+        .await?;
+    Ok(())
 }
 
 pub async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
