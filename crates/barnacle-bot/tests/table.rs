@@ -13,6 +13,7 @@ use barnacle_bot::table::Table;
 use barnacle_guess::Guess;
 use barnacle_guess::Hint;
 use barnacle_guess::RoundOptions;
+use barnacle_guess::Snowflake;
 use barnacle_guess::UserId;
 use common::at;
 use common::fakes::FakeDiscord;
@@ -272,7 +273,7 @@ async fn two_channels_run_their_rounds_independently() {
 #[tokio::test(start_paused = true)]
 async fn a_win_and_a_cancel_at_the_same_moment_end_the_round_once() {
     let discord = FakeDiscord::new();
-    let table = yamato_table(discord.clone(), FakeStore::default());
+    let table = yamato_table(discord.clone(), FakeStore::pausing());
     let number = started(&table, PLACE).await;
     let (_, cancelled) = tokio::join!(
         table.hear(PLACE, guess(PLAYER, false, POSTED_AT + 1, "yamato")),
@@ -439,4 +440,43 @@ async fn an_earlier_rounds_timer_does_not_end_the_next_round() {
         .map(|(time, _)| time)
         .collect();
     assert_eq!(endings, [seconds(25), seconds(56)]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_discord_call_that_never_finishes_is_abandoned_after_five_seconds() {
+    let discord = FakeDiscord::hanging();
+    let table = yamato_table(discord.clone(), FakeStore::default());
+    started(&table, PLACE).await;
+    wait(22).await;
+    table
+        .hear(PLACE, guess(PLAYER, false, POSTED_AT + 22_000, "yamato"))
+        .await;
+    wait(60).await;
+    let times: Vec<(Duration, bool)> = discord
+        .posted()
+        .into_iter()
+        .map(|(time, posted)| (time, matches!(posted, Posted::Hint { .. })))
+        .collect();
+    assert_eq!(times, [(seconds(20), true), (seconds(25), false)]);
+    assert!(matches!(
+        start(&table, PLACE).await,
+        StartOutcome::Started { .. }
+    ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_round_post_that_never_finishes_is_abandoned_after_five_seconds() {
+    let table = yamato_table(FakeDiscord::new(), FakeStore::default());
+    let begun = tokio::time::Instant::now();
+    let outcome = table
+        .start(PLACE, RoundOptions::default(), INVOKER, |_draw, _number| {
+            std::future::pending::<Result<Snowflake, Infallible>>()
+        })
+        .await;
+    assert!(matches!(outcome, StartOutcome::PostTimedOut));
+    assert_eq!(begun.elapsed(), seconds(5));
+    assert!(matches!(
+        start(&table, PLACE).await,
+        StartOutcome::Started { .. }
+    ));
 }

@@ -50,6 +50,7 @@ pub enum Posted {
 pub struct FakeDiscord {
     start: Instant,
     fail: bool,
+    hang: bool,
     posted: Arc<Mutex<Vec<(Duration, Posted)>>>,
 }
 
@@ -58,6 +59,7 @@ impl FakeDiscord {
         Self {
             start: Instant::now(),
             fail: false,
+            hang: false,
             posted: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -65,6 +67,13 @@ impl FakeDiscord {
     pub fn failing() -> Self {
         Self {
             fail: true,
+            ..Self::new()
+        }
+    }
+
+    pub fn hanging() -> Self {
+        Self {
+            hang: true,
             ..Self::new()
         }
     }
@@ -83,6 +92,14 @@ impl FakeDiscord {
             .collect()
     }
 
+    async fn answer(&self, posted: Posted) -> Result<(), AnnounceError> {
+        let result = self.record(posted);
+        if self.hang {
+            std::future::pending::<()>().await;
+        }
+        result
+    }
+
     fn record(&self, posted: Posted) -> Result<(), AnnounceError> {
         self.posted
             .lock()
@@ -98,10 +115,11 @@ impl FakeDiscord {
 
 impl Announcer for FakeDiscord {
     async fn post_hint(&self, channel: ChannelId, hint: &Hint) -> Result<(), AnnounceError> {
-        self.record(Posted::Hint {
+        self.answer(Posted::Hint {
             channel,
             hint: hint.clone(),
         })
+        .await
     }
 
     async fn post_ending(
@@ -110,17 +128,19 @@ impl Announcer for FakeDiscord {
         round_post: Snowflake,
         ending: &Ending,
     ) -> Result<(), AnnounceError> {
-        self.record(Posted::Ending {
+        self.answer(Posted::Ending {
             channel,
             round_post,
             ending: ending.clone(),
         })
+        .await
     }
 }
 
 #[derive(Clone, Default)]
 pub struct FakeStore {
     fail: bool,
+    pause: bool,
     saved: Arc<Mutex<Vec<SolveRecord>>>,
 }
 
@@ -132,6 +152,13 @@ impl FakeStore {
         }
     }
 
+    pub fn pausing() -> Self {
+        Self {
+            pause: true,
+            ..Self::default()
+        }
+    }
+
     pub fn saved(&self) -> Vec<SolveRecord> {
         self.saved.lock().unwrap().clone()
     }
@@ -139,6 +166,9 @@ impl FakeStore {
 
 impl SolveStore for FakeStore {
     async fn record(&self, record: &SolveRecord) -> Result<bool, SolvesError> {
+        if self.pause {
+            tokio::task::yield_now().await;
+        }
         if self.fail {
             return Err(SolvesError::MissingTable);
         }

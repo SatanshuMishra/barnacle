@@ -3,6 +3,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use barnacle_guess::Draw;
 use barnacle_guess::GameError;
@@ -24,6 +25,8 @@ use crate::ids::ChannelId;
 use crate::ids::Place;
 use crate::solves::SolveRecord;
 use crate::solves::SolveStore;
+
+pub const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 #[error("the Discord call failed")]
@@ -67,6 +70,7 @@ pub enum StartOutcome<E> {
     Busy,
     NoShips(GameError),
     PostFailed(E),
+    PostTimedOut,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,9 +143,11 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
             Err(error) => return StartOutcome::NoShips(error),
         };
         let number = self.next_number.fetch_add(1, Ordering::Relaxed);
-        let posted = match post(draw.clone(), number).await {
-            Ok(posted) => posted,
-            Err(error) => return StartOutcome::PostFailed(error),
+        let posting = post(draw.clone(), number);
+        let posted = match tokio::time::timeout(ANNOUNCE_TIMEOUT, posting).await {
+            Ok(Ok(posted)) => posted,
+            Ok(Err(error)) => return StartOutcome::PostFailed(error),
+            Err(_) => return StartOutcome::PostTimedOut,
         };
         *seat = Seat {
             recent: seat.recent.remember(draw.ship().clone()),
@@ -278,12 +284,13 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
         else {
             return false;
         };
-        if let Err(error) = self
+        let posting = self
             .announcer
-            .post_hint(channel, active.round.draw().hint())
-            .await
-        {
-            tracing::error!(%error, "a hint could not be posted");
+            .post_hint(channel, active.round.draw().hint());
+        match tokio::time::timeout(ANNOUNCE_TIMEOUT, posting).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::error!(%error, "a hint could not be posted"),
+            Err(_) => tracing::error!("posting a hint timed out"),
         }
         true
     }
@@ -315,12 +322,13 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
             number = active.number,
             "round ended"
         );
-        if let Err(error) = self
+        let posting = self
             .announcer
-            .post_ending(channel, active.round.posted(), ending)
-            .await
-        {
-            tracing::error!(%error, "a round ending could not be posted");
+            .post_ending(channel, active.round.posted(), ending);
+        match tokio::time::timeout(ANNOUNCE_TIMEOUT, posting).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::error!(%error, "a round ending could not be posted"),
+            Err(_) => tracing::error!("posting a round ending timed out"),
         }
     }
 }
