@@ -48,7 +48,21 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
    sqlite3 data/barnacle.sqlite3 < migrations/0002_cb_attendance.sql
    ```
 
-8. Start the bot. Reading the token with `read` keeps it out of your shell history:
+8. Add the Clan Battle season controls once. This rebuilds `cb_seasons`, so back the database up first:
+
+   ```bash
+   cp data/barnacle.sqlite3 data/barnacle.sqlite3.bak
+   ```
+
+   Then, with the bot stopped:
+
+   ```bash
+   sqlite3 data/barnacle.sqlite3 < migrations/0003_cb_season_controls.sql
+   ```
+
+   This file runs once: a second run aborts on its own guard before touching anything.
+
+9. Start the bot. Reading the token with `read` keeps it out of your shell history:
 
    ```bash
    read -rs DISCORD_TOKEN && export DISCORD_TOKEN && cargo run --release -p barnacle-bot
@@ -68,12 +82,20 @@ For Clan Battle sign-ups, the same database also stores each player's Discord us
 
 - To delete one player's Clan Battle answers, stop the bot and run `sqlite3 data/barnacle.sqlite3 "DELETE FROM cb_marks WHERE user_id = <user ID>;"`.
 - `migrations/0002_cb_attendance.down.sql` removes every season, post and answer. Back the file up before running it.
+- `migrations/0003_cb_season_controls.down.sql` also loses every ping role and every ended marker. It refuses to run if two ended seasons in the same server share a number; resolve those rows first. Back the file up before running it.
 
 ## Clan Battle sign-ups
 
 Create a channel that only the bot can post in, and run `/cb season start` there. The bot needs View Channel, Send Messages, Embed Links and Read Message History in that channel, all of which the invite link above already grants.
 
 CB nights run 23:30-03:30 UTC on Wednesday, Thursday, Saturday and Sunday. For each night, the bot posts the sign-up message 24 hours ahead, closes it when the night starts, and deletes it 30 minutes after it ends. The bot has to be running for each of these steps: if it is down when a night's start passes, that night gets no sign-up post.
+
+`/cb season start` takes an optional role to ping when a sign-up post goes up. The ping fires once, when that message is first posted, and never again when the message is later updated. If the role is not marked mentionable in Discord, the bot also needs Mention @everyone, @here and All Roles in that channel, or the ping is silent.
+
+Three commands change a season once it is running:
+- `/cb season edit` changes a season's number, dates, codename or ping role. Its sign-up post is redrawn where it already stands; it does not move channel and does not ping again.
+- `/cb season move` is run in the channel the season should post in from now on. It removes the season's posts from the old channel and posts there instead, which is the one case where the room is pinged again.
+- `/cb season end` stops a season at once: every sign-up post it still has is deleted from Discord and nothing more posts. Every answer already given stays in the database, and the season's number is free to reuse.
 
 ## License
 
