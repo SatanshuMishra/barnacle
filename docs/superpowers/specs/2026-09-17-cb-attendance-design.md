@@ -554,7 +554,7 @@ The guarantees this buys, which the tests in section 15 pin:
 - **Bursts collapse.** Twenty clicks arriving during one slow edit produce at most two further edits.
 - **The tick can trust it.** `tick` marks a post `Closed` only when its redraw returned `Ok`.
 
-A slot is removed from the map when its post is removed, and only when the entry still in the map is the same `Arc` the remover looked up. Removing by key alone would let a later redraw build a fresh slot, with its own mutex and zeroed counters, while a redraw on the old slot is still in flight, which is two concurrent edits of one message.
+A slot is removed from the map when its post is removed, and only while no redraw still holds it, which the map's own reference count answers. Removing it regardless would let a later redraw build a fresh slot, with its own mutex and zeroed counters, while a redraw on the old slot is still in flight, which is two concurrent edits of one message.
 
 ### 7.4 `view`
 
