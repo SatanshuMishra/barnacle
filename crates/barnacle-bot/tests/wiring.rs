@@ -1,7 +1,10 @@
 mod common;
 
+use barnacle_bot::solves::Ranking;
 use barnacle_bot::wiring;
 use barnacle_bot::wiring::ChannelAccess;
+use barnacle_bot::wiring::LeaderboardRequest;
+use barnacle_bot::wiring::SortChoice;
 use barnacle_guess::RoundOptions;
 use common::tier;
 
@@ -76,5 +79,30 @@ fn a_thread_names_the_thread_sending_permission() {
     assert_eq!(
         wiring::missing_permissions(thread),
         ["Send Messages in Threads"]
+    );
+}
+
+#[test]
+fn leaderboard_options_default_to_ten_players_by_most_wins() {
+    assert_eq!(
+        wiring::leaderboard_request(None, None),
+        LeaderboardRequest {
+            ranking: Ranking::MostWins,
+            size: 10
+        }
+    );
+    assert_eq!(
+        wiring::leaderboard_request(Some(SortChoice::FastestTime), Some(50)),
+        LeaderboardRequest {
+            ranking: Ranking::FastestTime,
+            size: 50
+        }
+    );
+    assert_eq!(
+        wiring::leaderboard_request(Some(SortChoice::MostWins), Some(5)),
+        LeaderboardRequest {
+            ranking: Ranking::MostWins,
+            size: 5
+        }
     );
 }
