@@ -170,6 +170,8 @@ fn a_malformed_signup_id_is_rejected() {
         "barnacle-cb:3:2026-09-23:all:IN",
         "barnacle-cb:0:2026-09-23:all:in",
         "barnacle-cb:-3:2026-09-23:all:in",
+        "barnacle-cb:+3:2026-09-23:all:in",
+        "barnacle-cb:003:2026-09-23:all:in",
         "barnacle-cb:three:2026-09-23:all:in",
         "barnacle-cb:3::all:in",
         "barnacle-cb:3:2026-09-25:all:in",
