@@ -3,6 +3,7 @@ mod common;
 use std::collections::BTreeSet;
 
 use barnacle_catalog::Nation;
+use barnacle_catalog::Ship;
 use barnacle_catalog::ShipClass;
 use barnacle_catalog::ShipIndex;
 use barnacle_guess::GameError;
@@ -29,15 +30,14 @@ fn remembered(numbers: std::ops::Range<usize>) -> RecentShips {
     })
 }
 
-fn drawn_over_many_rounds(book: &ShipBook, recent: &RecentShips) -> BTreeSet<ShipIndex> {
+fn drawn_over_many_rounds(
+    book: &ShipBook,
+    options: &RoundOptions,
+    recent: &RecentShips,
+) -> BTreeSet<ShipIndex> {
     let mut rng = StdRng::seed_from_u64(20260916);
     (0..500)
-        .map(|_| {
-            book.draw(&RoundOptions::default(), recent, &mut rng)
-                .unwrap()
-                .ship()
-                .clone()
-        })
+        .map(|_| book.draw(options, recent, &mut rng).unwrap().ship().clone())
         .collect()
 }
 
@@ -45,7 +45,30 @@ fn drawn_over_many_rounds(book: &ShipBook, recent: &RecentShips) -> BTreeSet<Shi
 fn a_pool_of_twenty_is_drawn_in_full_even_when_every_ship_is_recent() {
     let book = book(fleet(20), "");
     assert_eq!(
-        drawn_over_many_rounds(&book, &remembered(0..20)),
+        drawn_over_many_rounds(&book, &RoundOptions::default(), &remembered(0..20)),
+        (0..20).map(numbered).collect()
+    );
+}
+
+#[test]
+fn a_pool_of_twenty_inside_a_larger_book_is_drawn_even_when_every_ship_is_recent() {
+    let ships = fleet(30)
+        .into_iter()
+        .enumerate()
+        .map(|(number, ship)| {
+            if number < 20 {
+                ship
+            } else {
+                Ship {
+                    tier: tier(9),
+                    ..ship
+                }
+            }
+        })
+        .collect();
+    let tier_eight = RoundOptions::new(Some(tier(8)), Some(tier(8)), None);
+    assert_eq!(
+        drawn_over_many_rounds(&book(ships, ""), &tier_eight, &remembered(0..20)),
         (0..20).map(numbered).collect()
     );
 }
@@ -54,7 +77,7 @@ fn a_pool_of_twenty_is_drawn_in_full_even_when_every_ship_is_recent() {
 fn a_pool_larger_than_twenty_skips_the_recent_ships() {
     let book = book(fleet(21), "");
     assert_eq!(
-        drawn_over_many_rounds(&book, &remembered(0..20)),
+        drawn_over_many_rounds(&book, &RoundOptions::default(), &remembered(0..20)),
         BTreeSet::from([numbered(20)])
     );
 }
@@ -66,7 +89,7 @@ fn recent_ships_outside_the_pool_do_not_shrink_it() {
         recent.remember(numbered(number))
     });
     assert_eq!(
-        drawn_over_many_rounds(&book, &recent),
+        drawn_over_many_rounds(&book, &RoundOptions::default(), &recent),
         (0..25).map(numbered).collect()
     );
 }
