@@ -556,6 +556,7 @@ async fn season_show(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 #[poise::command(slash_command, rename = "edit")]
+#[allow(clippy::too_many_arguments)]
 async fn season_edit(
     ctx: Context<'_>,
     #[description = "Which season to change, for example 35"]
