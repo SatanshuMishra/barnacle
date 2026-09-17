@@ -538,16 +538,20 @@ fn an_edited_season_reports_what_is_left_and_what_was_cleared() {
 fn a_moved_season_names_the_new_channel_and_the_next_post() {
     let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
     assert_eq!(
-        text::season_moved(&komodo, 1, Some(1_790_811_000)),
+        text::season_moved(&komodo, 4, 1, Some(1_790_811_000)),
         "Season 35: Komodo Dragon now posts in this channel. 1 sign-up post was cleared from the old channel. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>)."
     );
     assert_eq!(
-        text::season_moved(&komodo, 0, Some(1_790_811_000)),
+        text::season_moved(&komodo, 4, 0, Some(1_790_811_000)),
         "Season 35: Komodo Dragon now posts in this channel. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>)."
     );
     assert_eq!(
-        text::season_moved(&season(35, None, "2026-09-16", "2026-11-05"), 2, None),
+        text::season_moved(&season(35, None, "2026-09-16", "2026-11-05"), 2, 2, None),
         "Season 35 now posts in this channel. 2 sign-up posts were cleared from the old channel. Next sign-up post: within a minute."
+    );
+    assert_eq!(
+        text::season_moved(&komodo, 0, 1, None),
+        "Season 35: Komodo Dragon now posts in this channel. 1 sign-up post was cleared from the old channel. Nothing further will post."
     );
     assert_eq!(
         text::season_already_here(35),

@@ -19,13 +19,12 @@ use barnacle_bot::schedule::Range;
 use barnacle_bot::schedule::parse_day;
 use barnacle_guess::Snowflake;
 use barnacle_guess::UserId;
-use common::CB_MIGRATION;
+use common::attendance_pool;
 use common::memory_pool;
 use jiff::civil::Date;
 use sqlx::sqlite::SqlitePool;
 
-const CB_CONTROLS: &str = include_str!("../../../migrations/0003_cb_season_controls.sql");
-const CLI_DIRECTIVE: &str = ".bail on\n";
+const TODAY: &str = "2026-09-16";
 
 const GUILD: GuildId = GuildId::new(1);
 const OTHER_GUILD: GuildId = GuildId::new(2);
@@ -37,16 +36,6 @@ const CREWMATES: RoleId = RoleId::new(4242);
 const RESERVES: RoleId = RoleId::new(4343);
 const CREATED_AT: u64 = 1_700_000_000_000;
 const ENDED_AT: u64 = 1_700_000_900_000;
-
-async fn attendance_pool() -> SqlitePool {
-    let pool = memory_pool().await;
-    sqlx::raw_sql(CB_MIGRATION).execute(&pool).await.unwrap();
-    sqlx::raw_sql(CB_CONTROLS.trim_start_matches(CLI_DIRECTIVE))
-        .execute(&pool)
-        .await
-        .unwrap();
-    pool
-}
 
 async fn attendance() -> Attendance {
     Attendance::with_pool(attendance_pool().await)
@@ -99,7 +88,11 @@ async fn pinging_season_35(store: &Attendance) -> Season {
 }
 
 async fn edited(store: &Attendance, number: u32, change: &SeasonChange) -> (Season, Season) {
-    match store.edit_season(GUILD, number, change).await.unwrap() {
+    match store
+        .edit_season(GUILD, number, change, day(TODAY))
+        .await
+        .unwrap()
+    {
         EditOutcome::Edited { before, after } => (before, after),
         other => panic!("expected an edited season, got {other:?}"),
     }
@@ -291,7 +284,10 @@ async fn edit_season_rejects_a_number_another_live_season_holds() {
         ..SeasonChange::default()
     };
     assert_eq!(
-        store.edit_season(GUILD, 35, &take_34).await.unwrap(),
+        store
+            .edit_season(GUILD, 35, &take_34, day(TODAY))
+            .await
+            .unwrap(),
         EditOutcome::NumberTaken
     );
     assert_eq!(
@@ -330,7 +326,10 @@ async fn edit_season_ignores_an_ended_season_when_checking_overlap() {
         ..SeasonChange::default()
     };
     assert_eq!(
-        store.edit_season(GUILD, 35, &reach_back).await.unwrap(),
+        store
+            .edit_season(GUILD, 35, &reach_back, day(TODAY))
+            .await
+            .unwrap(),
         EditOutcome::Overlaps(season_34)
     );
     store.end_season(GUILD, 34, ENDED_AT).await.unwrap();
@@ -349,12 +348,18 @@ async fn edit_season_rejects_a_backwards_range() {
         ..SeasonChange::default()
     };
     assert_eq!(
-        store.edit_season(GUILD, 35, &backwards).await.unwrap(),
+        store
+            .edit_season(GUILD, 35, &backwards, day(TODAY))
+            .await
+            .unwrap(),
         EditOutcome::BadRange
     );
     assert_eq!(store.live_season(GUILD, 35).await.unwrap(), Some(season));
     assert_eq!(
-        store.edit_season(GUILD, 36, &backwards).await.unwrap(),
+        store
+            .edit_season(GUILD, 36, &backwards, day(TODAY))
+            .await
+            .unwrap(),
         EditOutcome::NotFound
     );
 }
@@ -417,7 +422,12 @@ async fn move_season_changes_the_channel_and_nothing_else() {
     let store = attendance().await;
     let season = pinging_season_35(&store).await;
     let elsewhere = ChannelId::new(11);
-    store.move_season(season.id, elsewhere).await.unwrap();
+    assert!(
+        store
+            .move_season(GUILD, season.id, elsewhere)
+            .await
+            .unwrap()
+    );
     let moved = store.season(season.id).await.unwrap().unwrap();
     assert_eq!(moved.channel, elsewhere);
     assert_eq!(
@@ -703,5 +713,76 @@ async fn a_post_records_its_state_and_message() {
     assert_eq!(
         store.post(season.id, night("2026-09-17")).await.unwrap(),
         None
+    );
+}
+
+#[tokio::test]
+async fn a_database_without_the_live_number_index_is_named() {
+    let pool = attendance_pool().await;
+    sqlx::raw_sql("DROP INDEX cb_seasons_live_number")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let error = Attendance::with_pool(pool).await.err().unwrap();
+    assert!(matches!(
+        error,
+        AttendanceError::MissingIndex {
+            index: "cb_seasons_live_number"
+        }
+    ));
+    assert_eq!(
+        error.to_string(),
+        "the attendance database has no cb_seasons_live_number index"
+    );
+}
+
+#[tokio::test]
+async fn edit_season_refuses_a_range_far_from_today() {
+    let store = attendance().await;
+    season_35(&store).await;
+    let far = SeasonChange {
+        last_day: Some(day("2027-09-16")),
+        ..SeasonChange::default()
+    };
+    assert_eq!(
+        store
+            .edit_season(GUILD, 35, &far, day(TODAY))
+            .await
+            .unwrap(),
+        EditOutcome::TooFar
+    );
+    let back = SeasonChange {
+        first_day: Some(day("2025-09-16")),
+        ..SeasonChange::default()
+    };
+    assert_eq!(
+        store
+            .edit_season(GUILD, 35, &back, day(TODAY))
+            .await
+            .unwrap(),
+        EditOutcome::TooFar
+    );
+}
+
+#[tokio::test]
+async fn move_season_only_moves_a_live_season_of_its_own_guild() {
+    let store = attendance().await;
+    let season = season_35(&store).await;
+    let elsewhere = ChannelId::new(99);
+    assert!(
+        !store
+            .move_season(OTHER_GUILD, season.id, elsewhere)
+            .await
+            .unwrap()
+    );
+    store
+        .end_season(GUILD, season.number, ENDED_AT)
+        .await
+        .unwrap();
+    assert!(
+        !store
+            .move_season(GUILD, season.id, elsewhere)
+            .await
+            .unwrap()
     );
 }

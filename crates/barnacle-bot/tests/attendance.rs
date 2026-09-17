@@ -29,13 +29,10 @@ use barnacle_bot::schedule::Range;
 use barnacle_bot::schedule::parse_day;
 use barnacle_guess::Snowflake;
 use barnacle_guess::UserId;
-use common::CB_MIGRATION;
+use common::attendance_pool;
 use common::fakes::FakeBoard;
-use common::memory_pool;
-use sqlx::sqlite::SqlitePool;
 
-const CB_CONTROLS: &str = include_str!("../../../migrations/0003_cb_season_controls.sql");
-const CLI_DIRECTIVE: &str = ".bail on\n";
+const TODAY: &str = "2026-09-16";
 
 const GUILD: GuildId = GuildId::new(1);
 const CHANNEL: ChannelId = ChannelId::new(10);
@@ -49,16 +46,6 @@ const FIRST_POST_AT: i64 = 1_789_515_000;
 const FIRST_START: i64 = 1_789_601_400;
 const FIRST_REMOVE_AT: i64 = 1_789_617_600;
 const SECOND_START: i64 = 1_789_687_800;
-
-async fn attendance_pool() -> SqlitePool {
-    let pool = memory_pool().await;
-    sqlx::raw_sql(CB_MIGRATION).execute(&pool).await.unwrap();
-    sqlx::raw_sql(CB_CONTROLS.trim_start_matches(CLI_DIRECTIVE))
-        .execute(&pool)
-        .await
-        .unwrap();
-    pool
-}
 
 fn millis(now_unix: i64) -> u64 {
     u64::try_from(now_unix).unwrap() * 1_000
@@ -112,7 +99,11 @@ async fn ready(board: FakeBoard) -> (Arc<Signups<FakeBoard>>, Season, Attendance
 }
 
 async fn edited(store: &Attendance, change: &SeasonChange) -> Season {
-    match store.edit_season(GUILD, 35, change).await.unwrap() {
+    match store
+        .edit_season(GUILD, 35, change, parse_day(TODAY).unwrap())
+        .await
+        .unwrap()
+    {
         EditOutcome::Edited { after, .. } => after,
         other => panic!("expected an edited season, got {other:?}"),
     }
@@ -647,7 +638,12 @@ async fn a_moved_season_reposts_the_same_night_with_its_roster() {
         state_of(&store, &season, first_night()).await,
         PostState::Removed
     );
-    store.move_season(season.id, OTHER_CHANNEL).await.unwrap();
+    assert!(
+        store
+            .move_season(GUILD, season.id, OTHER_CHANNEL)
+            .await
+            .unwrap()
+    );
     let report = signups
         .tick(FIRST_POST_AT + 60, millis(FIRST_POST_AT + 60))
         .await;
@@ -945,5 +941,96 @@ async fn the_view_carries_the_ping_role() {
             .unwrap()
             .ping,
         None
+    );
+}
+
+fn pinging_proposal() -> NewSeason {
+    NewSeason {
+        ping_role: Some(CREWMATES),
+        ..proposal()
+    }
+}
+
+#[tokio::test]
+async fn only_the_first_post_of_a_night_pings() {
+    let board = FakeBoard::new();
+    let (signups, season, store) = ready_from(board.clone(), &pinging_proposal()).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    assert_eq!(board.pinging_sends().len(), 1);
+    let cleared = signups
+        .clear_posts(&season, ClearScope::All, FIRST_POST_AT)
+        .await;
+    assert_eq!(cleared.failures, 0);
+    assert!(
+        store
+            .move_season(GUILD, season.id, OTHER_CHANNEL)
+            .await
+            .unwrap()
+    );
+    let report = signups
+        .tick(FIRST_POST_AT + 60, millis(FIRST_POST_AT + 60))
+        .await;
+    assert_eq!(report.posted, vec![tag(&season, first_night())]);
+    assert_eq!(board.sends_to(OTHER_CHANNEL).len(), 1);
+    assert_eq!(board.pinging_sends().len(), 1);
+}
+
+#[tokio::test]
+async fn a_cleared_post_is_deleted_from_the_channel_it_lives_in() {
+    let board = FakeBoard::new();
+    let (signups, season, store) = ready(board.clone()).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let message = message_for(&store, &season, first_night()).await;
+    signups
+        .clear_posts(&season, ClearScope::All, FIRST_POST_AT)
+        .await;
+    assert_eq!(board.deletes_in(CHANNEL), vec![message]);
+    assert!(board.deletes_in(OTHER_CHANNEL).is_empty());
+}
+
+#[tokio::test]
+async fn a_click_on_an_ended_season_is_refused() {
+    let board = FakeBoard::new();
+    let (signups, season, store) = ready(board.clone()).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let message = message_for(&store, &season, first_night()).await;
+    store
+        .end_season(GUILD, season.number, millis(FIRST_POST_AT))
+        .await
+        .unwrap();
+    let outcome = signups
+        .click(
+            press(&season, message, AKI, Target::All),
+            FIRST_POST_AT,
+            millis(FIRST_POST_AT),
+        )
+        .await;
+    assert_eq!(outcome, ClickOutcome::UnknownSeason);
+    assert!(
+        store
+            .roster(season.id, first_night())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_redraw_renders_the_season_as_it_is_now() {
+    let board = FakeBoard::new();
+    let (signups, season, store) = ready(board.clone()).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let change = SeasonChange {
+        codename: Some(Some("Blue Whale".to_owned())),
+        ..SeasonChange::default()
+    };
+    edited(&store, &change).await;
+    let report = signups.refresh_posts(&season, FIRST_POST_AT).await;
+    assert_eq!(report.touched, 1);
+    assert_eq!(report.failures, 0);
+    let edits = board.edits();
+    assert_eq!(
+        edits.last().unwrap().codename.as_deref(),
+        Some("Blue Whale")
     );
 }

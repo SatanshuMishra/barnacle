@@ -145,12 +145,13 @@ impl Board for DiscordBoard {
         &self,
         channel: ChannelId,
         view: &SignupView,
+        delivery: Delivery,
     ) -> Result<Snowflake, BoardError> {
         let message = serenity::CreateMessage::new()
             .content(wiring::ping_content(view.ping))
             .embed(signup_embed(view))
             .components(signup_rows(view))
-            .allowed_mentions(ping_mentions(Delivery::New, view));
+            .allowed_mentions(ping_mentions(delivery, view));
         let posted = channel_id(channel)?
             .send_message(&self.http, message)
             .await

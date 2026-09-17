@@ -128,3 +128,32 @@ fn overlaps_is_symmetric() {
     assert!(straddling.overlaps(season_35));
     assert!(season_35.overlaps(season_35));
 }
+
+#[test]
+fn a_range_more_than_six_months_from_today_is_not_near() {
+    let today = parse_day("2026-09-17").unwrap();
+    let season = Range::new(
+        parse_day("2026-09-16").unwrap(),
+        parse_day("2026-11-05").unwrap(),
+    )
+    .unwrap();
+    assert!(season.near(today));
+    let edge = Range::new(
+        parse_day("2026-03-17").unwrap(),
+        parse_day("2027-03-17").unwrap(),
+    )
+    .unwrap();
+    assert!(edge.near(today));
+    let ahead = Range::new(
+        parse_day("2026-09-16").unwrap(),
+        parse_day("2027-03-18").unwrap(),
+    )
+    .unwrap();
+    assert!(!ahead.near(today));
+    let behind = Range::new(
+        parse_day("2026-03-16").unwrap(),
+        parse_day("2026-11-05").unwrap(),
+    )
+    .unwrap();
+    assert!(!behind.near(today));
+}

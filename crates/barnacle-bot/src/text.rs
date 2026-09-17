@@ -56,11 +56,16 @@ pub const RUN_IN_TEXT_CHANNEL: &str = "Run this in a text channel.";
 pub const DATE_FORMAT: &str = "Dates look like 2026-09-16.";
 pub const LAST_DAY_BEFORE_FIRST: &str = "The last day is before the first day.";
 pub const NO_NIGHTS_LEFT: &str = "That range has no CB nights left.";
+pub const RANGE_TOO_FAR: &str = "A season has to sit within six months either side of today.";
 pub const NO_SEASON_HERE: &str = "No CB season is set up here.";
 pub const ROSTER_HEADER: &str = "1    2    3    4    ";
 pub const NOTHING_TO_CHANGE: &str = "Name at least one thing to change.";
 pub const CODENAME_BOTH_WAYS: &str = "Pass a codename or clear it, not both.";
 pub const PING_BOTH_WAYS: &str = "Pass a ping role or clear it, not both.";
+pub const CLEAR_FAILED_MOVE: &str = "Some sign-up posts could not be removed from the old channel, so nothing moved. Check that the bot can manage messages there, then run this again.";
+pub const CLEAR_FAILED_END: &str = "Some sign-up posts could not be removed, so the season is still running. Check that the bot can manage messages in its channel, then run this again.";
+pub const REFRESH_FAILED: &str =
+    " Its sign-up post could not be updated; run this again once the bot can edit it.";
 
 const NOTHING_AHEAD: &str = "Nothing further will post.";
 const NAME_LIMIT: usize = 32;
@@ -411,14 +416,19 @@ pub fn season_edited(
     ])
 }
 
-pub fn season_moved(season: &Season, cleared: usize, post_at_unix: Option<i64>) -> String {
+pub fn season_moved(
+    season: &Season,
+    nights_left: usize,
+    cleared: usize,
+    post_at_unix: Option<i64>,
+) -> String {
     sentences(&[
         format!(
             "{} now posts in this channel.",
             season_name(season.number, season.codename.as_deref())
         ),
         cleared_from_the_old_channel(cleared),
-        format!("Next sign-up post: {}.", post_time(post_at_unix)),
+        next_post(nights_left, post_at_unix),
     ])
 }
 
@@ -509,7 +519,7 @@ fn sentence(text: &str) -> String {
 
 fn season_name(number: u32, codename: Option<&str>) -> String {
     match codename {
-        Some(codename) => format!("Season {number}: {codename}"),
+        Some(codename) => format!("Season {number}: {}", escape(codename)),
         None => format!("Season {number}"),
     }
 }

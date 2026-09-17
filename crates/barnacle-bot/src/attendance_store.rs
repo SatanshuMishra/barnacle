@@ -24,6 +24,7 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const LIVE_LOOKBACK_SECONDS: i64 = 48 * SECONDS_PER_HOUR;
 
 const CB_SEASONS: &str = "cb_seasons";
+const LIVE_NUMBER_INDEX: &str = "cb_seasons_live_number";
 const CB_POSTS: &str = "cb_posts";
 const CB_MARKS: &str = "cb_marks";
 
@@ -123,6 +124,8 @@ pub enum AttendanceError {
         table: &'static str,
         found: Vec<Column>,
     },
+    #[error("the attendance database has no {index} index")]
+    MissingIndex { index: &'static str },
     #[error("{value} does not fit in a SQLite integer")]
     OutOfRange { value: u128 },
     #[error("the attendance database holds a negative value, {value}")]
@@ -231,6 +234,7 @@ pub enum EditOutcome {
     NumberTaken,
     Overlaps(Season),
     BadRange,
+    TooFar,
     NotFound,
 }
 
@@ -268,6 +272,16 @@ impl Attendance {
             if found != expected_columns(expected) {
                 return Err(AttendanceError::UnexpectedColumns { table, found });
             }
+        }
+        let index: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?")
+                .bind(LIVE_NUMBER_INDEX)
+                .fetch_optional(&pool)
+                .await?;
+        if index.is_none() {
+            return Err(AttendanceError::MissingIndex {
+                index: LIVE_NUMBER_INDEX,
+            });
         }
         Ok(Self { pool })
     }
@@ -413,6 +427,7 @@ impl Attendance {
         guild: GuildId,
         number: u32,
         change: &SeasonChange,
+        today: Date,
     ) -> Result<EditOutcome, AttendanceError> {
         let guild_id = to_integer(guild.get().into())?;
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
@@ -431,6 +446,9 @@ impl Attendance {
         ) else {
             return Ok(EditOutcome::BadRange);
         };
+        if !range.near(today) {
+            return Ok(EditOutcome::TooFar);
+        }
         let after = Season {
             id: before.id,
             guild: before.guild,
@@ -482,13 +500,22 @@ impl Attendance {
         Ok(EditOutcome::Edited { before, after })
     }
 
-    pub async fn move_season(&self, id: i64, channel: ChannelId) -> Result<(), AttendanceError> {
-        sqlx::query("UPDATE cb_seasons SET channel_id = ? WHERE id = ?")
-            .bind(to_integer(channel.get().into())?)
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+    pub async fn move_season(
+        &self,
+        guild: GuildId,
+        id: i64,
+        channel: ChannelId,
+    ) -> Result<bool, AttendanceError> {
+        let changed = sqlx::query(
+            "UPDATE cb_seasons SET channel_id = ? WHERE id = ? AND guild_id = ? AND ended_at_ms IS NULL",
+        )
+        .bind(to_integer(channel.get().into())?)
+        .bind(id)
+        .bind(to_integer(guild.get().into())?)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(changed > 0)
     }
 
     pub async fn end_season(

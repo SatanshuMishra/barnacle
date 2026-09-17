@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use barnacle_bot::attendance::Board;
 use barnacle_bot::attendance::BoardError;
+use barnacle_bot::attendance::Delivery;
 use barnacle_bot::attendance::PostTag;
 use barnacle_bot::attendance::Removal;
 use barnacle_bot::attendance::SignupView;
@@ -203,6 +204,7 @@ pub enum BoardCall {
     Sent {
         channel: ChannelId,
         view: SignupView,
+        delivery: Delivery,
     },
     Looked {
         channel: ChannelId,
@@ -299,7 +301,7 @@ impl FakeBoard {
         self.calls()
             .into_iter()
             .filter_map(|call| match call {
-                BoardCall::Sent { channel, view } if channel == wanted => Some(view),
+                BoardCall::Sent { channel, view, .. } if channel == wanted => Some(view),
                 _ => None,
             })
             .collect()
@@ -325,6 +327,30 @@ impl FakeBoard {
             .collect()
     }
 
+    pub fn deletes_in(&self, wanted: ChannelId) -> Vec<Snowflake> {
+        self.calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                BoardCall::Deleted { channel, message } if channel == wanted => Some(message),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn pinging_sends(&self) -> Vec<SignupView> {
+        self.calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                BoardCall::Sent {
+                    view,
+                    delivery: Delivery::New,
+                    ..
+                } if view.ping.is_some() => Some(view),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn record(&self, call: BoardCall) {
         self.state.calls.lock().unwrap().push(call);
     }
@@ -341,10 +367,12 @@ impl Board for FakeBoard {
         &self,
         channel: ChannelId,
         view: &SignupView,
+        delivery: Delivery,
     ) -> Result<Snowflake, BoardError> {
         self.record(BoardCall::Sent {
             channel,
             view: view.clone(),
+            delivery,
         });
         if self.state.fail_sends.load(SeqCst) {
             return Err(BoardError("the fake board refuses every send".into()));

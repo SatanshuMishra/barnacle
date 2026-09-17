@@ -91,6 +91,7 @@ pub trait Board: Send + Sync + 'static {
         &self,
         channel: ChannelId,
         view: &SignupView,
+        delivery: Delivery,
     ) -> impl Future<Output = Result<Snowflake, BoardError>> + Send;
 
     fn find_post(
@@ -250,14 +251,23 @@ impl<B: Board> Signups<B> {
                 season: season.id,
                 night,
             };
-            match self.store.post(season.id, night).await {
+            let delivery = match self.store.post(season.id, night).await {
                 Ok(Some(post)) if post.state != PostState::Removed => continue,
-                Ok(_) => {}
+                Ok(Some(_)) => Delivery::Redraw,
+                Ok(None) => Delivery::New,
                 Err(_) => {
                     report.failures += 1;
                     continue;
                 }
-            }
+            };
+            let season = &match self.store.season(season.id).await {
+                Ok(Some(fresh)) if fresh.ended_at_ms.is_none() => fresh,
+                Ok(_) => continue,
+                Err(_) => {
+                    report.failures += 1;
+                    continue;
+                }
+            };
             match self.board.find_post(season.channel, tag).await {
                 Ok(Some(message)) => {
                     if self.record(season.id, night, message, now_ms).await {
@@ -271,7 +281,7 @@ impl<B: Board> Signups<B> {
                         report.failures += 1;
                         continue;
                     };
-                    match self.board.send_post(season.channel, &view).await {
+                    match self.board.send_post(season.channel, &view, delivery).await {
                         Ok(message) => {
                             if self.record(season.id, night, message, now_ms).await {
                                 report.posted.push(tag);
@@ -356,7 +366,10 @@ impl<B: Board> Signups<B> {
             Ok(None) => return ClickOutcome::UnknownSeason,
             Err(_) => return ClickOutcome::Failed,
         };
-        if season.guild != click.guild || !season.range.holds(click.night) {
+        if season.guild != click.guild
+            || season.ended_at_ms.is_some()
+            || !season.range.holds(click.night)
+        {
             return ClickOutcome::UnknownSeason;
         }
         if click.night.start_unix() <= now_unix {
@@ -412,7 +425,10 @@ impl<B: Board> Signups<B> {
             return true;
         }
         let target = slot.wanted.load(SeqCst);
-        let Ok(view) = self.view(season, night, now_unix).await else {
+        let Ok(Some(season)) = self.store.season(season.id).await else {
+            return false;
+        };
+        let Ok(view) = self.view(&season, night, now_unix).await else {
             return false;
         };
         if self
@@ -447,12 +463,7 @@ impl<B: Board> Signups<B> {
             .slots
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if slots
-            .get(&message)
-            .is_some_and(|slot| Arc::strong_count(slot) == 1)
-        {
-            slots.remove(&message);
-        }
+        slots.remove(&message);
     }
 }
 

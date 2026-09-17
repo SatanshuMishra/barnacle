@@ -23,6 +23,7 @@ use crate::ids::GuildId;
 use crate::ids::Place;
 use crate::ids::RoleId;
 use crate::info;
+use crate::schedule;
 use crate::schedule::Night;
 use crate::schedule::Range;
 use crate::schedule::parse_day;
@@ -117,6 +118,7 @@ async fn private(ctx: Context<'_>, content: impl Into<String>) -> Result<(), Err
     ctx.send(
         poise::CreateReply::default()
             .content(content)
+            .allowed_mentions(serenity::CreateAllowedMentions::new())
             .ephemeral(true),
     )
     .await?;
@@ -459,7 +461,12 @@ async fn about(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command, guild_only, default_member_permissions = "MANAGE_GUILD")]
+#[poise::command(
+    slash_command,
+    guild_only,
+    default_member_permissions = "MANAGE_GUILD",
+    required_permissions = "MANAGE_GUILD"
+)]
 async fn cb(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -499,6 +506,12 @@ async fn season_start(
         return private(ctx, text::LAST_DAY_BEFORE_FIRST).await;
     };
     let now_unix = super::now_unix();
+    let Some(today) = schedule::today(now_unix) else {
+        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+    };
+    if !range.near(today) {
+        return private(ctx, text::RANGE_TOO_FAR).await;
+    }
     let nights_left = range.nights_left(now_unix);
     if nights_left == 0 {
         return private(ctx, text::NO_NIGHTS_LEFT).await;
@@ -616,25 +629,40 @@ async fn season_edit(
         },
     };
     let now_unix = super::now_unix();
+    let Some(today) = schedule::today(now_unix) else {
+        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+    };
     let outcome = ctx
         .data()
         .signups
         .store()
-        .edit_season(place.guild, number, &change)
+        .edit_season(place.guild, number, &change, today)
         .await?;
     match outcome {
         EditOutcome::Edited { after, .. } => {
             let signups = &ctx.data().signups;
+            ctx.defer_ephemeral().await?;
             let cleared = signups
                 .clear_posts(&after, ClearScope::OutsideRange, now_unix)
                 .await;
-            signups.refresh_posts(&after, now_unix).await;
-            let edited = text::season_edited(
+            let refreshed = signups.refresh_posts(&after, now_unix).await;
+            if cleared.failures > 0 || refreshed.failures > 0 {
+                tracing::warn!(
+                    season = after.id,
+                    cleared = cleared.failures,
+                    refreshed = refreshed.failures,
+                    "a season edit could not reach every sign-up post"
+                );
+            }
+            let mut edited = text::season_edited(
                 &after,
                 after.range.nights_left(now_unix),
                 next_post_at(after.range, now_unix),
                 cleared.touched,
             );
+            if refreshed.failures > 0 {
+                edited.push_str(text::REFRESH_FAILED);
+            }
             private(ctx, edited).await
         }
         EditOutcome::NumberTaken => {
@@ -642,6 +670,7 @@ async fn season_edit(
         }
         EditOutcome::Overlaps(other) => private(ctx, text::season_overlaps(&other)).await,
         EditOutcome::BadRange => private(ctx, text::LAST_DAY_BEFORE_FIRST).await,
+        EditOutcome::TooFar => private(ctx, text::RANGE_TOO_FAR).await,
         EditOutcome::NotFound => private(ctx, text::season_not_found(number)).await,
     }
 }
@@ -671,18 +700,35 @@ async fn season_move(
         return private(ctx, text::season_already_here(number)).await;
     }
     let now_unix = super::now_unix();
+    ctx.defer_ephemeral().await?;
     let cleared = signups
         .clear_posts(&season, ClearScope::All, now_unix)
         .await;
-    signups
+    if cleared.failures > 0 {
+        tracing::warn!(
+            season = season.id,
+            failures = cleared.failures,
+            "a season move left sign-up posts in the old channel"
+        );
+        return private(ctx, text::CLEAR_FAILED_MOVE).await;
+    }
+    if !signups
         .store()
-        .move_season(season.id, place.channel)
-        .await?;
+        .move_season(place.guild, season.id, place.channel)
+        .await?
+    {
+        return private(ctx, text::season_not_found(number)).await;
+    }
     let after = Season {
         channel: place.channel,
         ..season
     };
-    let moved = text::season_moved(&after, cleared.touched, next_post_at(after.range, now_unix));
+    let moved = text::season_moved(
+        &after,
+        after.range.nights_left(now_unix),
+        cleared.touched,
+        next_post_at(after.range, now_unix),
+    );
     private(ctx, moved).await
 }
 
@@ -701,18 +747,28 @@ async fn season_end(
     };
     let now_unix = super::now_unix();
     let signups = &ctx.data().signups;
-    let outcome = signups
+    let Some(season) = signups.store().live_season(place.guild, number).await? else {
+        return private(ctx, text::season_not_found(number)).await;
+    };
+    ctx.defer_ephemeral().await?;
+    let cleared = signups
+        .clear_posts(&season, ClearScope::All, now_unix)
+        .await;
+    if cleared.failures > 0 {
+        tracing::warn!(
+            season = season.id,
+            failures = cleared.failures,
+            "a season could not be ended because its sign-up posts remain"
+        );
+        return private(ctx, text::CLEAR_FAILED_END).await;
+    }
+    match signups
         .store()
         .end_season(place.guild, number, now_ms)
-        .await?;
-    match outcome {
+        .await?
+    {
         EndOutcome::Removed => private(ctx, text::season_removed(number)).await,
-        EndOutcome::Ended { season } => {
-            let cleared = signups
-                .clear_posts(&season, ClearScope::All, now_unix)
-                .await;
-            private(ctx, text::season_ended(number, cleared.touched)).await
-        }
+        EndOutcome::Ended { .. } => private(ctx, text::season_ended(number, cleared.touched)).await,
         EndOutcome::NotFound => private(ctx, text::season_not_found(number)).await,
     }
 }
