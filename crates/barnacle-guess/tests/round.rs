@@ -55,6 +55,27 @@ fn a_correct_guess_solves_the_round_with_the_time_since_the_post() {
 }
 
 #[test]
+fn the_invoker_may_answer_their_own_round() {
+    let own = Guess {
+        author: INVOKER,
+        ..guess("kongo", false)
+    };
+    assert_eq!(
+        started().judge(&own).map(|solve| solve.winner),
+        Some(INVOKER)
+    );
+}
+
+#[test]
+fn a_guess_sent_before_the_post_does_not_solve_the_round() {
+    let early = Guess {
+        message: at(999),
+        ..guess("kongo", false)
+    };
+    assert_eq!(started().judge(&early), None);
+}
+
+#[test]
 fn guesses_are_cleaned_before_they_are_compared() {
     let round = started();
     assert!(round.judge(&guess("  KONGŌ ", false)).is_some());

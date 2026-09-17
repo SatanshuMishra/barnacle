@@ -66,7 +66,9 @@ impl Round {
     }
 
     pub fn judge(&self, guess: &Guess<'_>) -> Option<Solve> {
-        let correct = !guess.author_is_bot && self.draw.answers.contains(&clean_answer(guess.text));
+        let correct = guess.message > self.posted
+            && !guess.author_is_bot
+            && self.draw.answers.contains(&clean_answer(guess.text));
         correct.then(|| Solve {
             winner: guess.author,
             ship: self.draw.ship().clone(),
