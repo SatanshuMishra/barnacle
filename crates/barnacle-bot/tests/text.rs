@@ -453,3 +453,46 @@ fn season_replies_name_the_season_and_its_dates() {
     );
     assert_eq!(text::season_not_found(35), "No Season 35 is set up here.");
 }
+
+#[test]
+fn one_night_reads_as_singular() {
+    let single = season(35, None, "2026-09-16", "2026-09-16");
+    assert_eq!(
+        text::season_started(&single, 1, None),
+        "Season 35 will post here. 1 CB night, 1 still ahead. First sign-up post: within a minute."
+    );
+    assert_eq!(
+        text::season_line(&single, 1, None),
+        "<#123> Season 35, 2026-09-16 to 2026-09-16. 1 night ahead. Next sign-up post: within a minute."
+    );
+}
+
+#[test]
+fn a_full_roster_fits_discords_description_limit() {
+    let crowd: Vec<RosterRow> = (0..barnacle_bot::attendance::ROSTER_LIMIT)
+        .map(|number| RosterRow {
+            user: UserId::new(u64::MAX - u64::try_from(number).unwrap()),
+            cells: [Cell::Out, Cell::In, Cell::None, Cell::Out],
+        })
+        .collect();
+    let description = text::signup_description(&signup_view(true, crowd, 9_999));
+    assert!(
+        description.encode_utf16().count() <= text::EMBED_DESCRIPTION_LIMIT,
+        "a full roster renders {} units, over Discord's {}",
+        description.encode_utf16().count(),
+        text::EMBED_DESCRIPTION_LIMIT
+    );
+}
+
+#[test]
+fn a_long_season_list_is_capped_and_counted() {
+    let short = vec!["one".to_owned(), "two".to_owned()];
+    assert_eq!(text::season_list(&short), "one\ntwo");
+    let long: Vec<String> = (0..40)
+        .map(|number| format!("<#123> Season {number}, 2026-09-16 to 2026-11-05. 23 nights ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>)."))
+        .collect();
+    let rendered = text::season_list(&long);
+    assert!(rendered.encode_utf16().count() <= text::MESSAGE_CONTENT_LIMIT);
+    assert!(rendered.lines().last().unwrap().starts_with("and "));
+    assert!(rendered.lines().last().unwrap().ends_with(" more."));
+}

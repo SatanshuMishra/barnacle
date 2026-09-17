@@ -43,6 +43,7 @@ pub const WARGAMING_NOTICE: &str = "Barnacle is an unofficial fan project. It is
 pub const FIELD_LIMIT: usize = 1024;
 pub const EMBED_DESCRIPTION_LIMIT: usize = 4096;
 pub const MESSAGE_EMBEDS_LIMIT: usize = 6000;
+pub const MESSAGE_CONTENT_LIMIT: usize = 2000;
 pub const FORMER_MEMBER: &str = "Former member";
 pub const ATTEND_ALL_LABEL: &str = "Attend all";
 pub const NOPE_ALL_LABEL: &str = "Nope all";
@@ -58,6 +59,7 @@ pub const NO_SEASON_HERE: &str = "No CB season is set up here.";
 pub const ROSTER_HEADER: &str = "1    2    3    4    ";
 
 const NAME_LIMIT: usize = 32;
+const SEASON_LIST_TAIL: usize = 32;
 const CELL_WIDTH: usize = 5;
 const NUMERALS: [&str; 11] = [
     "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI",
@@ -300,22 +302,57 @@ pub fn signups_closed_at(start_unix: i64) -> String {
 
 pub fn season_started(season: &Season, nights_left: usize, post_at_unix: Option<i64>) -> String {
     format!(
-        "{} will post here. {} CB nights, {nights_left} still ahead. First sign-up post: {}.",
+        "{} will post here. {}, {nights_left} still ahead. First sign-up post: {}.",
         season_name(season.number, season.codename.as_deref()),
-        season.range.night_count(),
+        nights(season.range.night_count()),
         post_time(post_at_unix)
     )
 }
 
 pub fn season_line(season: &Season, nights_left: usize, post_at_unix: Option<i64>) -> String {
     format!(
-        "<#{}> {}, {} to {}. {nights_left} nights ahead. Next sign-up post: {}.",
+        "<#{}> {}, {} to {}. {} ahead. Next sign-up post: {}.",
         season.channel.get(),
         season_name(season.number, season.codename.as_deref()),
         season.range.first_day(),
         season.range.last_day(),
+        nights_ahead(nights_left),
         post_time(post_at_unix)
     )
+}
+
+pub fn season_list(lines: &[String]) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut length = 0;
+    for line in lines {
+        let next = length + discord_length(line) + usize::from(!kept.is_empty());
+        if next > MESSAGE_CONTENT_LIMIT - SEASON_LIST_TAIL {
+            break;
+        }
+        length = next;
+        kept.push(line);
+    }
+    let hidden = lines.len() - kept.len();
+    let shown = kept.join("\n");
+    if hidden == 0 {
+        shown
+    } else {
+        format!("{shown}\nand {hidden} more.")
+    }
+}
+
+fn nights_ahead(count: usize) -> String {
+    match count {
+        1 => "1 night".to_owned(),
+        count => format!("{count} nights"),
+    }
+}
+
+fn nights(count: usize) -> String {
+    match count {
+        1 => "1 CB night".to_owned(),
+        count => format!("{count} CB nights"),
+    }
 }
 
 pub fn season_number_taken(number: u32) -> String {
