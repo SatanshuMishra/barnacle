@@ -1,4 +1,5 @@
 pub mod config;
+pub mod discord;
 pub mod ids;
 pub mod info;
 pub mod lookup;
