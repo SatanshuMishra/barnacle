@@ -281,20 +281,34 @@ async fn two_channels_run_their_rounds_independently() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_win_and_a_cancel_at_the_same_moment_end_the_round_once() {
-    let discord = FakeDiscord::new();
-    let table = yamato_table(discord.clone(), FakeStore::pausing());
+async fn a_win_and_a_cancel_together_end_the_round_once_in_either_order() {
+    let win_first = FakeDiscord::new();
+    let table = yamato_table(win_first.clone(), FakeStore::default());
     let number = started(&table, PLACE).await;
     let (_, cancelled) = tokio::join!(
         table.hear(PLACE, guess(PLAYER, false, POSTED_AT + 1, "yamato")),
         table.cancel(PLACE, number, INVOKER, false)
     );
     wait(60).await;
-    assert_eq!(discord.endings().len(), 1);
-    assert_eq!(
-        cancelled == CancelOutcome::Cancelled,
-        matches!(discord.endings()[0], Ending::Cancelled { .. })
+    assert_eq!(cancelled, CancelOutcome::AlreadyOver);
+    assert!(matches!(
+        win_first.endings().as_slice(),
+        [Ending::Solved { .. }]
+    ));
+
+    let cancel_first = FakeDiscord::new();
+    let table = yamato_table(cancel_first.clone(), FakeStore::default());
+    let number = started(&table, PLACE).await;
+    let (cancelled, _) = tokio::join!(
+        table.cancel(PLACE, number, INVOKER, false),
+        table.hear(PLACE, guess(PLAYER, false, POSTED_AT + 1, "yamato"))
     );
+    wait(60).await;
+    assert_eq!(cancelled, CancelOutcome::Cancelled);
+    assert!(matches!(
+        cancel_first.endings().as_slice(),
+        [Ending::Cancelled { .. }]
+    ));
 }
 
 #[tokio::test(start_paused = true)]

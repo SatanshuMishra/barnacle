@@ -140,7 +140,6 @@ impl Announcer for FakeDiscord {
 #[derive(Clone, Default)]
 pub struct FakeStore {
     fail: bool,
-    pause: bool,
     saved: Arc<Mutex<Vec<SolveRecord>>>,
 }
 
@@ -152,13 +151,6 @@ impl FakeStore {
         }
     }
 
-    pub fn pausing() -> Self {
-        Self {
-            pause: true,
-            ..Self::default()
-        }
-    }
-
     pub fn saved(&self) -> Vec<SolveRecord> {
         self.saved.lock().unwrap().clone()
     }
@@ -166,9 +158,6 @@ impl FakeStore {
 
 impl SolveStore for FakeStore {
     async fn record(&self, record: &SolveRecord) -> Result<bool, SolvesError> {
-        if self.pause {
-            tokio::task::yield_now().await;
-        }
         if self.fail {
             return Err(SolvesError::MissingTable);
         }
