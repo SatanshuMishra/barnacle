@@ -32,7 +32,9 @@ pub fn cancel_row(custom_id: String, disabled: bool) -> serenity::CreateActionRo
 
 impl Announcer for DiscordAnnouncer {
     async fn post_hint(&self, channel: ChannelId, hint: &Hint) -> Result<(), AnnounceError> {
-        let message = serenity::CreateMessage::new().content(text::hint(hint));
+        let message = serenity::CreateMessage::new()
+            .content(text::hint(hint))
+            .allowed_mentions(serenity::CreateAllowedMentions::new());
         serenity::ChannelId::new(channel.get())
             .send_message(&self.http, message)
             .await
@@ -55,11 +57,18 @@ impl Announcer for DiscordAnnouncer {
                 personal_best,
             } => serenity::CreateMessage::new()
                 .content(text::win(reveal, solve.elapsed, *personal_best))
-                .reference_message((channel, serenity::MessageId::new(message.get())))
+                .reference_message(
+                    serenity::MessageReference::new(
+                        serenity::MessageReferenceKind::Default,
+                        channel,
+                    )
+                    .message_id(serenity::MessageId::new(message.get()))
+                    .fail_if_not_exists(false),
+                )
                 .allowed_mentions(serenity::CreateAllowedMentions::new().replied_user(true)),
-            Ending::TimedOut { reveal } => {
-                serenity::CreateMessage::new().content(text::timed_out(reveal))
-            }
+            Ending::TimedOut { reveal } => serenity::CreateMessage::new()
+                .content(text::timed_out(reveal))
+                .allowed_mentions(serenity::CreateAllowedMentions::new()),
             Ending::Cancelled { by, reveal } => serenity::CreateMessage::new()
                 .content(text::cancelled(*by, reveal))
                 .allowed_mentions(serenity::CreateAllowedMentions::new()),
