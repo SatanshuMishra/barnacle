@@ -12,6 +12,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
+use crate::ids::RoleId;
 use crate::schedule::Hour;
 use crate::schedule::Night;
 use crate::schedule::Range;
@@ -23,6 +24,7 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const LIVE_LOOKBACK_SECONDS: i64 = 48 * SECONDS_PER_HOUR;
 
 const CB_SEASONS: &str = "cb_seasons";
+const LIVE_NUMBER_INDEX: &str = "cb_seasons_live_number";
 const CB_POSTS: &str = "cb_posts";
 const CB_MARKS: &str = "cb_marks";
 
@@ -42,6 +44,8 @@ const EXPECTED_COLUMNS: [TableSpec; 3] = [
             ("last_day", "TEXT", true, false),
             ("created_by", "INTEGER", true, false),
             ("created_at_ms", "INTEGER", true, false),
+            ("ping_role_id", "INTEGER", false, false),
+            ("ended_at_ms", "INTEGER", false, false),
         ],
     ),
     (
@@ -68,12 +72,27 @@ const EXPECTED_COLUMNS: [TableSpec; 3] = [
     ),
 ];
 
-const SEASON_BY_ID: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms FROM cb_seasons WHERE id = ?";
-const SEASONS_IN_GUILD: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms FROM cb_seasons WHERE guild_id = ? ORDER BY first_day";
-const SEASONS_LIVE: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE last_day >= ? OR EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') ORDER BY first_day";
-const SEASON_OVERLAPPING: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms FROM cb_seasons WHERE guild_id = ? AND first_day <= ? AND last_day >= ? ORDER BY first_day LIMIT 1";
+const SEASON_BY_ID: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE id = ?";
+const SEASON_LIVE_BY_NUMBER: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? AND number = ? AND ended_at_ms IS NULL";
+const SEASONS_IN_GUILD: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? AND ended_at_ms IS NULL ORDER BY first_day";
+const SEASONS_LIVE: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE ended_at_ms IS NULL AND (last_day >= ? OR EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed')) ORDER BY first_day";
+const SEASON_OVERLAPPING: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? AND ended_at_ms IS NULL AND first_day <= ? AND last_day >= ? ORDER BY first_day LIMIT 1";
+const SEASON_OVERLAPPING_OTHER: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? AND ended_at_ms IS NULL AND id <> ? AND first_day <= ? AND last_day >= ? ORDER BY first_day LIMIT 1";
+const NUMBER_HELD_BY_ANOTHER: &str = "SELECT id FROM cb_seasons WHERE guild_id = ? AND number = ? AND id <> ? AND ended_at_ms IS NULL";
 
-type SeasonRow = (i64, i64, i64, i64, Option<String>, String, String, i64, i64);
+type SeasonRow = (
+    i64,
+    i64,
+    i64,
+    i64,
+    Option<String>,
+    String,
+    String,
+    i64,
+    i64,
+    Option<i64>,
+    Option<i64>,
+);
 
 type LiveSeasonRow = (
     i64,
@@ -85,6 +104,8 @@ type LiveSeasonRow = (
     String,
     i64,
     i64,
+    Option<i64>,
+    Option<i64>,
     i64,
 );
 
@@ -103,12 +124,16 @@ pub enum AttendanceError {
         table: &'static str,
         found: Vec<Column>,
     },
+    #[error("the attendance database has no {index} index")]
+    MissingIndex { index: &'static str },
     #[error("{value} does not fit in a SQLite integer")]
     OutOfRange { value: u128 },
     #[error("the attendance database holds a negative value, {value}")]
     Negative { value: i64 },
     #[error("the attendance database holds a player ID below 1, {value}")]
     InvalidPlayer { value: i64 },
+    #[error("the attendance database holds {value}, which is not a role ID")]
+    InvalidRole { value: i64 },
     #[error("the attendance database holds {value}, which is not a CB night")]
     BadNight { value: String },
     #[error("the attendance database holds {value}, which is not a post state")]
@@ -129,6 +154,8 @@ pub struct Season {
     pub range: Range,
     pub created_by: UserId,
     pub created_at_ms: u64,
+    pub ping_role: Option<RoleId>,
+    pub ended_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,6 +167,16 @@ pub struct NewSeason {
     pub range: Range,
     pub created_by: UserId,
     pub created_at_ms: u64,
+    pub ping_role: Option<RoleId>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SeasonChange {
+    pub number: Option<u32>,
+    pub first_day: Option<Date>,
+    pub last_day: Option<Date>,
+    pub codename: Option<Option<String>>,
+    pub ping_role: Option<Option<RoleId>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,9 +229,19 @@ pub enum CreateOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditOutcome {
+    Edited { before: Season, after: Season },
+    NumberTaken,
+    Overlaps(Season),
+    BadRange,
+    TooFar,
+    NotFound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EndOutcome {
     Removed,
-    Shortened { last_day: Date },
+    Ended { season: Season },
     NotFound,
 }
 
@@ -226,6 +273,16 @@ impl Attendance {
                 return Err(AttendanceError::UnexpectedColumns { table, found });
             }
         }
+        let index: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?")
+                .bind(LIVE_NUMBER_INDEX)
+                .fetch_optional(&pool)
+                .await?;
+        if index.is_none() {
+            return Err(AttendanceError::MissingIndex {
+                index: LIVE_NUMBER_INDEX,
+            });
+        }
         Ok(Self { pool })
     }
 
@@ -234,16 +291,18 @@ impl Attendance {
         let channel = to_integer(new.channel.get().into())?;
         let created_by = to_integer(new.created_by.get().into())?;
         let created_at = to_integer(new.created_at_ms.into())?;
+        let ping_role = to_role_id(new.ping_role)?;
         let number = i64::from(new.number);
         let first_day = new.range.first_day().to_string();
         let last_day = new.range.last_day().to_string();
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let taken: Option<i64> =
-            sqlx::query_scalar("SELECT id FROM cb_seasons WHERE guild_id = ? AND number = ?")
-                .bind(guild)
-                .bind(number)
-                .fetch_optional(&mut *transaction)
-                .await?;
+        let taken: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM cb_seasons WHERE guild_id = ? AND number = ? AND ended_at_ms IS NULL",
+        )
+        .bind(guild)
+        .bind(number)
+        .fetch_optional(&mut *transaction)
+        .await?;
         if taken.is_some() {
             return Ok(CreateOutcome::NumberTaken);
         }
@@ -257,7 +316,7 @@ impl Attendance {
             return Ok(CreateOutcome::Overlaps(to_season(row)?));
         }
         let inserted = sqlx::query(
-            "INSERT INTO cb_seasons (guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO cb_seasons (guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(guild)
         .bind(channel)
@@ -267,6 +326,7 @@ impl Attendance {
         .bind(&last_day)
         .bind(created_by)
         .bind(created_at)
+        .bind(ping_role)
         .execute(&mut *transaction)
         .await?;
         let id = inserted.last_insert_rowid();
@@ -280,12 +340,27 @@ impl Attendance {
             range: new.range,
             created_by: new.created_by,
             created_at_ms: new.created_at_ms,
+            ping_role: new.ping_role,
+            ended_at_ms: None,
         }))
     }
 
     pub async fn season(&self, id: i64) -> Result<Option<Season>, AttendanceError> {
         let row: Option<SeasonRow> = sqlx::query_as(SEASON_BY_ID)
             .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(to_season).transpose()
+    }
+
+    pub async fn live_season(
+        &self,
+        guild: GuildId,
+        number: u32,
+    ) -> Result<Option<Season>, AttendanceError> {
+        let row: Option<SeasonRow> = sqlx::query_as(SEASON_LIVE_BY_NUMBER)
+            .bind(to_integer(guild.get().into())?)
+            .bind(i64::from(number))
             .fetch_optional(&self.pool)
             .await?;
         row.map(to_season).transpose()
@@ -316,6 +391,8 @@ impl Attendance {
                     last_day,
                     created_by,
                     created_at_ms,
+                    ping_role_id,
+                    ended_at_ms,
                     unremoved_post,
                 ) = row;
                 let season = to_season((
@@ -328,6 +405,8 @@ impl Attendance {
                     last_day,
                     created_by,
                     created_at_ms,
+                    ping_role_id,
+                    ended_at_ms,
                 ));
                 match season {
                     Ok(season) => {
@@ -343,43 +422,137 @@ impl Attendance {
             .collect()
     }
 
+    pub async fn edit_season(
+        &self,
+        guild: GuildId,
+        number: u32,
+        change: &SeasonChange,
+        today: Date,
+    ) -> Result<EditOutcome, AttendanceError> {
+        let guild_id = to_integer(guild.get().into())?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let found: Option<SeasonRow> = sqlx::query_as(SEASON_LIVE_BY_NUMBER)
+            .bind(guild_id)
+            .bind(i64::from(number))
+            .fetch_optional(&mut *transaction)
+            .await?;
+        let Some(row) = found else {
+            return Ok(EditOutcome::NotFound);
+        };
+        let before = to_season(row)?;
+        let Some(range) = Range::new(
+            change.first_day.unwrap_or(before.range.first_day()),
+            change.last_day.unwrap_or(before.range.last_day()),
+        ) else {
+            return Ok(EditOutcome::BadRange);
+        };
+        if !range.near(today) {
+            return Ok(EditOutcome::TooFar);
+        }
+        let after = Season {
+            id: before.id,
+            guild: before.guild,
+            channel: before.channel,
+            number: change.number.unwrap_or(before.number),
+            codename: change
+                .codename
+                .clone()
+                .unwrap_or_else(|| before.codename.clone()),
+            range,
+            created_by: before.created_by,
+            created_at_ms: before.created_at_ms,
+            ping_role: change.ping_role.unwrap_or(before.ping_role),
+            ended_at_ms: before.ended_at_ms,
+        };
+        let first_day = after.range.first_day().to_string();
+        let last_day = after.range.last_day().to_string();
+        let taken: Option<i64> = sqlx::query_scalar(NUMBER_HELD_BY_ANOTHER)
+            .bind(guild_id)
+            .bind(i64::from(after.number))
+            .bind(before.id)
+            .fetch_optional(&mut *transaction)
+            .await?;
+        if taken.is_some() {
+            return Ok(EditOutcome::NumberTaken);
+        }
+        let overlap: Option<SeasonRow> = sqlx::query_as(SEASON_OVERLAPPING_OTHER)
+            .bind(guild_id)
+            .bind(before.id)
+            .bind(&last_day)
+            .bind(&first_day)
+            .fetch_optional(&mut *transaction)
+            .await?;
+        if let Some(row) = overlap {
+            return Ok(EditOutcome::Overlaps(to_season(row)?));
+        }
+        sqlx::query(
+            "UPDATE cb_seasons SET number = ?, codename = ?, first_day = ?, last_day = ?, ping_role_id = ? WHERE id = ?",
+        )
+        .bind(i64::from(after.number))
+        .bind(after.codename.as_deref())
+        .bind(&first_day)
+        .bind(&last_day)
+        .bind(to_role_id(after.ping_role)?)
+        .bind(after.id)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(EditOutcome::Edited { before, after })
+    }
+
+    pub async fn move_season(
+        &self,
+        guild: GuildId,
+        id: i64,
+        channel: ChannelId,
+    ) -> Result<bool, AttendanceError> {
+        let changed = sqlx::query(
+            "UPDATE cb_seasons SET channel_id = ? WHERE id = ? AND guild_id = ? AND ended_at_ms IS NULL",
+        )
+        .bind(to_integer(channel.get().into())?)
+        .bind(id)
+        .bind(to_integer(guild.get().into())?)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(changed > 0)
+    }
+
     pub async fn end_season(
         &self,
         guild: GuildId,
         number: u32,
+        now_ms: u64,
     ) -> Result<EndOutcome, AttendanceError> {
+        let ended_at = to_integer(now_ms.into())?;
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let found: Option<i64> =
-            sqlx::query_scalar("SELECT id FROM cb_seasons WHERE guild_id = ? AND number = ?")
-                .bind(to_integer(guild.get().into())?)
-                .bind(i64::from(number))
-                .fetch_optional(&mut *transaction)
-                .await?;
-        let Some(id) = found else {
+        let found: Option<SeasonRow> = sqlx::query_as(SEASON_LIVE_BY_NUMBER)
+            .bind(to_integer(guild.get().into())?)
+            .bind(i64::from(number))
+            .fetch_optional(&mut *transaction)
+            .await?;
+        let Some(row) = found else {
             return Ok(EndOutcome::NotFound);
         };
-        let latest: Option<String> =
-            sqlx::query_scalar("SELECT MAX(night) FROM cb_posts WHERE season_id = ?")
-                .bind(id)
-                .fetch_one(&mut *transaction)
+        let season = to_season(row)?;
+        let posted: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM cb_posts WHERE season_id = ? LIMIT 1")
+                .bind(season.id)
+                .fetch_optional(&mut *transaction)
                 .await?;
-        let outcome = match latest {
-            None => {
-                sqlx::query("DELETE FROM cb_seasons WHERE id = ?")
-                    .bind(id)
-                    .execute(&mut *transaction)
-                    .await?;
-                EndOutcome::Removed
-            }
-            Some(night) => {
-                let last_day = to_day(&night)?;
-                sqlx::query("UPDATE cb_seasons SET last_day = ? WHERE id = ?")
-                    .bind(&night)
-                    .bind(id)
-                    .execute(&mut *transaction)
-                    .await?;
-                EndOutcome::Shortened { last_day }
-            }
+        let outcome = if posted.is_none() {
+            sqlx::query("DELETE FROM cb_seasons WHERE id = ?")
+                .bind(season.id)
+                .execute(&mut *transaction)
+                .await?;
+            EndOutcome::Removed
+        } else {
+            sqlx::query("UPDATE cb_seasons SET ended_at_ms = ? WHERE id = ?")
+                .bind(ended_at)
+                .bind(season.id)
+                .execute(&mut *transaction)
+                .await?;
+            EndOutcome::Ended { season }
         };
         transaction.commit().await?;
         Ok(outcome)
@@ -414,7 +587,7 @@ impl Attendance {
         at_ms: u64,
     ) -> Result<(), AttendanceError> {
         sqlx::query(
-            "INSERT INTO cb_posts (season_id, night, message_id, state, posted_at_ms) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO cb_posts (season_id, night, message_id, state, posted_at_ms) VALUES (?, ?, ?, ?, ?) ON CONFLICT (season_id, night) DO UPDATE SET message_id = excluded.message_id, state = 'open', posted_at_ms = excluded.posted_at_ms",
         )
         .bind(season)
         .bind(night.label())
@@ -520,8 +693,19 @@ fn lookback_day(now_unix: i64) -> String {
 }
 
 fn to_season(row: SeasonRow) -> Result<Season, AttendanceError> {
-    let (id, guild, channel, number, codename, first_day, last_day, created_by, created_at_ms) =
-        row;
+    let (
+        id,
+        guild,
+        channel,
+        number,
+        codename,
+        first_day,
+        last_day,
+        created_by,
+        created_at_ms,
+        ping_role_id,
+        ended_at_ms,
+    ) = row;
     let range = Range::new(to_day(&first_day)?, to_day(&last_day)?)
         .ok_or(AttendanceError::BadNight { value: last_day })?;
     Ok(Season {
@@ -533,6 +717,8 @@ fn to_season(row: SeasonRow) -> Result<Season, AttendanceError> {
         range,
         created_by: to_player(created_by)?,
         created_at_ms: to_unsigned(created_at_ms)?,
+        ping_role: ping_role_id.map(to_role).transpose()?,
+        ended_at_ms: ended_at_ms.map(to_unsigned).transpose()?,
     })
 }
 
@@ -577,6 +763,18 @@ fn to_player(value: i64) -> Result<UserId, AttendanceError> {
         .filter(|id| *id > 0)
         .map(UserId::new)
         .ok_or(AttendanceError::InvalidPlayer { value })
+}
+
+fn to_role(value: i64) -> Result<RoleId, AttendanceError> {
+    u64::try_from(value)
+        .ok()
+        .filter(|id| *id > 0)
+        .map(RoleId::new)
+        .ok_or(AttendanceError::InvalidRole { value })
+}
+
+fn to_role_id(role: Option<RoleId>) -> Result<Option<i64>, AttendanceError> {
+    role.map(|role| to_integer(role.get().into())).transpose()
 }
 
 fn to_number(value: i64) -> Result<u32, AttendanceError> {

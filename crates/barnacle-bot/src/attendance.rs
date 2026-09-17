@@ -15,6 +15,7 @@ use crate::attendance_store::PostState;
 use crate::attendance_store::Season;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
+use crate::ids::RoleId;
 use crate::schedule::Hour;
 use crate::schedule::Night;
 
@@ -26,6 +27,24 @@ pub struct BoardError(#[source] pub Box<dyn std::error::Error + Send + Sync>);
 pub enum Removal {
     Deleted,
     Gone,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    New,
+    Redraw,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClearScope {
+    All,
+    OutsideRange,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PostsReport {
+    pub touched: usize,
+    pub failures: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +80,7 @@ pub struct SignupView {
     pub codename: Option<String>,
     pub night: Night,
     pub open: bool,
+    pub ping: Option<RoleId>,
     pub hours: [HourTally; 4],
     pub rows: Vec<RosterRow>,
     pub hidden: usize,
@@ -71,6 +91,7 @@ pub trait Board: Send + Sync + 'static {
         &self,
         channel: ChannelId,
         view: &SignupView,
+        delivery: Delivery,
     ) -> impl Future<Output = Result<Snowflake, BoardError>> + Send;
 
     fn find_post(
@@ -230,14 +251,23 @@ impl<B: Board> Signups<B> {
                 season: season.id,
                 night,
             };
-            match self.store.post(season.id, night).await {
-                Ok(Some(_)) => continue,
-                Ok(None) => {}
+            let delivery = match self.store.post(season.id, night).await {
+                Ok(Some(post)) if post.state != PostState::Removed => continue,
+                Ok(Some(_)) => Delivery::Redraw,
+                Ok(None) => Delivery::New,
                 Err(_) => {
                     report.failures += 1;
                     continue;
                 }
-            }
+            };
+            let season = &match self.store.season(season.id).await {
+                Ok(Some(fresh)) if fresh.ended_at_ms.is_none() => fresh,
+                Ok(_) => continue,
+                Err(_) => {
+                    report.failures += 1;
+                    continue;
+                }
+            };
             match self.board.find_post(season.channel, tag).await {
                 Ok(Some(message)) => {
                     if self.record(season.id, night, message, now_ms).await {
@@ -247,8 +277,11 @@ impl<B: Board> Signups<B> {
                     }
                 }
                 Ok(None) => {
-                    let view = fresh_view(season, night, now_unix);
-                    match self.board.send_post(season.channel, &view).await {
+                    let Ok(view) = self.view(season, night, now_unix).await else {
+                        report.failures += 1;
+                        continue;
+                    };
+                    match self.board.send_post(season.channel, &view, delivery).await {
                         Ok(message) => {
                             if self.record(season.id, night, message, now_ms).await {
                                 report.posted.push(tag);
@@ -265,13 +298,78 @@ impl<B: Board> Signups<B> {
         report
     }
 
+    pub async fn clear_posts(
+        self: &Arc<Self>,
+        season: &Season,
+        scope: ClearScope,
+        _now_unix: i64,
+    ) -> PostsReport {
+        let Ok(posts) = self.store.posts(season.id).await else {
+            return PostsReport {
+                touched: 0,
+                failures: 1,
+            };
+        };
+        let mut report = PostsReport::default();
+        for post in posts
+            .iter()
+            .filter(|post| post.state != PostState::Removed)
+            .filter(|post| match scope {
+                ClearScope::All => true,
+                ClearScope::OutsideRange => !season.range.holds(post.night),
+            })
+        {
+            match self.board.delete_post(season.channel, post.message).await {
+                Ok(Removal::Deleted | Removal::Gone) => {
+                    if self
+                        .store
+                        .set_post_state(season.id, post.night, PostState::Removed)
+                        .await
+                        .is_ok()
+                    {
+                        self.forget(post.message);
+                        report.touched += 1;
+                    } else {
+                        report.failures += 1;
+                    }
+                }
+                Err(_) => report.failures += 1,
+            }
+        }
+        report
+    }
+
+    pub async fn refresh_posts(self: &Arc<Self>, season: &Season, now_unix: i64) -> PostsReport {
+        let Ok(posts) = self.store.posts(season.id).await else {
+            return PostsReport {
+                touched: 0,
+                failures: 1,
+            };
+        };
+        let mut report = PostsReport::default();
+        for post in posts.iter().filter(|post| post.state != PostState::Removed) {
+            if self
+                .redraw(season, post.night, post.message, now_unix)
+                .await
+            {
+                report.touched += 1;
+            } else {
+                report.failures += 1;
+            }
+        }
+        report
+    }
+
     pub async fn click(self: &Arc<Self>, click: Click, now_unix: i64, now_ms: u64) -> ClickOutcome {
         let season = match self.store.season(click.season).await {
             Ok(Some(season)) => season,
             Ok(None) => return ClickOutcome::UnknownSeason,
             Err(_) => return ClickOutcome::Failed,
         };
-        if season.guild != click.guild || !season.range.holds(click.night) {
+        if season.guild != click.guild
+            || season.ended_at_ms.is_some()
+            || !season.range.holds(click.night)
+        {
             return ClickOutcome::UnknownSeason;
         }
         if click.night.start_unix() <= now_unix {
@@ -327,7 +425,10 @@ impl<B: Board> Signups<B> {
             return true;
         }
         let target = slot.wanted.load(SeqCst);
-        let Ok(view) = self.view(season, night, now_unix).await else {
+        let Ok(Some(season)) = self.store.season(season.id).await else {
+            return false;
+        };
+        let Ok(view) = self.view(&season, night, now_unix).await else {
             return false;
         };
         if self
@@ -362,17 +463,8 @@ impl<B: Board> Signups<B> {
             .slots
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if slots
-            .get(&message)
-            .is_some_and(|slot| Arc::strong_count(slot) == 1)
-        {
-            slots.remove(&message);
-        }
+        slots.remove(&message);
     }
-}
-
-fn fresh_view(season: &Season, night: Night, now_unix: i64) -> SignupView {
-    build_view(season, night, now_unix, &[])
 }
 
 fn build_view(season: &Season, night: Night, now_unix: i64, marks: &[Mark]) -> SignupView {
@@ -384,6 +476,7 @@ fn build_view(season: &Season, night: Night, now_unix: i64, marks: &[Mark]) -> S
         codename: season.codename.clone(),
         night,
         open: now_unix < night.start_unix(),
+        ping: season.ping_role,
         hours: std::array::from_fn(|index| tally(Hour::ALL[index], marks)),
         rows: rows.into_iter().take(ROSTER_LIMIT).collect(),
         hidden,

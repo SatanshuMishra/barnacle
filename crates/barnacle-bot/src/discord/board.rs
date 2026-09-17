@@ -5,6 +5,7 @@ use poise::serenity_prelude as serenity;
 
 use crate::attendance::Board;
 use crate::attendance::BoardError;
+use crate::attendance::Delivery;
 use crate::attendance::PostTag;
 use crate::attendance::Removal;
 use crate::attendance::SignupView;
@@ -34,6 +35,15 @@ fn signup_embed(view: &SignupView) -> serenity::CreateEmbed {
         .title(text::signup_title(view.number, view.codename.as_deref()))
         .description(text::signup_description(view))
         .colour(text::EMBED_COLOUR)
+}
+
+fn ping_mentions(delivery: Delivery, view: &SignupView) -> serenity::CreateAllowedMentions {
+    serenity::CreateAllowedMentions::new().roles(
+        wiring::ping_allowance(delivery, view.ping)
+            .into_iter()
+            .filter_map(|role| std::num::NonZeroU64::new(role.get()))
+            .map(serenity::RoleId::from),
+    )
 }
 
 fn signup_button(
@@ -135,11 +145,13 @@ impl Board for DiscordBoard {
         &self,
         channel: ChannelId,
         view: &SignupView,
+        delivery: Delivery,
     ) -> Result<Snowflake, BoardError> {
         let message = serenity::CreateMessage::new()
+            .content(wiring::ping_content(view.ping))
             .embed(signup_embed(view))
             .components(signup_rows(view))
-            .allowed_mentions(serenity::CreateAllowedMentions::new());
+            .allowed_mentions(ping_mentions(delivery, view));
         let posted = channel_id(channel)?
             .send_message(&self.http, message)
             .await
@@ -173,9 +185,10 @@ impl Board for DiscordBoard {
         view: &SignupView,
     ) -> Result<(), BoardError> {
         let edit = serenity::EditMessage::new()
+            .content(wiring::ping_content(view.ping))
             .embed(signup_embed(view))
             .components(signup_rows(view))
-            .allowed_mentions(serenity::CreateAllowedMentions::new());
+            .allowed_mentions(ping_mentions(Delivery::Redraw, view));
         channel_id(channel)?
             .edit_message(&self.http, message_id(message)?, edit)
             .await

@@ -85,6 +85,24 @@ pub enum StartupError {
         #[source]
         source: AttendanceError,
     },
+    #[error(
+        "the season controls are missing from {path}; back the file up, then add them with `sqlite3 {path} < migrations/0003_cb_season_controls.sql`"
+    )]
+    SeasonControls {
+        path: PathBuf,
+        #[source]
+        source: AttendanceError,
+    },
+}
+
+fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
+    let path = path.to_owned();
+    match source {
+        AttendanceError::UnexpectedColumns { .. } | AttendanceError::MissingIndex { .. } => {
+            StartupError::SeasonControls { path, source }
+        }
+        source => StartupError::Attendance { path, source },
+    }
 }
 
 pub struct Stores {
@@ -185,13 +203,9 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
         .await
         .map_err(|source| database(SolvesError::Database(source)))?;
     let solves = Solves::with_pool(pool.clone()).await.map_err(database)?;
-    let attendance =
-        Attendance::with_pool(pool)
-            .await
-            .map_err(|source| StartupError::Attendance {
-                path: path.to_owned(),
-                source,
-            })?;
+    let attendance = Attendance::with_pool(pool)
+        .await
+        .map_err(|source| attendance_error(path, source))?;
     Ok(Stores { solves, attendance })
 }
 

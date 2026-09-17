@@ -449,3 +449,47 @@ One agent owns each item and edits only its files.
 | `cb2-discord` | `crates/barnacle-bot/src/discord/board.rs`, `src/discord/commands.rs` | `cb2-strings` |
 
 No item adds a module, so `lib.rs` is untouched. `cb2-readme` documents the `0003` step with its backup line, the ping role and the permission it needs, and the new meaning of ending a season.
+
+## 14. Amendments from review
+
+Five fresh-eyes reviews ran against the built branch. Where this section contradicts anything above it, this section is what shipped and the earlier text is the superseded design.
+
+### 14.1 A night pings once, ever
+
+Sections 7 and 8 keyed the ping to `Delivery::New` and assumed a night is delivered new exactly once. It is not. `clear_posts` marks a post row `removed`, and the tick treats a removed row as not posted so that a moved night can post again, which makes `Delivery::New` reachable as often as an operator runs `move` or an out-of-range `edit` and then undoes it. Every one of those repeats fired the role ping, so a server manager who cannot mention a role themselves could make the bot mention it without limit.
+
+The tick now derives the delivery from whether a post row has ever existed for that night: absent means `Delivery::New`, present in any state means `Delivery::Redraw`. Rows are never deleted, only marked removed, so the row's existence is a durable record that the night has already been announced. `Board::send_post` takes the delivery rather than hard-coding `Delivery::New`. A move therefore re-posts without pinging, which the README states.
+
+### 14.2 A failed clear stops the command
+
+Sections 9.3 and 9.4 let `move` and `end` proceed after `clear_posts`, discarding its failure count. A refused delete then stranded a live sign-up message: on `end` the season was already marked ended, so the tick would never sweep it again and no command could reach it, while its buttons kept recording answers; on `move` the row still pointed at the old channel, so the night never posted in the new one.
+
+`/cb season move` now clears first and returns `CLEAR_FAILED_MOVE` without writing the new channel when anything failed. `/cb season end` now looks the season up, clears, and returns `CLEAR_FAILED_END` without marking it ended when anything failed. Both leave the season exactly as it was, which is the state an operator can retry from. `/cb season edit` appends `REFRESH_FAILED` to its reply when a redraw did not land, because the tick only redraws nights already underway and will not repair a future night's post on its own. All three log the failure count at `warn`.
+
+### 14.3 A redraw reads the season it is drawing
+
+The redraw combiner collapses queued redraws of one message on the assumption that they would all render the same bytes. That held while a season's fields were immutable. Editing breaks it: a member's click and an admin's edit can interleave so that the click's redraw, holding the pre-edit season, satisfies the edit's slot, leaving the old codename on screen while the edit reports success. `redraw` now re-reads the season by id inside the lock and renders from that, which restores the assumption the combiner rests on.
+
+The tick's posting step re-reads the season for the same reason, and skips it when it has ended. A sub-second window remains between that read and `record_post` in which a concurrent move could still place a post in the old channel; the night self-heals at its removal time and re-running the move recovers it. Closing that window entirely means storing each post's own channel on its row, which is recorded here as the durable fix rather than done now.
+
+### 14.4 A click on an ended season is refused
+
+`click` resolved a season by id without the ended filter, deliberately, so that a stale click could be refused rather than error. It then checked only the guild and the range, both of which an ended season still satisfies, so answers kept landing. `click` now returns `UnknownSeason` when the season carries `ended_at_ms`.
+
+### 14.5 A season sits within six months of today
+
+`Range::nights()` walks one calendar day at a time, and `parse_day` accepts any ISO date, so `0001-01-01` to `9999-12-31` made every tick and every command walk millions of days on the shared executor. The owner set the rule: a season's first and last day must both lie within six months either side of today. Seasons run two to four months and are announced a week or two ahead, so nothing legitimate is excluded.
+
+`Range::near(today)` is the check, `schedule::today(now_unix)` supplies the day, `/cb season start` refuses with `RANGE_TOO_FAR` before creating, and `edit_season` takes `today` and returns the new `EditOutcome::TooFar`, because only the store knows the range an edit produces.
+
+### 14.6 Smaller corrections
+
+- `season_moved` takes `nights_left` and renders its last sentence through `next_post`, so moving a season with no nights left says `Nothing further will post.` instead of promising a post within a minute. Section 10's signature omitted the argument; the code followed the spec and the spec was wrong.
+- `move_season` takes the guild, filters on `ended_at_ms IS NULL`, and returns whether a row changed, so a season ended between the command's lookup and its write no longer reports a successful move.
+- The startup readiness check verifies that `cb_seasons_live_number` exists, not only that the eleven columns do, and `StartupError::SeasonControls` names `migrations/0003_cb_season_controls.sql`. The single previous message named `0002_cb_attendance.sql`, which is `CREATE TABLE IF NOT EXISTS` throughout and would have told every existing deployment to run a file that changes nothing.
+- `cb` carries `required_permissions = "MANAGE_GUILD"` as well as `default_member_permissions`, because poise applies the latter once at registration and a guild owner can override it per role under Integrations.
+- `private` sets an explicitly empty allowed-mentions allowance. Nothing was notified before, but only because the reply is ephemeral, which is not the reason section 9.5 gave.
+- `season_name` escapes the codename, as every other user-supplied string in `text.rs` already did.
+- `forget` drops its slot unconditionally. Requiring a strong count of one silently skipped the removal whenever a redraw was in flight, and nothing revisited a removed post, so the entry lived for the life of the process.
+- The shared test fixture in `tests/common/mod.rs` applies `0003`, and the duplicate private copies in the two test files are gone. Both files had shadowed the shared helper, leaving it building a schema every store query fails against.
+- `FakeBoard` records each send's delivery and exposes `deletes_in`, so a test can tell which channel a delete went to. Without it, the move test passed whether or not the delete reached the right channel.
