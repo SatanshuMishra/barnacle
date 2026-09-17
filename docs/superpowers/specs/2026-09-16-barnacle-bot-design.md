@@ -8,13 +8,13 @@ Implemented by: `docs/superpowers/plans/2026-09-16-barnacle-bot.md` (Plan 3).
 ## 1. Scope
 
 In scope:
-- A new binary crate, `barnacle-bot`, that runs `/guess`, `/ship info`, `/profile` and `/about` on Discord.
+- A new binary crate, `barnacle-bot`, that runs `/guess`, `/ship info`, `/profile`, `/leaderboard` and `/about` on Discord. `/leaderboard` was added after the live checklist, see section 14.
 - Moving the read-only catalog folder code out of `barnacle-data` so the bot can use it without the game-data toolkit.
 - One SQLite table for solves, with its migration and rollback files, applied by a person.
 - The README steps for setting up the Discord application.
 
 Out of scope (later, or owned elsewhere):
-- Leaderboards, streaks, and other `/guess` round types (spec 5.4).
+- Streaks and other `/guess` round types (spec 5.4).
 - The weekly toolkit-release watcher, deferred until the bot is complete (decision `01M2P9F5BVXHZNYAF8V82C32ZF`).
 - Hosting anywhere other than the owner's machine (spec 2.2).
 
@@ -394,3 +394,17 @@ An independent review of the implemented branch found the problems below. The co
 | A TOML error echoed the config file's text, which would print a token typed there by mistake | `ConfigError::Toml` keeps only the line and column. The parser's message is dropped as well, because serde quotes rejected values in it: "the config is not valid at line L, column C; compare it with barnacle.example.toml". |
 | The win-and-cancel race test could not interleave the two | Once the settle window existed, recording happened 250 ms after the lock was released, so the test runs a win and a cancel together in both orders instead, and each order must end the round exactly once |
 | When two correct answers arrive in one gateway read, serenity starts a task per event (`serenity-0.12.5/src/client/dispatch.rs:80`), and tokio can run the later task first, so the later answer could win (owner decision `01M2PPVFMSZ033FKXJC2MQZYEE`) | The first correct answer opens a 250 ms settle window (`table::SETTLE_WINDOW`) instead of ending the round. The round keeps the correct answer with the smallest message ID as its leader. When the window closes, the round ends with the leader, and the win is recorded and announced. While a round has a leader, the timer posts neither the hint nor the timeout, a Cancel click gets "That round has already ended.", and `/guess` still reports the channel as busy. The win reply comes 250 ms after the first correct answer. |
+
+## 14. `/leaderboard` (added after the live checklist, 2026-09-16)
+
+The owner asked for a leaderboard after the live run and chose its options (decision `01M2PXWD59AVK94CPZEXWPK532`). Where this section differs from sections 1-13, this section wins.
+
+| Part | Behaviour |
+|---|---|
+| Command | `/leaderboard [sort] [limit]`, in servers only, with a public reply. `sort` offers "Most wins" (the default) and "Fastest time". `limit` offers 5 to 50 in steps of 5 and defaults to 10 (`wiring::DEFAULT_LEADERBOARD_SIZE`). |
+| Order | Most wins: more wins first, then the faster best time, then the lower user ID. Fastest time: the faster best time first, then more wins, then the lower user ID. Only wins in the current server count. |
+| Query | `Solves::leaderboard` groups `guess_solves` by player for one server, with one literal SQL string per order. The `guess_solves_by_player` index covers it, so there is no migration. A negative stored value is reported as `SolvesError::Negative`. SQLite already returns the groups in user-ID order through that index, so the user-ID tie-break changes nothing today. It keeps the order fixed if the query plan changes. |
+| Rows | `**1.** Name · 12 wins · best 3.412 s` (`text::standing_line`). A name is cut to 32 characters, Discord's name length, and then escaped. |
+| Names | The command defers its reply, then fetches every listed player at once with Get Guild Member. That endpoint needs no privileged intent (Discord's "You might not need a privileged intent" page). A 404 means the player left, and the row says "Former member". Any other failure goes to the command error handler. The bot still stores no names. |
+| Sending | The board replaces Discord's loading message through Edit Original Interaction Response, because editing it with a follow-up is deprecated (Discord's "Receiving and Responding" page). Rows go into as few embeds as fit 4096 UTF-16 units each (`text::leaderboard_pages`), and the title goes on the first. A 50-row board of escaped 32-character names needs two embeds and stays under the 6000-character total for a message. A server with no wins gets "No rounds won here yet." |
+| Tests | Both orders with their tie-breaks, the size, server separation and the negative-value error (`tests/solves.rs`). The row wording, the name cut and escape, and the page split within both limits (`tests/text.rs`). The option defaults (`tests/wiring.rs`). The name lookup and the rendered board are live checks. |

@@ -4828,3 +4828,12 @@ Two more steps for the owner's live checklist in Task 10:
 
 12. **A wrong server ID.** Put a server ID the bot has not joined into `commands.guilds` and start the bot. It exits with "Discord refused to register the commands", followed by a "caused by:" line carrying Discord's reason. Put the right ID back afterwards.
 13. **A missing permission.** In one channel, deny the bot Read Message History and run `/guess` there. The reply is a private "I need these permissions in this channel to run a round: Read Message History." Restore the permission afterwards.
+
+## Changes after the live checklist (2026-09-16)
+
+The owner ran the live checklist and then asked for `/leaderboard`, described in design section 14. The workspace now has 218 tests. Four more steps for the owner's live checklist:
+
+14. **The default board.** In a server with wins, run `/leaderboard`. The title is "Most wins in this server", and each row reads like "**1.** Name · 12 wins · best 3.412 s", ordered by wins. The numbers match `/profile` for the same players in the same server.
+15. **Fastest times.** Run `/leaderboard sort:Fastest time`. The title is "Fastest times in this server", and the rows are ordered by best time.
+16. **A long board.** Run `/leaderboard limit:50`. Every player with a win in the server is listed, at most 50. A server with no wins gets "No rounds won here yet."
+17. **A player who left.** If a player with wins has left the server, their row says "Former member".
