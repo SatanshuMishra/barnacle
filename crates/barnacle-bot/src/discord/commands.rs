@@ -62,14 +62,18 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
         poise::Command {
             description: Some("Clan Battle sign-ups".into()),
             subcommands: vec![poise::Command {
-                description: Some("Set up the Clan Battle season this server signs up for".into()),
+                description: Some("Clan Battle seasons for this server".into()),
                 subcommands: vec![
                     poise::Command {
-                        description: Some("Post sign-ups for a season in this channel".into()),
+                        description: Some(
+                            "Set up a season and post its sign-ups in this channel".into(),
+                        ),
                         ..season_start()
                     },
                     poise::Command {
-                        description: Some("Show the seasons still signing up here".into()),
+                        description: Some(
+                            "List this server's seasons and when each posts next".into(),
+                        ),
                         ..season_show()
                     },
                     poise::Command {
@@ -483,6 +487,9 @@ async fn season_start(
     if nights_left == 0 {
         return private(ctx, text::NO_NIGHTS_LEFT).await;
     }
+    let Some(created_at_ms) = super::now_ms() else {
+        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+    };
     let new = NewSeason {
         guild: place.guild,
         channel: place.channel,
@@ -490,7 +497,7 @@ async fn season_start(
         codename,
         range,
         created_by: UserId::new(ctx.author().id.get()),
-        created_at_ms: super::now_ms(),
+        created_at_ms,
     };
     match ctx.data().signups.store().create_season(&new).await? {
         CreateOutcome::Created(season) => {
@@ -528,13 +535,13 @@ async fn season_show(ctx: Context<'_>) -> Result<(), Error> {
     if lines.is_empty() {
         return private(ctx, text::NO_SEASON_HERE).await;
     }
-    private(ctx, lines.join("\n")).await
+    private(ctx, text::season_list(&lines)).await
 }
 
 #[poise::command(slash_command, rename = "end")]
 async fn season_end(
     ctx: Context<'_>,
-    #[description = "Which CB season this is, for example 35"]
+    #[description = "Which season to stop posting, for example 35"]
     #[min = 1]
     number: u32,
 ) -> Result<(), Error> {

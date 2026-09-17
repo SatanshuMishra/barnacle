@@ -110,6 +110,26 @@ fn failed(error: serenity::Error) -> BoardError {
     BoardError(Box::new(error))
 }
 
+fn channel_id(channel: ChannelId) -> Result<serenity::ChannelId, BoardError> {
+    std::num::NonZeroU64::new(channel.get())
+        .map(serenity::ChannelId::from)
+        .ok_or_else(|| BoardError(Box::new(BadId::Channel)))
+}
+
+fn message_id(message: Snowflake) -> Result<serenity::MessageId, BoardError> {
+    std::num::NonZeroU64::new(message.get())
+        .map(serenity::MessageId::from)
+        .ok_or_else(|| BoardError(Box::new(BadId::Message)))
+}
+
+#[derive(Debug, thiserror::Error)]
+enum BadId {
+    #[error("the attendance database holds 0 as a channel ID")]
+    Channel,
+    #[error("the attendance database holds 0 as a message ID")]
+    Message,
+}
+
 impl Board for DiscordBoard {
     async fn send_post(
         &self,
@@ -120,7 +140,7 @@ impl Board for DiscordBoard {
             .embed(signup_embed(view))
             .components(signup_rows(view))
             .allowed_mentions(serenity::CreateAllowedMentions::new());
-        let posted = serenity::ChannelId::new(channel.get())
+        let posted = channel_id(channel)?
             .send_message(&self.http, message)
             .await
             .map_err(failed)?;
@@ -133,7 +153,7 @@ impl Board for DiscordBoard {
         tag: PostTag,
     ) -> Result<Option<Snowflake>, BoardError> {
         let prefix = wiring::signup_tag_prefix(tag.season, tag.night);
-        let recent = serenity::ChannelId::new(channel.get())
+        let recent = channel_id(channel)?
             .messages(
                 &self.http,
                 serenity::GetMessages::new().limit(RECENT_MESSAGES),
@@ -156,8 +176,8 @@ impl Board for DiscordBoard {
             .embed(signup_embed(view))
             .components(signup_rows(view))
             .allowed_mentions(serenity::CreateAllowedMentions::new());
-        serenity::ChannelId::new(channel.get())
-            .edit_message(&self.http, serenity::MessageId::new(message.get()), edit)
+        channel_id(channel)?
+            .edit_message(&self.http, message_id(message)?, edit)
             .await
             .map_err(failed)?;
         Ok(())
@@ -168,8 +188,8 @@ impl Board for DiscordBoard {
         channel: ChannelId,
         message: Snowflake,
     ) -> Result<Removal, BoardError> {
-        match serenity::ChannelId::new(channel.get())
-            .delete_message(&self.http, serenity::MessageId::new(message.get()))
+        match channel_id(channel)?
+            .delete_message(&self.http, message_id(message)?)
             .await
         {
             Ok(()) => Ok(Removal::Deleted),

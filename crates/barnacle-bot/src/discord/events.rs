@@ -118,6 +118,10 @@ async fn sign_up(
         return Ok(());
     }
     component.defer(serenity_context).await?;
+    let Some(now_ms) = super::now_ms() else {
+        private_followup(serenity_context, component, text::SOMETHING_WENT_WRONG).await?;
+        return Ok(());
+    };
     let click = Click {
         guild,
         channel: ChannelId::new(component.channel_id.get()),
@@ -128,7 +132,7 @@ async fn sign_up(
         target: signup.target,
         attending: signup.attending,
     };
-    match data.signups.click(click, now_unix, super::now_ms()).await {
+    match data.signups.click(click, now_unix, now_ms).await {
         ClickOutcome::Recorded => {}
         ClickOutcome::Closed { start_unix } => {
             private_followup(

@@ -46,8 +46,8 @@ fn now_unix() -> i64 {
     jiff::Timestamp::now().as_second()
 }
 
-fn now_ms() -> u64 {
-    u64::try_from(jiff::Timestamp::now().as_millisecond()).unwrap_or_default()
+fn now_ms() -> Option<u64> {
+    u64::try_from(jiff::Timestamp::now().as_millisecond()).ok()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -103,12 +103,24 @@ pub async fn run(
                     beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     loop {
                         beat.tick().await;
-                        let report = ticker.tick(now_unix(), now_ms()).await;
-                        if report.failures > 0 {
-                            tracing::warn!(
+                        let Some(now_ms) = now_ms() else {
+                            tracing::warn!("the clock reads before 1970, so this beat was skipped");
+                            continue;
+                        };
+                        let beating = Arc::clone(&ticker);
+                        let beat_result =
+                            tokio::spawn(async move { beating.tick(now_unix(), now_ms).await })
+                                .await;
+                        match beat_result {
+                            Ok(report) if report.failures > 0 => tracing::warn!(
                                 failures = report.failures,
                                 "a sign-up step failed and will be retried"
-                            );
+                            ),
+                            Ok(_) => {}
+                            Err(error) => tracing::error!(
+                                %error,
+                                "a sign-up beat died; the next beat will be attempted"
+                            ),
                         }
                     }
                 });
