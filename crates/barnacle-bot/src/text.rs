@@ -9,7 +9,15 @@ use barnacle_guess::Reveal;
 use barnacle_guess::RoundOptions;
 use barnacle_guess::Timing;
 use barnacle_guess::UserId;
+use jiff::civil::Date;
 
+use crate::attendance::Cell;
+use crate::attendance::HourTally;
+use crate::attendance::RosterRow;
+use crate::attendance::SignupView;
+use crate::attendance_store::Season;
+use crate::schedule::Hour;
+use crate::schedule::Night;
 use crate::solves::Ranking;
 use crate::solves::Standing;
 
@@ -35,9 +43,24 @@ pub const WARGAMING_NOTICE: &str = "Barnacle is an unofficial fan project. It is
 pub const FIELD_LIMIT: usize = 1024;
 pub const EMBED_DESCRIPTION_LIMIT: usize = 4096;
 pub const MESSAGE_EMBEDS_LIMIT: usize = 6000;
+pub const MESSAGE_CONTENT_LIMIT: usize = 2000;
 pub const FORMER_MEMBER: &str = "Former member";
+pub const ATTEND_ALL_LABEL: &str = "Attend all";
+pub const NOPE_ALL_LABEL: &str = "Nope all";
+pub const NO_ANSWERS_YET: &str = "No one has answered yet.";
+pub const SIGNUPS_CLOSE_AT_START: &str = "Sign-ups close when the night starts.";
+pub const SIGNUPS_CLOSED: &str = "Sign-ups closed";
+pub const SEASON_GONE: &str = "This season no longer exists.";
+pub const RUN_IN_TEXT_CHANNEL: &str = "Run this in a text channel.";
+pub const DATE_FORMAT: &str = "Dates look like 2026-09-16.";
+pub const LAST_DAY_BEFORE_FIRST: &str = "The last day is before the first day.";
+pub const NO_NIGHTS_LEFT: &str = "That range has no CB nights left.";
+pub const NO_SEASON_HERE: &str = "No CB season is set up here.";
+pub const ROSTER_HEADER: &str = "1    2    3    4    ";
 
 const NAME_LIMIT: usize = 32;
+const SEASON_LIST_TAIL: usize = 32;
+const CELL_WIDTH: usize = 5;
 const NUMERALS: [&str; 11] = [
     "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI",
 ];
@@ -242,6 +265,121 @@ pub fn listing(items: &[String], limit: usize) -> String {
         .unwrap_or_default()
 }
 
+pub fn signup_title(number: u32, codename: Option<&str>) -> String {
+    format!("Clan Battles · {}", season_name(number, codename))
+}
+
+pub fn signup_description(view: &SignupView) -> String {
+    let start = view.night.start_unix();
+    let heading = if view.open {
+        vec![
+            format!("{} · starts {}", full_time(start), relative_time(start)),
+            SIGNUPS_CLOSE_AT_START.to_owned(),
+        ]
+    } else {
+        vec![format!("{} · {SIGNUPS_CLOSED}", full_time(start))]
+    };
+    heading
+        .into_iter()
+        .chain(std::iter::once(String::new()))
+        .chain(view.hours.iter().map(|tally| hour_line(view.night, tally)))
+        .chain(std::iter::once(String::new()))
+        .chain(roster_lines(view))
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
+pub fn hour_button_label(hour: Hour, attending: bool) -> String {
+    format!("Hour {}: {}", hour.get(), choice_label(attending))
+}
+
+pub fn signups_closed_at(start_unix: i64) -> String {
+    format!(
+        "Sign-ups for this night closed at {}.",
+        clock_time(start_unix)
+    )
+}
+
+pub fn season_started(season: &Season, nights_left: usize, post_at_unix: Option<i64>) -> String {
+    format!(
+        "{} will post here. {}, {nights_left} still ahead. First sign-up post: {}.",
+        season_name(season.number, season.codename.as_deref()),
+        nights(season.range.night_count()),
+        post_time(post_at_unix)
+    )
+}
+
+pub fn season_line(season: &Season, nights_left: usize, post_at_unix: Option<i64>) -> String {
+    format!(
+        "<#{}> {}, {} to {}. {} ahead. Next sign-up post: {}.",
+        season.channel.get(),
+        season_name(season.number, season.codename.as_deref()),
+        season.range.first_day(),
+        season.range.last_day(),
+        nights_ahead(nights_left),
+        post_time(post_at_unix)
+    )
+}
+
+pub fn season_list(lines: &[String]) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut length = 0;
+    for line in lines {
+        let next = length + discord_length(line) + usize::from(!kept.is_empty());
+        if next > MESSAGE_CONTENT_LIMIT - SEASON_LIST_TAIL {
+            break;
+        }
+        length = next;
+        kept.push(line);
+    }
+    let hidden = lines.len() - kept.len();
+    let shown = kept.join("\n");
+    if hidden == 0 {
+        shown
+    } else {
+        format!("{shown}\nand {hidden} more.")
+    }
+}
+
+fn nights_ahead(count: usize) -> String {
+    match count {
+        1 => "1 night".to_owned(),
+        count => format!("{count} nights"),
+    }
+}
+
+fn nights(count: usize) -> String {
+    match count {
+        1 => "1 CB night".to_owned(),
+        count => format!("{count} CB nights"),
+    }
+}
+
+pub fn season_number_taken(number: u32) -> String {
+    format!("Season {number} already exists. End it first with /cb season end.")
+}
+
+pub fn season_overlaps(other: &Season) -> String {
+    format!(
+        "That range overlaps Season {} ({} to {}).",
+        other.number,
+        other.range.first_day(),
+        other.range.last_day()
+    )
+}
+
+pub fn season_removed(number: u32) -> String {
+    format!("Season {number} was removed. Nothing had been posted.")
+}
+
+pub fn season_shortened(number: u32, last_day: Date) -> String {
+    format!("Season {number} ends after {last_day}. No more sign-up posts.")
+}
+
+pub fn season_not_found(number: u32) -> String {
+    format!("No Season {number} is set up here.")
+}
+
 fn discord_length(text: &str) -> usize {
     text.encode_utf16().count()
 }
@@ -252,4 +390,72 @@ fn sentence(text: &str) -> String {
     } else {
         format!("{text}.")
     }
+}
+
+fn season_name(number: u32, codename: Option<&str>) -> String {
+    match codename {
+        Some(codename) => format!("Season {number}: {codename}"),
+        None => format!("Season {number}"),
+    }
+}
+
+fn choice_label(attending: bool) -> &'static str {
+    if attending { "Attending" } else { "Nope" }
+}
+
+fn hour_line(night: Night, tally: &HourTally) -> String {
+    format!(
+        "**Hour {}** · {} – {} · {} in · {} out",
+        tally.hour.get(),
+        clock_time(night.hour_start_unix(tally.hour)),
+        clock_time(night.hour_end_unix(tally.hour)),
+        tally.attending,
+        tally.nope
+    )
+}
+
+fn roster_lines(view: &SignupView) -> Vec<String> {
+    if view.rows.is_empty() {
+        return vec![NO_ANSWERS_YET.to_owned()];
+    }
+    std::iter::once(format!("`{ROSTER_HEADER}`"))
+        .chain(view.rows.iter().map(roster_line))
+        .chain((view.hidden > 0).then(|| format!("and {} more.", view.hidden)))
+        .collect()
+}
+
+fn roster_line(row: &RosterRow) -> String {
+    let cells: String = row
+        .cells
+        .iter()
+        .map(|cell| format!("{:<CELL_WIDTH$}", cell_text(*cell)))
+        .collect();
+    format!("`{cells}` <@{}>", row.user.get())
+}
+
+fn cell_text(cell: Cell) -> &'static str {
+    match cell {
+        Cell::In => "in",
+        Cell::Out => "out",
+        Cell::None => "-",
+    }
+}
+
+fn post_time(at_unix: Option<i64>) -> String {
+    match at_unix {
+        Some(at_unix) => format!("{} ({})", full_time(at_unix), relative_time(at_unix)),
+        None => "within a minute".to_owned(),
+    }
+}
+
+fn clock_time(unix: i64) -> String {
+    format!("<t:{unix}:t>")
+}
+
+fn full_time(unix: i64) -> String {
+    format!("<t:{unix}:F>")
+}
+
+fn relative_time(unix: i64) -> String {
+    format!("<t:{unix}:R>")
 }
