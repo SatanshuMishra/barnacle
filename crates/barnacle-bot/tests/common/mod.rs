@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod fakes;
+
 use barnacle_bot::solves::Solves;
 use barnacle_catalog::Catalog;
 use barnacle_catalog::Nation;
