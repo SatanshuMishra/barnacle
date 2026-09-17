@@ -5,12 +5,15 @@ use poise::serenity_prelude as serenity;
 
 use super::Data;
 use super::Error;
+use crate::attendance::Click;
+use crate::attendance::ClickOutcome;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::Place;
 use crate::table::CancelOutcome;
 use crate::text;
 use crate::wiring;
+use crate::wiring::SignupClick;
 
 pub async fn handle(
     framework: poise::FrameworkContext<'_, Data, Error>,
@@ -38,6 +41,19 @@ pub async fn handle(
         serenity::FullEvent::InteractionCreate {
             interaction: serenity::Interaction::Component(component),
         } => {
+            if let (Some(signup), Some(guild)) = (
+                wiring::signup_click(&component.data.custom_id),
+                component.guild_id,
+            ) {
+                return sign_up(
+                    data,
+                    framework.serenity_context,
+                    component,
+                    signup,
+                    GuildId::new(guild.get()),
+                )
+                .await;
+            }
             let (Some(number), Some(guild)) = (
                 wiring::round_number(&component.data.custom_id),
                 component.guild_id,
@@ -77,6 +93,63 @@ pub async fn handle(
         }
         _ => Ok(()),
     }
+}
+
+async fn sign_up(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    component: &serenity::ComponentInteraction,
+    signup: SignupClick,
+    guild: GuildId,
+) -> Result<(), Error> {
+    let now_unix = super::now_unix();
+    let start_unix = signup.night.start_unix();
+    if start_unix <= now_unix {
+        component
+            .create_response(
+                serenity_context,
+                serenity::CreateInteractionResponse::Message(
+                    serenity::CreateInteractionResponseMessage::new()
+                        .content(text::signups_closed_at(start_unix))
+                        .ephemeral(true),
+                ),
+            )
+            .await?;
+        return Ok(());
+    }
+    component.defer(serenity_context).await?;
+    let Some(now_ms) = super::now_ms() else {
+        private_followup(serenity_context, component, text::SOMETHING_WENT_WRONG).await?;
+        return Ok(());
+    };
+    let click = Click {
+        guild,
+        channel: ChannelId::new(component.channel_id.get()),
+        message: Snowflake::new(component.message.id.get()),
+        user: UserId::new(component.user.id.get()),
+        season: signup.season,
+        night: signup.night,
+        target: signup.target,
+        attending: signup.attending,
+    };
+    match data.signups.click(click, now_unix, now_ms).await {
+        ClickOutcome::Recorded => {}
+        ClickOutcome::Closed { start_unix } => {
+            private_followup(
+                serenity_context,
+                component,
+                &text::signups_closed_at(start_unix),
+            )
+            .await?;
+        }
+        ClickOutcome::UnknownSeason => {
+            private_followup(serenity_context, component, text::SEASON_GONE).await?;
+        }
+        ClickOutcome::Failed => {
+            private_followup(serenity_context, component, text::SOMETHING_WENT_WRONG).await?;
+        }
+    }
+    Ok(())
 }
 
 async fn private_followup(
