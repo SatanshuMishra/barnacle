@@ -1,8 +1,10 @@
 mod announcer;
+mod board;
 mod commands;
 mod events;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use barnacle_catalog::Catalog;
 use barnacle_catalog::curation::Curated;
@@ -12,6 +14,8 @@ use poise::serenity_prelude as serenity;
 use rand::rngs::StdRng;
 use tokio::sync::Semaphore;
 
+use crate::attendance::Signups;
+use crate::attendance_store::Attendance;
 use crate::config::CommandScope;
 use crate::lookup::Directory;
 use crate::solves::Solves;
@@ -19,8 +23,10 @@ use crate::startup::Loaded;
 use crate::table::Table;
 
 pub use announcer::DiscordAnnouncer;
+pub use board::DiscordBoard;
 
 const MEMBER_LOOKUPS_AT_ONCE: usize = 5;
+const TICK: Duration = Duration::from_secs(60);
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Context<'a> = poise::Context<'a, Data, Error>;
@@ -33,6 +39,15 @@ pub struct Data {
     pub curated: Curated,
     pub directory: Directory,
     pub member_lookups: Arc<Semaphore>,
+    pub signups: Arc<Signups<DiscordBoard>>,
+}
+
+fn now_unix() -> i64 {
+    jiff::Timestamp::now().as_second()
+}
+
+fn now_ms() -> u64 {
+    u64::try_from(jiff::Timestamp::now().as_millisecond()).unwrap_or_default()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -63,6 +78,7 @@ pub async fn run(
     scope: CommandScope,
     loaded: Loaded,
     solves: Solves,
+    attendance: Attendance,
 ) -> Result<(), RunError> {
     let intents = serenity::GatewayIntents::GUILDS
         | serenity::GatewayIntents::GUILD_MESSAGES
@@ -74,11 +90,28 @@ pub async fn run(
             on_error: |error| Box::pin(events::on_error(error)),
             ..Default::default()
         })
-        .setup(move |ctx, _ready, _framework| {
+        .setup(move |ctx, ready, _framework| {
             Box::pin(async move {
                 let announcer = DiscordAnnouncer::new(Arc::clone(&ctx.http));
                 let rng: StdRng = rand::make_rng();
                 let table = Table::new(loaded.book, solves, announcer, Timing::STANDARD, rng);
+                let board = DiscordBoard::new(Arc::clone(&ctx.http), ready.user.id);
+                let signups = Signups::new(board, attendance);
+                let ticker = Arc::clone(&signups);
+                tokio::spawn(async move {
+                    let mut beat = tokio::time::interval(TICK);
+                    beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        beat.tick().await;
+                        let report = ticker.tick(now_unix(), now_ms()).await;
+                        if report.failures > 0 {
+                            tracing::warn!(
+                                failures = report.failures,
+                                "a sign-up step failed and will be retried"
+                            );
+                        }
+                    }
+                });
                 Ok::<Data, Error>(Data {
                     table,
                     root: loaded.root,
@@ -87,6 +120,7 @@ pub async fn run(
                     curated: loaded.curated,
                     directory: loaded.directory,
                     member_lookups: Arc::new(Semaphore::new(MEMBER_LOOKUPS_AT_ONCE)),
+                    signups,
                 })
             })
         })

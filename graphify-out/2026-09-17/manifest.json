@@ -35,8 +35,8 @@
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/lib.rs": {
-    "mtime": 1789670528.6838582,
-    "ast_hash": "0964548f5ac90c431399e2f45c55ff46",
+    "mtime": 1789671106.7732532,
+    "ast_hash": "22c3b66f943de8f89c6007a6d7c6605c",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/lookup.rs": {
@@ -75,13 +75,13 @@
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/common/fakes.rs": {
-    "mtime": 1789670528.6845694,
-    "ast_hash": "058cbe67e335c33f9fddfe01f4d460a9",
+    "mtime": 1789671460.9708624,
+    "ast_hash": "30d994fac7da86d85c42d7ed079c01e0",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/common/mod.rs": {
-    "mtime": 1789670528.684638,
-    "ast_hash": "2d1cef87a3b87340a8dc443eed74fd56",
+    "mtime": 1789671350.9342034,
+    "ast_hash": "5cb84e943c603f25e6daccb60c2643bb",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/config.rs": {
@@ -457,6 +457,46 @@
   "docs/superpowers/specs/2026-09-17-cb-attendance-design.md": {
     "mtime": 1789670528.6932683,
     "ast_hash": "930db7640504c860b7a8c03c02bfcf64",
+    "semantic_hash": ""
+  },
+  "crates/barnacle-bot/src/attendance.rs": {
+    "mtime": 1789671098.5750232,
+    "ast_hash": "0c7c489a2797111ebc911d2fe080f787",
+    "semantic_hash": ""
+  },
+  "crates/barnacle-bot/src/attendance_store.rs": {
+    "mtime": 1789671228.3568053,
+    "ast_hash": "3b457ce93bb872e944173b8582e03c1a",
+    "semantic_hash": ""
+  },
+  "crates/barnacle-bot/src/schedule.rs": {
+    "mtime": 1789671205.7996628,
+    "ast_hash": "54ead86a71a1d3748b4d648a9c270337",
+    "semantic_hash": ""
+  },
+  "crates/barnacle-bot/tests/attendance.rs": {
+    "mtime": 1789671527.3056386,
+    "ast_hash": "8917f51e5efa14f24b6f1491b0d7561b",
+    "semantic_hash": ""
+  },
+  "crates/barnacle-bot/tests/attendance_store.rs": {
+    "mtime": 1789671359.5444293,
+    "ast_hash": "0752ac940c9480a26b44ba5815d1d8da",
+    "semantic_hash": ""
+  },
+  "crates/barnacle-bot/tests/schedule.rs": {
+    "mtime": 1789671268.2650523,
+    "ast_hash": "b1d97b2293f7cc2f4a1add88cf5e8a5d",
+    "semantic_hash": ""
+  },
+  "migrations/0002_cb_attendance.down.sql": {
+    "mtime": 1789670953.9465966,
+    "ast_hash": "fc7eda052ed9377170e6da10692eab58",
+    "semantic_hash": ""
+  },
+  "migrations/0002_cb_attendance.sql": {
+    "mtime": 1789670953.9425657,
+    "ast_hash": "72c91b9675e2c3855ae9907c0cc555d5",
     "semantic_hash": ""
   }
 }

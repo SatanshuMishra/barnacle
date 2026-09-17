@@ -1,502 +1,507 @@
 {
   "crates/barnacle-bot/src/config.rs": {
-    "mtime": 1789670528.6833158,
+    "mtime": 1789670528.8213716,
     "ast_hash": "ff163c11e79948e43e9b527ca686820d",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/discord.rs": {
-    "mtime": 1789670528.6833816,
-    "ast_hash": "8151f5105f1b4a36201b4cce44027727",
+    "mtime": 1789672552.2395713,
+    "ast_hash": "2c41188e71d1bb70fcf59bcf98da972e",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/discord/announcer.rs": {
-    "mtime": 1789670528.6834946,
+    "mtime": 1789670528.8215222,
     "ast_hash": "0f64d5e7fb80ef827691638b52cf92d9",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/discord/commands.rs": {
-    "mtime": 1789670528.6835916,
-    "ast_hash": "862221eba5f867950660e203cea2cc4f",
+    "mtime": 1789672581.9424317,
+    "ast_hash": "3f88e66f007e79439eb24b2a2e5965e5",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/discord/events.rs": {
-    "mtime": 1789670528.683654,
-    "ast_hash": "e1ce49e6eef2629124b80e2e06046dcc",
+    "mtime": 1789672597.1556988,
+    "ast_hash": "6e6d41815187a5f419e491a8de31bdd9",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/ids.rs": {
-    "mtime": 1789670528.6837187,
+    "mtime": 1789670528.8217037,
     "ast_hash": "80ea1a85b3e9b9f8f02820d222cecae1",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/info.rs": {
-    "mtime": 1789670528.6837814,
+    "mtime": 1789670528.82175,
     "ast_hash": "c2ebb17ce064c908c5fd9c67d46f902f",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/lib.rs": {
-    "mtime": 1789671106.7732532,
+    "mtime": 1789672154.8074486,
     "ast_hash": "22c3b66f943de8f89c6007a6d7c6605c",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/lookup.rs": {
-    "mtime": 1789670528.6839259,
+    "mtime": 1789670528.8218622,
     "ast_hash": "d7626aac6e44a1e28ba5d9f3121448d7",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/main.rs": {
-    "mtime": 1789670528.683995,
-    "ast_hash": "22ed0609ba76c3342198f85f46f092bc",
+    "mtime": 1789672614.823153,
+    "ast_hash": "855ad5b9bd4412de2880cda00f51ff84",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/solves.rs": {
-    "mtime": 1789670528.684078,
+    "mtime": 1789670528.8220086,
     "ast_hash": "63bb1b85ce6f2ec0d70c7387b40ee18e",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/startup.rs": {
-    "mtime": 1789670528.6841588,
-    "ast_hash": "1cc670e829b65c338227f9b2e1a726b4",
+    "mtime": 1789672625.199529,
+    "ast_hash": "b6828686ae763e8f79783124e2f1d3ea",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/table.rs": {
-    "mtime": 1789670528.6842508,
+    "mtime": 1789670528.8221467,
     "ast_hash": "3421376300a89c95c4bc848fe2885615",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/text.rs": {
-    "mtime": 1789670528.6843412,
+    "mtime": 1789670528.822232,
     "ast_hash": "152f3026b359eb49bde227933315d082",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/wiring.rs": {
-    "mtime": 1789670528.6844118,
+    "mtime": 1789670528.8222954,
     "ast_hash": "c197deab2fda91231adc721cbd9be9e5",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/common/fakes.rs": {
-    "mtime": 1789671460.9708624,
+    "mtime": 1789672154.8080807,
     "ast_hash": "30d994fac7da86d85c42d7ed079c01e0",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/common/mod.rs": {
-    "mtime": 1789671350.9342034,
+    "mtime": 1789672154.808204,
     "ast_hash": "5cb84e943c603f25e6daccb60c2643bb",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/config.rs": {
-    "mtime": 1789670528.6847003,
+    "mtime": 1789670528.8225574,
     "ast_hash": "d80fd7aab2f84ea1957d419e3fa07940",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/info.rs": {
-    "mtime": 1789670528.6847665,
+    "mtime": 1789670528.822619,
     "ast_hash": "25193d23b6c76f1384a3cebed9d1ce56",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/lookup.rs": {
-    "mtime": 1789670528.6848435,
+    "mtime": 1789670528.822686,
     "ast_hash": "811ad2737ed224d8cfb4ae36106d071f",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/solves.rs": {
-    "mtime": 1789670528.6849365,
+    "mtime": 1789670528.822759,
     "ast_hash": "bb916a6409c3cbe67719428505f9e358",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/startup.rs": {
-    "mtime": 1789670528.6850183,
-    "ast_hash": "54ecee315e26fdbd94b01b4bd2326f13",
+    "mtime": 1789672625.217354,
+    "ast_hash": "0775c6fb72d816845161176ff42d321a",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/table.rs": {
-    "mtime": 1789670528.6851041,
+    "mtime": 1789670528.8229084,
     "ast_hash": "ea084bbe0123be5d760446c1f8f28ade",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/text.rs": {
-    "mtime": 1789670528.6852026,
+    "mtime": 1789670528.8229945,
     "ast_hash": "abd7a7e43a0dacfac35ac66eb3872433",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/wiring.rs": {
-    "mtime": 1789670528.6852593,
+    "mtime": 1789670528.8230667,
     "ast_hash": "bf26c729dff95e59afac9e53941135ee",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/src/curation/config.rs": {
-    "mtime": 1789670528.6854994,
+    "mtime": 1789670528.823273,
     "ast_hash": "81613276196a33be9848c40ecf2295ca",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/src/curation/mod.rs": {
-    "mtime": 1789670528.6855752,
+    "mtime": 1789670528.8233237,
     "ast_hash": "54ccc85a1a9816d0d955300d6fa713ee",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/src/curation/rules.rs": {
-    "mtime": 1789670528.6856751,
+    "mtime": 1789670528.8233912,
     "ast_hash": "b6a44a9ce8412756093baacd28857285",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/src/curation/validate.rs": {
-    "mtime": 1789670528.68577,
+    "mtime": 1789670528.82347,
     "ast_hash": "9f3e411f59758cfa9449284bf80bf7d4",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/src/diff.rs": {
-    "mtime": 1789670528.6858397,
+    "mtime": 1789670528.8235328,
     "ast_hash": "a9a1571a59987a06d4cf31a63daf2db0",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/src/lib.rs": {
-    "mtime": 1789670528.6859033,
+    "mtime": 1789670528.823589,
     "ast_hash": "feef02d4480e620dacc5f1fd7b22cae2",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/src/model.rs": {
-    "mtime": 1789670528.6859918,
+    "mtime": 1789670528.823665,
     "ast_hash": "aa5581032e95c35aa5668343a80bd0c9",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/src/names.rs": {
-    "mtime": 1789670528.6860702,
+    "mtime": 1789670528.8237176,
     "ast_hash": "b1baff095f8cd337958025874cb9aee6",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/src/store.rs": {
-    "mtime": 1789670528.686149,
+    "mtime": 1789670528.8237822,
     "ast_hash": "7e575cb7087efa7cf43ce3b0d3c25761",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/tests/common/mod.rs": {
-    "mtime": 1789670528.6862993,
+    "mtime": 1789670528.8239067,
     "ast_hash": "85c32462bb0aa0d22a6db15d1300dd1a",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/tests/curation.rs": {
-    "mtime": 1789670528.686382,
+    "mtime": 1789670528.823975,
     "ast_hash": "f5f574ce0af27a5b8fbaec8d9e1570fe",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/tests/diff.rs": {
-    "mtime": 1789670528.6864653,
+    "mtime": 1789670528.8240309,
     "ast_hash": "76595ec1d3ede86542408c2639885a93",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/tests/model.rs": {
-    "mtime": 1789670528.686545,
+    "mtime": 1789670528.8240914,
     "ast_hash": "e4dda3c351fed3910c044902778b51c0",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/tests/names.rs": {
-    "mtime": 1789670528.6866176,
+    "mtime": 1789670528.8241541,
     "ast_hash": "b4c22bbe71d402eb5a7a2f42e76f8749",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/tests/store.rs": {
-    "mtime": 1789670528.6866875,
+    "mtime": 1789670528.8242106,
     "ast_hash": "53e540aaac385e0acd15a2b15eac7e31",
     "semantic_hash": ""
   },
   "crates/barnacle-catalog/tests/validate.rs": {
-    "mtime": 1789670528.686756,
+    "mtime": 1789670528.8242714,
     "ast_hash": "8d2200b4ff5260084cde9269d11baf2c",
     "semantic_hash": ""
   },
   "crates/barnacle-data/src/extract/mod.rs": {
-    "mtime": 1789670528.6870046,
+    "mtime": 1789670528.8244927,
     "ast_hash": "9ad9d541831cbacde4f6413483d8a3c7",
     "semantic_hash": ""
   },
   "crates/barnacle-data/src/extract/paper.rs": {
-    "mtime": 1789670528.6870632,
+    "mtime": 1789670528.8245542,
     "ast_hash": "3300bd31a54dde69e0983f4cd6b91eb3",
     "semantic_hash": ""
   },
   "crates/barnacle-data/src/extract/params.rs": {
-    "mtime": 1789670528.6871226,
+    "mtime": 1789670528.8246074,
     "ast_hash": "aababd3085569aba2b23bacd8b20b8a0",
     "semantic_hash": ""
   },
   "crates/barnacle-data/src/extract/silhouette.rs": {
-    "mtime": 1789670528.6871893,
+    "mtime": 1789670528.8246605,
     "ast_hash": "0e3bdc05b4ee086052a09fb702e4447d",
     "semantic_hash": ""
   },
   "crates/barnacle-data/src/extract/translations.rs": {
-    "mtime": 1789670528.6872566,
+    "mtime": 1789670528.8247154,
     "ast_hash": "88b273b56f5c86a3c927355c8d96f4af",
     "semantic_hash": ""
   },
   "crates/barnacle-data/src/lib.rs": {
-    "mtime": 1789670528.6873124,
+    "mtime": 1789670528.824765,
     "ast_hash": "5b8244baf20fd31ec528a6bea9f66363",
     "semantic_hash": ""
   },
   "crates/barnacle-data/src/main.rs": {
-    "mtime": 1789670528.6873996,
+    "mtime": 1789670528.8248565,
     "ast_hash": "7a345f7859942c578a7732f76ae6f05e",
     "semantic_hash": ""
   },
   "crates/barnacle-data/src/report.rs": {
-    "mtime": 1789670528.6874611,
+    "mtime": 1789670528.8249283,
     "ast_hash": "0e69f4148e6ed2672d0baa0ad19958f8",
     "semantic_hash": ""
   },
   "crates/barnacle-data/src/store.rs": {
-    "mtime": 1789670528.6875556,
+    "mtime": 1789670528.8250122,
     "ast_hash": "a130a2de6ff3d2df0c0b96305e8f7a75",
     "semantic_hash": ""
   },
   "crates/barnacle-data/src/versions.rs": {
-    "mtime": 1789670528.6876216,
+    "mtime": 1789670528.8250697,
     "ast_hash": "6d58ea378320776b65cea89aca1fb764",
     "semantic_hash": ""
   },
   "crates/barnacle-data/tests/build_catalog.rs": {
-    "mtime": 1789670528.6877332,
+    "mtime": 1789670528.8251724,
     "ast_hash": "c428e2030b5d1acc10b65584e6b0bc44",
     "semantic_hash": ""
   },
   "crates/barnacle-data/tests/download.rs": {
-    "mtime": 1789670528.6878133,
+    "mtime": 1789670528.8252494,
     "ast_hash": "d28d2efb3c966c30ab68bd59818e7e06",
     "semantic_hash": ""
   },
   "crates/barnacle-data/tests/fixtures/make_fixtures.py": {
-    "mtime": 1789670528.6881618,
+    "mtime": 1789670528.8255267,
     "ast_hash": "6bbaf79cc2f5bd319e7a89bd0c57da02",
     "semantic_hash": ""
   },
   "crates/barnacle-data/tests/paper.rs": {
-    "mtime": 1789670528.6885984,
+    "mtime": 1789670528.8258982,
     "ast_hash": "4618d18a4b06999dcb59b8d97a4d311b",
     "semantic_hash": ""
   },
   "crates/barnacle-data/tests/real_build.rs": {
-    "mtime": 1789670528.6886559,
+    "mtime": 1789670528.825954,
     "ast_hash": "7a3aa30bd2ea5cc864e5d4d3ac14e668",
     "semantic_hash": ""
   },
   "crates/barnacle-data/tests/report.rs": {
-    "mtime": 1789670528.6887128,
+    "mtime": 1789670528.8260052,
     "ast_hash": "f63759077a1ef48a69c42e178fa6048b",
     "semantic_hash": ""
   },
   "crates/barnacle-data/tests/silhouette.rs": {
-    "mtime": 1789670528.68878,
+    "mtime": 1789670528.8260558,
     "ast_hash": "a75598c12ef1bf0ef3361ccbd89f5262",
     "semantic_hash": ""
   },
   "crates/barnacle-data/tests/store.rs": {
-    "mtime": 1789670528.6888752,
+    "mtime": 1789670528.8261273,
     "ast_hash": "22441ae34747544289787eed6b467fc2",
     "semantic_hash": ""
   },
   "crates/barnacle-data/tests/translations.rs": {
-    "mtime": 1789670528.6889477,
+    "mtime": 1789670528.8261945,
     "ast_hash": "cef17523ced8b516ff69931e54cc2a61",
     "semantic_hash": ""
   },
   "crates/barnacle-data/tests/versions.rs": {
-    "mtime": 1789670528.6890085,
+    "mtime": 1789670528.826246,
     "ast_hash": "09004bb99bda1c981fd08e54087a572f",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/src/book.rs": {
-    "mtime": 1789670528.6895146,
+    "mtime": 1789670528.826423,
     "ast_hash": "db710963d05bff30e1611f2503d4d1fa",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/src/draw.rs": {
-    "mtime": 1789670528.6895897,
+    "mtime": 1789670528.8264847,
     "ast_hash": "317f4bc0fa971564bf14cc25a3da20c3",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/src/error.rs": {
-    "mtime": 1789670528.6896555,
+    "mtime": 1789670528.8265438,
     "ast_hash": "d03d6d9d06ee0812967e7a332eedb4e9",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/src/ids.rs": {
-    "mtime": 1789670528.689711,
+    "mtime": 1789670528.8265872,
     "ast_hash": "cb58bea42055e27cfd7ac937be71b453",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/src/lib.rs": {
-    "mtime": 1789670528.689766,
+    "mtime": 1789670528.8266337,
     "ast_hash": "4c950bf0a2eaf5577a9efb14dbf8580f",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/src/options.rs": {
-    "mtime": 1789670528.6898286,
+    "mtime": 1789670528.8266826,
     "ast_hash": "2e1cd9cd792aafc29adb72833c5cac3f",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/src/recent.rs": {
-    "mtime": 1789670528.6899025,
+    "mtime": 1789670528.8267288,
     "ast_hash": "67e828f5aa84e80af7fb3c22f8d55232",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/src/reveal.rs": {
-    "mtime": 1789670528.6899645,
+    "mtime": 1789670528.8267925,
     "ast_hash": "38e66ec82fd9f9f119a5e54c2e9a94b9",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/src/round.rs": {
-    "mtime": 1789670528.6900325,
+    "mtime": 1789670528.8268564,
     "ast_hash": "b24b6a305f71f8ebe1d0c2f9973669a4",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/tests/answers.rs": {
-    "mtime": 1789670528.6901634,
+    "mtime": 1789670528.826956,
     "ast_hash": "ac6abdc0c5a9d29cdf515b2adfbc8ab6",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/tests/common/mod.rs": {
-    "mtime": 1789670528.6902556,
+    "mtime": 1789670528.8270319,
     "ast_hash": "54d1ebbdf7c8ab8136168fe8d8c69211",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/tests/draw.rs": {
-    "mtime": 1789670528.6903317,
+    "mtime": 1789670528.8271077,
     "ast_hash": "95feedc760157e0a57b0ccab8fbe4871",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/tests/ids.rs": {
-    "mtime": 1789670528.69039,
+    "mtime": 1789670528.8271737,
     "ast_hash": "50980b8b3195871842f07164a6eab0fa",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/tests/options.rs": {
-    "mtime": 1789670528.6904464,
+    "mtime": 1789670528.8272433,
     "ast_hash": "fe762405fc7781d8f720c4af943eb88c",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/tests/pool.rs": {
-    "mtime": 1789670528.6905055,
+    "mtime": 1789670528.827309,
     "ast_hash": "a5198da4407da0399625bfee5f0e7e56",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/tests/real_catalog.rs": {
-    "mtime": 1789670528.6905768,
+    "mtime": 1789670528.8273764,
     "ast_hash": "69ecd82fa2f7bc0d98ccdb4203556672",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/tests/recent.rs": {
-    "mtime": 1789670528.6908581,
+    "mtime": 1789670528.8274448,
     "ast_hash": "cbd1bc4b7b37b9c1ccc8566e2f1a4a60",
     "semantic_hash": ""
   },
   "crates/barnacle-guess/tests/round.rs": {
-    "mtime": 1789670528.6909835,
+    "mtime": 1789670528.8275228,
     "ast_hash": "afe9169136b1aa98a09a048b82808c9c",
     "semantic_hash": ""
   },
   "migrations/0001_guess_solves.down.sql": {
-    "mtime": 1789670528.6933985,
+    "mtime": 1789670528.8294165,
     "ast_hash": "0cd989fc892f6b8e44add2e0d6c16228",
     "semantic_hash": ""
   },
   "migrations/0001_guess_solves.sql": {
-    "mtime": 1789670528.693459,
+    "mtime": 1789670528.8294687,
     "ast_hash": "3521369e5674a65fc3ec88fecb2da08b",
     "semantic_hash": ""
   },
   ".github/dependabot.yml": {
-    "mtime": 1789670528.6815786,
+    "mtime": 1789670528.8205078,
     "ast_hash": "bafde2e470cfd6355105f52eeab251d4",
     "semantic_hash": ""
   },
   ".github/workflows/ci.yml": {
-    "mtime": 1789670528.6817179,
+    "mtime": 1789670528.8206108,
     "ast_hash": "fc18beeca81e8be20419509bfc14d30a",
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1789670528.6829982,
+    "mtime": 1789670528.8210683,
     "ast_hash": "5a12f0657679205e93949652a1d52091",
     "semantic_hash": ""
   },
   "docs/research/2026-09-16-bot-names.md": {
-    "mtime": 1789670528.691314,
+    "mtime": 1789670528.827842,
     "ast_hash": "7ccf839525cff205fdbe88f390cf34eb",
     "semantic_hash": ""
   },
   "docs/research/2026-09-16-track-silhouette-audit.md": {
-    "mtime": 1789670528.6914139,
+    "mtime": 1789670528.8279355,
     "ast_hash": "c60bc2a69524022c8c86dee6efe0869d",
     "semantic_hash": ""
   },
   "docs/specs/2026-09-16-silhouette-game-spec.md": {
-    "mtime": 1789670528.691624,
+    "mtime": 1789670528.8281264,
     "ast_hash": "131d0b4fa16a52faa6b8713704e5ed6e",
     "semantic_hash": ""
   },
   "docs/superpowers/plans/2026-09-16-barnacle-bot.md": {
-    "mtime": 1789670528.6920414,
+    "mtime": 1789670528.8284464,
     "ast_hash": "a84f67e12ec64991b1ac81d7c99b738c",
     "semantic_hash": ""
   },
   "docs/superpowers/plans/2026-09-16-barnacle-data-pipeline.md": {
-    "mtime": 1789670528.6924584,
+    "mtime": 1789670528.828696,
     "ast_hash": "c62c45d5cfaad517fdd0841a84a334cb",
     "semantic_hash": ""
   },
   "docs/superpowers/plans/2026-09-16-barnacle-game-rules.md": {
-    "mtime": 1789670528.6926765,
+    "mtime": 1789670528.828846,
     "ast_hash": "67153a53ec0cb7a9232de866406e4150",
     "semantic_hash": ""
   },
   "docs/superpowers/specs/2026-09-16-barnacle-bot-design.md": {
-    "mtime": 1789670528.692859,
+    "mtime": 1789670528.8291473,
     "ast_hash": "8d90885767c39f49895bf4b817441055",
     "semantic_hash": ""
   },
   "docs/superpowers/specs/2026-09-17-cb-attendance-design.md": {
-    "mtime": 1789670528.6932683,
+    "mtime": 1789670528.8293061,
     "ast_hash": "930db7640504c860b7a8c03c02bfcf64",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/attendance.rs": {
-    "mtime": 1789671098.5750232,
+    "mtime": 1789672154.807152,
     "ast_hash": "0c7c489a2797111ebc911d2fe080f787",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/attendance_store.rs": {
-    "mtime": 1789671228.3568053,
+    "mtime": 1789672154.8072736,
     "ast_hash": "3b457ce93bb872e944173b8582e03c1a",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/src/schedule.rs": {
-    "mtime": 1789671205.7996628,
+    "mtime": 1789672154.8075366,
     "ast_hash": "54ead86a71a1d3748b4d648a9c270337",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/attendance.rs": {
-    "mtime": 1789671527.3056386,
+    "mtime": 1789672154.8076775,
     "ast_hash": "8917f51e5efa14f24b6f1491b0d7561b",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/attendance_store.rs": {
-    "mtime": 1789671359.5444293,
+    "mtime": 1789672154.8078723,
     "ast_hash": "0752ac940c9480a26b44ba5815d1d8da",
     "semantic_hash": ""
   },
   "crates/barnacle-bot/tests/schedule.rs": {
-    "mtime": 1789671268.2650523,
+    "mtime": 1789672154.8084044,
     "ast_hash": "b1d97b2293f7cc2f4a1add88cf5e8a5d",
     "semantic_hash": ""
   },
   "migrations/0002_cb_attendance.down.sql": {
-    "mtime": 1789670953.9465966,
+    "mtime": 1789672154.826355,
     "ast_hash": "fc7eda052ed9377170e6da10692eab58",
     "semantic_hash": ""
   },
   "migrations/0002_cb_attendance.sql": {
-    "mtime": 1789670953.9425657,
+    "mtime": 1789672154.8264143,
     "ast_hash": "72c91b9675e2c3855ae9907c0cc555d5",
+    "semantic_hash": ""
+  },
+  "crates/barnacle-bot/src/discord/board.rs": {
+    "mtime": 1789672534.6980088,
+    "ast_hash": "071fec5ea858c3570ac8559c22dca4b4",
     "semantic_hash": ""
   }
 }

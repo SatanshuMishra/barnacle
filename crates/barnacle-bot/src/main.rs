@@ -43,7 +43,14 @@ async fn run(cli: Cli) -> Result<(), AppError> {
     let config = startup::read_config(&cli.config)?;
     let token = startup::read_token(std::env::var("DISCORD_TOKEN").ok())?;
     let loaded = startup::load(&config)?;
-    let solves = startup::open_solves(&config.database).await?;
-    discord::run(token, config.commands, loaded, solves).await?;
+    let stores = startup::open_stores(&config.database).await?;
+    discord::run(
+        token,
+        config.commands,
+        loaded,
+        stores.solves,
+        stores.attendance,
+    )
+    .await?;
     Ok(())
 }
