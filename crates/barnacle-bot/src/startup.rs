@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use barnacle_catalog::Catalog;
 use barnacle_catalog::ShipIndex;
@@ -15,12 +16,19 @@ use barnacle_catalog::store::CatalogRoot;
 use barnacle_catalog::store::SILHOUETTES_DIR;
 use barnacle_guess::RoundOptions;
 use barnacle_guess::ShipBook;
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::sqlite::SqlitePool;
+use sqlx::sqlite::SqlitePoolOptions;
 
+use crate::attendance_store::Attendance;
+use crate::attendance_store::AttendanceError;
 use crate::config::Config;
 use crate::config::ConfigError;
 use crate::lookup::Directory;
 use crate::solves::Solves;
 use crate::solves::SolvesError;
+
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum StartupError {
@@ -69,6 +77,19 @@ pub enum StartupError {
         #[source]
         source: SolvesError,
     },
+    #[error(
+        "the attendance tables are missing from {path}; create them with `sqlite3 {path} < migrations/0002_cb_attendance.sql`"
+    )]
+    Attendance {
+        path: PathBuf,
+        #[source]
+        source: AttendanceError,
+    },
+}
+
+pub struct Stores {
+    pub solves: Solves,
+    pub attendance: Attendance,
 }
 
 pub struct Loaded {
@@ -153,6 +174,36 @@ pub async fn open_solves(path: &Path) -> Result<Solves, StartupError> {
             path: path.to_owned(),
             source,
         })
+}
+
+pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
+    let database = |source| StartupError::Database {
+        path: path.to_owned(),
+        source,
+    };
+    let pool = open_pool(path)
+        .await
+        .map_err(|source| database(SolvesError::Database(source)))?;
+    let solves = Solves::with_pool(pool.clone()).await.map_err(database)?;
+    let attendance =
+        Attendance::with_pool(pool)
+            .await
+            .map_err(|source| StartupError::Attendance {
+                path: path.to_owned(),
+                source,
+            })?;
+    Ok(Stores { solves, attendance })
+}
+
+async fn open_pool(path: &Path) -> Result<SqlitePool, sqlx::Error> {
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(false)
+        .busy_timeout(BUSY_TIMEOUT);
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
 }
 
 pub fn describe(error: &(dyn std::error::Error + 'static)) -> String {

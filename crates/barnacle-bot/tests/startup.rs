@@ -11,6 +11,8 @@ use common::catalog;
 use common::curation_text;
 use common::index;
 use common::ship;
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::sqlite::SqlitePoolOptions;
 
 const NAME: &str = "15.8.0_13187581_r4";
 
@@ -149,6 +151,38 @@ async fn a_missing_database_explains_how_to_create_it() {
     assert!(matches!(error, StartupError::Database { .. }));
     assert!(error.to_string().contains(&format!(
         "sqlite3 {} < migrations/0001_guess_solves.sql",
+        layout.config.database.display()
+    )));
+}
+
+#[tokio::test]
+async fn a_missing_attendance_table_is_named_with_its_migration() {
+    let layout = layout(
+        &yamato_catalog(),
+        &["PJSB018", "PJSB019"],
+        &curation_text(""),
+    );
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&layout.config.database)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    sqlx::raw_sql(common::MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    let error = startup::open_stores(&layout.config.database)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, StartupError::Attendance { .. }));
+    assert!(error.to_string().contains(&format!(
+        "sqlite3 {} < migrations/0002_cb_attendance.sql",
         layout.config.database.display()
     )));
 }

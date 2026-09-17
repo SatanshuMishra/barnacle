@@ -42,7 +42,13 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
    sqlite3 data/barnacle.sqlite3 < migrations/0001_guess_solves.sql
    ```
 
-7. Start the bot. Reading the token with `read` keeps it out of your shell history:
+7. Create the Clan Battle attendance tables once:
+
+   ```bash
+   sqlite3 data/barnacle.sqlite3 < migrations/0002_cb_attendance.sql
+   ```
+
+8. Start the bot. Reading the token with `read` keeps it out of your shell history:
 
    ```bash
    read -rs DISCORD_TOKEN && export DISCORD_TOKEN && cargo run --release -p barnacle-bot
@@ -57,6 +63,17 @@ Before it connects, the bot checks the catalog, the curation file, the silhouett
 - To delete a player's data, stop the bot and run `sqlite3 data/barnacle.sqlite3 "DELETE FROM guess_solves WHERE user_id = <user ID>;"`.
 - To back the data up, copy the file while the bot is stopped.
 - `migrations/0001_guess_solves.down.sql` removes the table and every stored solve with it. Back the file up before running it.
+
+For Clan Battle sign-ups, the same database also stores each player's Discord user ID together with their Attending or Nope answer for every hour of every night, still with no names.
+
+- To delete one player's Clan Battle answers, stop the bot and run `sqlite3 data/barnacle.sqlite3 "DELETE FROM cb_marks WHERE user_id = <user ID>;"`.
+- `migrations/0002_cb_attendance.down.sql` removes every season, post and answer. Back the file up before running it.
+
+## Clan Battle sign-ups
+
+Create a channel that only the bot can post in, and run `/cb season start` there. The bot needs View Channel, Send Messages, Embed Links and Read Message History in that channel, all of which the invite link above already grants.
+
+CB nights run 23:30-03:30 UTC on Wednesday, Thursday, Saturday and Sunday. For each night, the bot posts the sign-up message 24 hours ahead, closes it when the night starts, and deletes it 30 minutes after it ends. The bot has to be running for each of these steps: if it is down when a night's start passes, that night gets no sign-up post.
 
 ## License
 

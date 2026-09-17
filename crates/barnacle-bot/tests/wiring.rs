@@ -1,9 +1,13 @@
 mod common;
 
+use barnacle_bot::attendance::Target;
+use barnacle_bot::schedule::Hour;
+use barnacle_bot::schedule::Night;
 use barnacle_bot::solves::Ranking;
 use barnacle_bot::wiring;
 use barnacle_bot::wiring::ChannelAccess;
 use barnacle_bot::wiring::LeaderboardRequest;
+use barnacle_bot::wiring::SignupClick;
 use barnacle_bot::wiring::SortChoice;
 use barnacle_guess::RoundOptions;
 use common::tier;
@@ -104,5 +108,125 @@ fn leaderboard_options_default_to_ten_players_by_most_wins() {
             ranking: Ranking::MostWins,
             size: 5
         }
+    );
+}
+
+const BUTTON_ID_LIMIT: usize = 100;
+
+fn night() -> Night {
+    Night::parse("2026-09-23").unwrap()
+}
+
+fn targets() -> impl Iterator<Item = Target> {
+    std::iter::once(Target::All).chain(Hour::ALL.map(Target::One))
+}
+
+#[test]
+fn signup_ids_round_trip() {
+    assert_eq!(
+        wiring::signup_tag_prefix(3, night()),
+        "barnacle-cb:3:2026-09-23:"
+    );
+    assert_eq!(
+        wiring::signup_button_id(3, night(), Target::All, true),
+        "barnacle-cb:3:2026-09-23:all:in"
+    );
+    assert_eq!(
+        wiring::signup_button_id(3, night(), Target::One(Hour::ALL[3]), false),
+        "barnacle-cb:3:2026-09-23:4:out"
+    );
+    for target in targets() {
+        for attending in [true, false] {
+            let id = wiring::signup_button_id(3, night(), target, attending);
+            assert!(
+                id.starts_with(&wiring::signup_tag_prefix(3, night())),
+                "{id}"
+            );
+            assert_eq!(
+                wiring::signup_click(&id),
+                Some(SignupClick {
+                    season: 3,
+                    night: night(),
+                    target,
+                    attending
+                }),
+                "{id}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_malformed_signup_id_is_rejected() {
+    for id in [
+        "",
+        "barnacle-cb:",
+        "barnacle-cb:3:2026-09-23:all",
+        "barnacle-cb:3:2026-09-23:all:in:1",
+        "barnacle-cb:3:2026-09-23:5:in",
+        "barnacle-cb:3:2026-09-23:0:in",
+        "barnacle-cb:3:2026-09-23:hour:in",
+        "barnacle-cb:3:2026-09-23:all:maybe",
+        "barnacle-cb:3:2026-09-23:all:IN",
+        "barnacle-cb:0:2026-09-23:all:in",
+        "barnacle-cb:-3:2026-09-23:all:in",
+        "barnacle-cb:+3:2026-09-23:all:in",
+        "barnacle-cb:003:2026-09-23:all:in",
+        "barnacle-cb:three:2026-09-23:all:in",
+        "barnacle-cb:3::all:in",
+        "barnacle-cb:3:2026-09-25:all:in",
+        "barnacle-cb:3:2026-9-23:all:in",
+        "barnacle-cb:3:2026-09-31:all:in",
+        "barnacle-cancel:3:2026-09-23:all:in",
+    ] {
+        assert_eq!(wiring::signup_click(id), None, "{id}");
+    }
+    assert_eq!(
+        wiring::round_number("barnacle-cb:3:2026-09-23:all:in"),
+        None
+    );
+}
+
+#[test]
+fn the_longest_signup_id_fits_discords_limit() {
+    for target in targets() {
+        for attending in [true, false] {
+            let id = wiring::signup_button_id(i64::MAX, night(), target, attending);
+            assert!(id.chars().count() < BUTTON_ID_LIMIT, "{id}");
+            assert_eq!(
+                wiring::signup_click(&id).map(|click| click.season),
+                Some(i64::MAX),
+                "{id}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_signup_channel_needs_four_permissions() {
+    let full = ChannelAccess {
+        view_channel: true,
+        send_messages: true,
+        embed_links: true,
+        attach_files: false,
+        read_message_history: true,
+        in_thread: false,
+    };
+    assert!(wiring::missing_signup_permissions(full).is_empty());
+    assert_eq!(
+        wiring::missing_signup_permissions(ChannelAccess::default()),
+        [
+            "View Channel",
+            "Send Messages",
+            "Embed Links",
+            "Read Message History"
+        ]
+    );
+    assert_eq!(
+        wiring::missing_signup_permissions(ChannelAccess {
+            embed_links: false,
+            ..full
+        }),
+        ["Embed Links"]
     );
 }

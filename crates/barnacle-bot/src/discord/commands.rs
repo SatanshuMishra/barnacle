@@ -11,10 +11,16 @@ use super::Context;
 use super::Data;
 use super::Error;
 use super::announcer::cancel_row;
+use crate::attendance_store::CreateOutcome;
+use crate::attendance_store::EndOutcome;
+use crate::attendance_store::NewSeason;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::Place;
 use crate::info;
+use crate::schedule::Night;
+use crate::schedule::Range;
+use crate::schedule::parse_day;
 use crate::solves::Standing;
 use crate::table::StartOutcome;
 use crate::text;
@@ -52,6 +58,34 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
         poise::Command {
             description: Some("About Barnacle and its ship data".into()),
             ..about()
+        },
+        poise::Command {
+            description: Some("Clan Battle sign-ups".into()),
+            subcommands: vec![poise::Command {
+                description: Some("Clan Battle seasons for this server".into()),
+                subcommands: vec![
+                    poise::Command {
+                        description: Some(
+                            "Set up a season and post its sign-ups in this channel".into(),
+                        ),
+                        ..season_start()
+                    },
+                    poise::Command {
+                        description: Some(
+                            "List this server's seasons and when each posts next".into(),
+                        ),
+                        ..season_show()
+                    },
+                    poise::Command {
+                        description: Some("Stop posting sign-ups for a season".into()),
+                        ..season_end()
+                    },
+                ],
+                subcommand_required: true,
+                ..season()
+            }],
+            subcommand_required: true,
+            ..cb()
         },
     ]
 }
@@ -113,6 +147,23 @@ fn channel_access(ctx: Context<'_>) -> ChannelAccess {
             in_thread,
         },
     )
+}
+
+fn channel_kind(ctx: Context<'_>) -> Option<serenity::ChannelType> {
+    match ctx {
+        poise::Context::Application(app) => {
+            app.interaction.channel.as_ref().map(|channel| channel.kind)
+        }
+        poise::Context::Prefix(_) => None,
+    }
+}
+
+fn next_post_at(range: Range, now_unix: i64) -> Option<i64> {
+    range
+        .due_night(now_unix)
+        .is_none()
+        .then(|| range.next_night(now_unix).map(Night::post_at_unix))
+        .flatten()
 }
 
 async fn remove_round_post(ctx: Context<'_>) {
@@ -391,4 +442,123 @@ async fn about(ctx: Context<'_>) -> Result<(), Error> {
         ));
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
     Ok(())
+}
+
+#[poise::command(slash_command, guild_only, default_member_permissions = "MANAGE_GUILD")]
+async fn cb(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
+}
+
+#[poise::command(slash_command)]
+async fn season(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
+}
+
+#[poise::command(slash_command, rename = "start")]
+async fn season_start(
+    ctx: Context<'_>,
+    #[description = "Which CB season this is, for example 35"]
+    #[min = 1]
+    number: u32,
+    #[description = "First CB day, as 2026-09-16"] first_day: String,
+    #[description = "Last CB day, as 2026-11-05"] last_day: String,
+    #[description = "The season's codename, for example Komodo Dragon"]
+    #[max_length = 100]
+    codename: Option<String>,
+) -> Result<(), Error> {
+    let Some(place) = place(ctx) else {
+        return Ok(());
+    };
+    if channel_kind(ctx) != Some(serenity::ChannelType::Text) {
+        return private(ctx, text::RUN_IN_TEXT_CHANNEL).await;
+    }
+    let missing = wiring::missing_signup_permissions(channel_access(ctx));
+    if !missing.is_empty() {
+        return private(ctx, text::missing_permissions(&missing)).await;
+    }
+    let (Some(first), Some(last)) = (parse_day(&first_day), parse_day(&last_day)) else {
+        return private(ctx, text::DATE_FORMAT).await;
+    };
+    let Some(range) = Range::new(first, last) else {
+        return private(ctx, text::LAST_DAY_BEFORE_FIRST).await;
+    };
+    let now_unix = super::now_unix();
+    let nights_left = range.nights_left(now_unix);
+    if nights_left == 0 {
+        return private(ctx, text::NO_NIGHTS_LEFT).await;
+    }
+    let Some(created_at_ms) = super::now_ms() else {
+        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+    };
+    let new = NewSeason {
+        guild: place.guild,
+        channel: place.channel,
+        number,
+        codename,
+        range,
+        created_by: UserId::new(ctx.author().id.get()),
+        created_at_ms,
+    };
+    match ctx.data().signups.store().create_season(&new).await? {
+        CreateOutcome::Created(season) => {
+            let started = text::season_started(&season, nights_left, next_post_at(range, now_unix));
+            private(ctx, started).await
+        }
+        CreateOutcome::NumberTaken => private(ctx, text::season_number_taken(number)).await,
+        CreateOutcome::Overlaps(other) => private(ctx, text::season_overlaps(&other)).await,
+    }
+}
+
+#[poise::command(slash_command, rename = "show")]
+async fn season_show(ctx: Context<'_>) -> Result<(), Error> {
+    let Some(place) = place(ctx) else {
+        return Ok(());
+    };
+    let now_unix = super::now_unix();
+    let seasons = ctx.data().signups.store().seasons_in(place.guild).await?;
+    let lines: Vec<String> = seasons
+        .iter()
+        .filter(|season| {
+            season
+                .range
+                .last_moment_unix()
+                .is_some_and(|last| last > now_unix)
+        })
+        .map(|season| {
+            text::season_line(
+                season,
+                season.range.nights_left(now_unix),
+                next_post_at(season.range, now_unix),
+            )
+        })
+        .collect();
+    if lines.is_empty() {
+        return private(ctx, text::NO_SEASON_HERE).await;
+    }
+    private(ctx, text::season_list(&lines)).await
+}
+
+#[poise::command(slash_command, rename = "end")]
+async fn season_end(
+    ctx: Context<'_>,
+    #[description = "Which season to stop posting, for example 35"]
+    #[min = 1]
+    number: u32,
+) -> Result<(), Error> {
+    let Some(place) = place(ctx) else {
+        return Ok(());
+    };
+    let outcome = ctx
+        .data()
+        .signups
+        .store()
+        .end_season(place.guild, number)
+        .await?;
+    match outcome {
+        EndOutcome::Removed => private(ctx, text::season_removed(number)).await,
+        EndOutcome::Shortened { last_day } => {
+            private(ctx, text::season_shortened(number, last_day)).await
+        }
+        EndOutcome::NotFound => private(ctx, text::season_not_found(number)).await,
+    }
 }
