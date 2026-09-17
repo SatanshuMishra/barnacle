@@ -4826,5 +4826,5 @@ The workspace now has 209 tests.
 
 Two more steps for the owner's live checklist in Task 10:
 
-12. **A wrong server ID.** Put a server ID the bot has not joined into `commands.guilds` and start the bot. It exits with "Discord refused to register the commands; ...". Put the right ID back afterwards.
+12. **A wrong server ID.** Put a server ID the bot has not joined into `commands.guilds` and start the bot. It exits with "Discord refused to register the commands", followed by a "caused by:" line carrying Discord's reason. Put the right ID back afterwards.
 13. **A missing permission.** In one channel, deny the bot Read Message History and run `/guess` there. The reply is a private "I need these permissions in this channel to run a round: Read Message History." Restore the permission afterwards.
