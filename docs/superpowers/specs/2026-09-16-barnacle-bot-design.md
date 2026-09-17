@@ -364,7 +364,7 @@ The README gains these steps:
 1. Create an application in the Discord Developer Portal and add a bot user, then copy its token into `DISCORD_TOKEN`.
 2. Turn on **Message Content Intent** under Privileged Gateway Intents. Below 10,000 users no review is needed - [Discord Privileged Intent Review](https://github.com/discord/discord-api-docs/blob/main/developers/gateway/getting-started-with-privileged-intent-review.mdx).
 3. Turn off **Public Bot**, so only the owner can add the bot to servers. Discord's OAuth2 docs: "If unchecked, only you can add the bot to guilds" - [Discord OAuth2](https://github.com/discord/discord-api-docs/blob/main/developers/topics/oauth2.mdx).
-4. Invite the bot with the `bot` and `applications.commands` scopes and the View Channels, Send Messages, Embed Links and Attach Files permissions.
+4. Invite the bot with the `bot` and `applications.commands` scopes and the View Channels, Send Messages, Embed Links, Attach Files and Read Message History permissions. Replying to a message needs Read Message History - [Discord Create Message](https://github.com/discord/discord-api-docs/blob/main/developers/resources/message.mdx) (Limitations).
 5. Create `barnacle.toml` from the example, listing the test server's ID.
 6. Apply the migration (8.2), then run `cargo run --release -p barnacle-bot`.
 
@@ -377,3 +377,20 @@ The README gains these steps:
 | The Developer Portal setting that makes a bot private | Public Bot, see section 11 |
 | `U.S.S.R.` as the game's label for `Russia` | Confirmed from the game's strings, see 7.2 |
 | A command description without a doc comment | poise 0.7's `command` macro reads a command's description only from doc comments, which this project does not write, so each command is built as a value and its `description` field is set in code (`poise-0.7.0` `Command::description`, `poise_macros-0.7.0/src/command/mod.rs:209-210`) |
+
+## 13. Changes after the code review (2026-09-16)
+
+An independent review of the implemented branch found the problems below. The code on `feat/discord-bot` now works as this table says, and where it differs from sections 5-11, this table wins.
+
+| Finding | Change |
+|---|---|
+| A command registration failure inside poise's setup left the bot online but dead: poise only prints setup errors, and every event then waits for user data that never arrives (`poise-0.7.0/src/builtins/mod.rs:37-39`, `framework/mod.rs:113-120`) | Commands are registered over HTTP after the startup checks and before the gateway connects: `get_current_application_info`, `set_application_id`, then registration. A failure ends the program with `RunError::Registration`. |
+| A Discord call that never returned kept its channel locked | The round post, the hint and the ending post each get 5 seconds (`table::ANNOUNCE_TIMEOUT`). A round post that times out stores no round (`StartOutcome::PostTimedOut`). Hints and endings that time out are logged, and the round goes on. |
+| A Cancel click was answered only after the ending was posted, which could miss Discord's 3-second limit | The click is deferred privately first. On success the private response is deleted. On a refusal or an ended round it is edited to the refusal text. |
+| A round post whose message ID could not be read stayed public with no round behind it | The post is deleted, and the error goes to the command's error handler. |
+| `/guess` worked in channels where the bot could not read messages or reply, and replies need Read Message History | `/guess` first checks the bot's own permissions in the channel (the interaction's `app_permissions`). If any is missing, it replies privately: "I need these permissions in this channel to run a round: <names>." The invite list in section 11 adds Read Message History. |
+| Hint and timed-out posts allowed pings | Every bot post sets empty allowed mentions, except the win reply, which may ping the replied-to player |
+| A deleted winning message made the win reply fail | The reply reference sets `fail_if_not_exists(false)`, so the reply is sent as a plain message instead |
+| A TOML error echoed the config file's text, which would print a token typed there by mistake | `ConfigError::Toml` keeps only the parser's message and byte span |
+| The win-and-cancel race test could not interleave the two | The test store yields once before recording, so a cancel can run in the middle of a win |
+| When two correct answers arrive in one gateway read, serenity starts a task per event (`serenity-0.12.5/src/client/dispatch.rs:80`), and tokio can run the later task first, so the later answer could win (owner decision `01M2PPVFMSZ033FKXJC2MQZYEE`) | The first correct answer opens a 250 ms settle window (`table::SETTLE_WINDOW`) instead of ending the round. The round keeps the correct answer with the smallest message ID as its leader. When the window closes, the round ends with the leader, and the win is recorded and announced. While a round has a leader, the timer posts neither the hint nor the timeout, a Cancel click gets "That round has already ended.", and `/guess` still reports the channel as busy. The win reply comes 250 ms after the first correct answer. |

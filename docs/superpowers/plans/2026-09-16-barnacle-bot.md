@@ -4798,3 +4798,24 @@ The executor cannot run this step: it needs the owner's Discord application and 
   - The startup checks in Task 9 printed the expected messages, and all nine commits went through with their pathspecs, leaving a clean tree.
   - The final tree matched the prototype file for file and passed all 196 tests.
 - **Not checked by the prototype:** anything that needs Discord itself, which is the owner's checklist in Task 10.
+
+## Changes after the code review (2026-09-16)
+
+An independent review of the executed branch found one high, four medium and four low problems, recorded in design section 13. The branch now differs from the task listings above in these places, and the branch is the reference.
+
+| Change | Commit |
+|---|---|
+| Commands are registered over HTTP before the gateway connects, and a failure ends the program (`RunError::Registration`) | `c38791a` |
+| The round post, hint and ending post each get 5 seconds (`ANNOUNCE_TIMEOUT`, `StartOutcome::PostTimedOut`). `FakeDiscord::hanging` and `FakeStore::pausing` were added, and the race test now interleaves. | `ad68b5c` |
+| Cancel clicks are deferred privately before the round ends | `ad39e9a` |
+| `/guess` checks the bot's channel permissions (`wiring::ChannelAccess`, `wiring::missing_permissions`, `text::missing_permissions`). An untracked round post is deleted. The README invite list adds Read Message History. | `0fc4d6f` |
+| Bot posts allow no pings, and the win reply survives a deleted guess | `f5d1007` |
+| Config errors keep only the parser's message and span | `4220ee7` |
+| The first correct answer opens a 250 ms settle window (`SETTLE_WINDOW`), and the earliest message ID wins. `hear` now takes `self: &Arc<Self>`. Round tests wait out the window. | `09eda6e` |
+
+New tests (11): two stuck-call tests and six settle-window tests in `table`, and one each in `wiring`, `text` and `config`. The workspace now has 207 tests.
+
+Two more steps for the owner's live checklist in Task 10:
+
+12. **A wrong server ID.** Put a server ID the bot has not joined into `commands.guilds` and start the bot. It exits with "Discord refused to register the commands; ...". Put the right ID back afterwards.
+13. **A missing permission.** In one channel, deny the bot Read Message History and run `/guess` there. The reply is a private "I need these permissions in this channel to run a round: Read Message History." Restore the permission afterwards.
