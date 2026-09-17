@@ -2,6 +2,8 @@ mod common;
 
 use std::time::Duration;
 
+use barnacle_bot::solves::Ranking;
+use barnacle_bot::solves::Standing;
 use barnacle_bot::text;
 use barnacle_catalog::Nation;
 use barnacle_catalog::ShipClass;
@@ -213,4 +215,53 @@ fn missing_permissions_are_listed_in_one_sentence() {
         text::missing_permissions(&["Attach Files", "Read Message History"]),
         "I need these permissions in this channel to run a round: Attach Files, Read Message History."
     );
+}
+
+fn standing(wins: u64, best_millis: u64) -> Standing {
+    Standing {
+        user: UserId::new(7),
+        wins,
+        best: Duration::from_millis(best_millis),
+    }
+}
+
+#[test]
+fn a_standing_line_gives_rank_name_wins_and_best_time() {
+    assert_eq!(
+        text::standing_line(1, "Dana", &standing(12, 3_412)),
+        "**1.** Dana · 12 wins · best 3.412 s"
+    );
+    assert_eq!(
+        text::standing_line(50, "*Lee*", &standing(1, 900)),
+        "**50.** \\*Lee\\* · 1 win · best 0.900 s"
+    );
+}
+
+#[test]
+fn a_long_name_is_cut_to_discords_name_length_before_escaping() {
+    assert_eq!(
+        text::standing_line(3, &"_".repeat(40), &standing(2, 1_000)),
+        format!("**3.** {} · 2 wins · best 1.000 s", "\\_".repeat(32))
+    );
+}
+
+#[test]
+fn a_short_board_is_one_page() {
+    let lines = ["first".to_owned(), "second".to_owned()];
+    assert_eq!(text::leaderboard_pages(&lines), ["first\nsecond"]);
+    assert!(text::leaderboard_pages(&[]).is_empty());
+}
+
+#[test]
+fn a_full_board_of_long_names_is_split_within_discords_limits() {
+    let lines: Vec<String> = (1..=50)
+        .map(|rank| text::standing_line(rank, &"\u{1D400}*".repeat(16), &standing(999_999, 30_000)))
+        .collect();
+    let pages = text::leaderboard_pages(&lines);
+    let length = |page: &String| page.encode_utf16().count();
+    assert!(pages.len() > 1);
+    assert!(pages.iter().all(|page| length(page) <= text::EMBED_DESCRIPTION_LIMIT));
+    let title = text::leaderboard_title(Ranking::FastestTime).encode_utf16().count();
+    assert!(title + pages.iter().map(length).sum::<usize>() <= text::MESSAGE_EMBEDS_LIMIT);
+    assert_eq!(pages.join("\n"), lines.join("\n"));
 }

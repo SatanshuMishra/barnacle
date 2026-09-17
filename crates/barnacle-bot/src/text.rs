@@ -10,6 +10,9 @@ use barnacle_guess::RoundOptions;
 use barnacle_guess::Timing;
 use barnacle_guess::UserId;
 
+use crate::solves::Ranking;
+use crate::solves::Standing;
+
 pub const EMBED_COLOUR: u32 = 0x2E6F6B;
 pub const ROUND_TITLE: &str = "Name that ship";
 pub const ROUND_DESCRIPTION: &str = "First correct answer in chat wins.";
@@ -30,7 +33,11 @@ pub const ABOUT_SUMMARY: &str = "Barnacle is a Discord bot for World of Warships
 pub const SOURCE_URL: &str = "https://github.com/SatanshuMishra/barnacle";
 pub const WARGAMING_NOTICE: &str = "Barnacle is an unofficial fan project. It is not affiliated with, endorsed by, or supported by Wargaming. World of Warships, its ship names and its ship silhouettes are trademarks or copyrighted works of Wargaming.";
 pub const FIELD_LIMIT: usize = 1024;
+pub const EMBED_DESCRIPTION_LIMIT: usize = 4096;
+pub const MESSAGE_EMBEDS_LIMIT: usize = 6000;
+pub const FORMER_MEMBER: &str = "Former member";
 
+const NAME_LIMIT: usize = 32;
 const NUMERALS: [&str; 11] = [
     "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI",
 ];
@@ -159,6 +166,46 @@ pub fn best_time(best: Option<Duration>) -> String {
     best.map(seconds).unwrap_or_else(|| NO_WINS_HERE.to_owned())
 }
 
+pub fn leaderboard_title(ranking: Ranking) -> &'static str {
+    match ranking {
+        Ranking::MostWins => "Most wins in this server",
+        Ranking::FastestTime => "Fastest times in this server",
+    }
+}
+
+pub fn standing_line(rank: usize, name: &str, standing: &Standing) -> String {
+    let name: String = name.chars().take(NAME_LIMIT).collect();
+    let wins = match standing.wins {
+        1 => "1 win".to_owned(),
+        wins => format!("{wins} wins"),
+    };
+    format!(
+        "**{rank}.** {} · {wins} · best {}",
+        escape(&name),
+        seconds(standing.best)
+    )
+}
+
+pub fn leaderboard_pages(lines: &[String]) -> Vec<String> {
+    lines.iter().fold(Vec::new(), |pages: Vec<String>, line| {
+        match pages.split_last() {
+            Some((last, earlier))
+                if discord_length(last) + 1 + discord_length(line) <= EMBED_DESCRIPTION_LIMIT =>
+            {
+                earlier
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(format!("{last}\n{line}")))
+                    .collect()
+            }
+            _ => pages
+                .into_iter()
+                .chain(std::iter::once(line.clone()))
+                .collect(),
+        }
+    })
+}
+
 pub fn about(provenance: &Provenance, catalog_name: &str, bot_version: &str) -> String {
     let commit: String = provenance.data_repo_commit.chars().take(7).collect();
     [
@@ -193,6 +240,10 @@ pub fn listing(items: &[String], limit: usize) -> String {
         })
         .find(|text| text.chars().count() <= limit)
         .unwrap_or_default()
+}
+
+fn discord_length(text: &str) -> usize {
+    text.encode_utf16().count()
 }
 
 fn sentence(text: &str) -> String {
