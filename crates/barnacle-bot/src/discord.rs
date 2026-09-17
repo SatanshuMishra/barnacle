@@ -10,6 +10,7 @@ use barnacle_catalog::store::CatalogRoot;
 use barnacle_guess::Timing;
 use poise::serenity_prelude as serenity;
 use rand::rngs::StdRng;
+use tokio::sync::Semaphore;
 
 use crate::config::CommandScope;
 use crate::lookup::Directory;
@@ -18,6 +19,8 @@ use crate::startup::Loaded;
 use crate::table::Table;
 
 pub use announcer::DiscordAnnouncer;
+
+const MEMBER_LOOKUPS_AT_ONCE: usize = 5;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Context<'a> = poise::Context<'a, Data, Error>;
@@ -29,6 +32,7 @@ pub struct Data {
     pub catalog: Catalog,
     pub curated: Curated,
     pub directory: Directory,
+    pub member_lookups: Arc<Semaphore>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -82,6 +86,7 @@ pub async fn run(
                     catalog: loaded.catalog,
                     curated: loaded.curated,
                     directory: loaded.directory,
+                    member_lookups: Arc::new(Semaphore::new(MEMBER_LOOKUPS_AT_ONCE)),
                 })
             })
         })

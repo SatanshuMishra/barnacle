@@ -290,8 +290,12 @@ async fn member_names(
         .enumerate()
         .map(|(position, standing)| {
             let http = Arc::clone(&ctx.serenity_context().http);
+            let permits = Arc::clone(&ctx.data().member_lookups);
             let user = serenity::UserId::new(standing.user.get());
-            async move { (position, http.get_member(guild, user).await) }
+            async move {
+                let _permit = permits.acquire_owned().await;
+                (position, http.get_member(guild, user).await)
+            }
         })
         .collect();
     let found: BTreeMap<usize, Result<serenity::Member, serenity::Error>> =
