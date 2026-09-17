@@ -1,0 +1,11 @@
+[package]
+name = "barnacle-guess"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+barnacle-catalog.workspace = true
+rand.workspace = true
+thiserror.workspace = true
