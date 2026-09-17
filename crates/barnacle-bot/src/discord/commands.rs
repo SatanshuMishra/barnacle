@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
 use barnacle_guess::Draw;
 use barnacle_guess::Snowflake;
 use barnacle_guess::Timing;
@@ -12,10 +15,12 @@ use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::Place;
 use crate::info;
+use crate::solves::Standing;
 use crate::table::StartOutcome;
 use crate::text;
 use crate::wiring;
 use crate::wiring::ChannelAccess;
+use crate::wiring::SortChoice;
 
 const SILHOUETTE_FILE: &str = "silhouette.png";
 
@@ -37,6 +42,10 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
         poise::Command {
             description: Some("Show rounds won and best time in this server".into()),
             ..profile()
+        },
+        poise::Command {
+            description: Some("List the top players in this server".into()),
+            ..leaderboard()
         },
         poise::Command {
             description: Some("About Barnacle and its ship data".into()),
@@ -257,6 +266,99 @@ async fn profile(
         .field(text::ROUNDS_WON, stats.wins.to_string(), true)
         .field(text::BEST_TIME, text::best_time(stats.best), true);
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    Ok(())
+}
+
+fn departed(error: &serenity::Error) -> bool {
+    matches!(
+        error,
+        serenity::Error::Http(serenity::HttpError::UnsuccessfulRequest(response))
+            if response.status_code == serenity::StatusCode::NOT_FOUND
+    )
+}
+
+async fn member_names(
+    ctx: Context<'_>,
+    guild: GuildId,
+    standings: &[Standing],
+) -> Result<Vec<String>, Error> {
+    let guild = serenity::GuildId::new(guild.get());
+    let lookups: tokio::task::JoinSet<_> = standings
+        .iter()
+        .enumerate()
+        .map(|(position, standing)| {
+            let http = Arc::clone(&ctx.serenity_context().http);
+            let user = serenity::UserId::new(standing.user.get());
+            async move { (position, http.get_member(guild, user).await) }
+        })
+        .collect();
+    let found: BTreeMap<usize, Result<serenity::Member, serenity::Error>> =
+        lookups.join_all().await.into_iter().collect();
+    found
+        .into_values()
+        .map(|lookup| match lookup {
+            Ok(member) => Ok(member.display_name().to_owned()),
+            Err(error) if departed(&error) => Ok(text::FORMER_MEMBER.to_owned()),
+            Err(error) => Err(error.into()),
+        })
+        .collect()
+}
+
+#[poise::command(slash_command, guild_only)]
+async fn leaderboard(
+    ctx: Context<'_>,
+    #[description = "Order by most wins or fastest time (default: most wins)"] sort: Option<
+        SortChoice,
+    >,
+    #[description = "How many players to list (default 10)"]
+    #[choices(5, 10, 15, 20, 25, 30, 35, 40, 45, 50)]
+    limit: Option<u32>,
+) -> Result<(), Error> {
+    let Some(place) = place(ctx) else {
+        return Ok(());
+    };
+    let poise::Context::Application(app) = ctx else {
+        return Ok(());
+    };
+    let request = wiring::leaderboard_request(sort, limit);
+    ctx.defer().await?;
+    let standings = ctx
+        .data()
+        .table
+        .solves()
+        .leaderboard(place.guild, request.ranking, request.size)
+        .await?;
+    let names = member_names(ctx, place.guild, &standings).await?;
+    let lines: Vec<String> = standings
+        .iter()
+        .zip(&names)
+        .zip(1..)
+        .map(|((standing, name), rank)| text::standing_line(rank, name, standing))
+        .collect();
+    let pages = match text::leaderboard_pages(&lines) {
+        pages if pages.is_empty() => vec![text::NO_WINS_HERE.to_owned()],
+        pages => pages,
+    };
+    let embeds = pages
+        .into_iter()
+        .enumerate()
+        .map(|(position, page)| {
+            let embed = serenity::CreateEmbed::new()
+                .colour(text::EMBED_COLOUR)
+                .description(page);
+            if position == 0 {
+                embed.title(text::leaderboard_title(request.ranking))
+            } else {
+                embed
+            }
+        })
+        .collect();
+    app.interaction
+        .edit_response(
+            ctx.http(),
+            serenity::EditInteractionResponse::new().embeds(embeds),
+        )
+        .await?;
     Ok(())
 }
 
