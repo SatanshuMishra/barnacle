@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -18,8 +19,11 @@ pub enum CommandScope {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("the config is not valid")]
-    Toml(#[from] toml::de::Error),
+    #[error("the config is not valid: {message}")]
+    Toml {
+        message: String,
+        span: Option<Range<usize>>,
+    },
     #[error("commands.scope is \"guilds\" but commands.guilds lists no server")]
     NoGuilds,
     #[error("commands.guilds contains 0, which is not a Discord server ID")]
@@ -56,7 +60,10 @@ enum ScopeName {
 
 impl Config {
     pub fn from_toml(text: &str) -> Result<Self, ConfigError> {
-        let file: ConfigFile = toml::from_str(text)?;
+        let file: ConfigFile = toml::from_str(text).map_err(|error| ConfigError::Toml {
+            message: error.message().to_owned(),
+            span: error.span(),
+        })?;
         let commands = match (file.commands.scope, file.commands.guilds) {
             (ScopeName::Global, None) => CommandScope::Global,
             (ScopeName::Global, Some(_)) => return Err(ConfigError::GuildsWithGlobal),

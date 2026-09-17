@@ -72,11 +72,11 @@ fn unknown_keys_and_a_missing_scope_are_refused() {
     ));
     assert!(matches!(
         Config::from_toml("token = \"abc\"\n[commands]\nscope = \"global\"\n"),
-        Err(ConfigError::Toml(_))
+        Err(ConfigError::Toml { .. })
     ));
     assert!(matches!(
         Config::from_toml("data_dir = \"data\"\n"),
-        Err(ConfigError::Toml(_))
+        Err(ConfigError::Toml { .. })
     ));
 }
 
@@ -86,4 +86,23 @@ fn the_example_config_only_lacks_server_ids() {
         Config::from_toml(include_str!("../../../barnacle.example.toml")),
         Err(ConfigError::NoGuilds)
     ));
+}
+
+#[test]
+fn a_config_error_never_repeats_what_the_file_contains() {
+    for text in [
+        "discord_token = \"MTIz.not-a-real-token\"\n\n[commands]\nscope = \"global\"\n",
+        "discord_token = MTIz.not-a-real-token\n",
+    ] {
+        let error = Config::from_toml(text).unwrap_err();
+        assert!(matches!(error, ConfigError::Toml { .. }));
+        let chain: String = std::iter::successors(
+            Some(&error as &(dyn std::error::Error + 'static)),
+            |cause| cause.source(),
+        )
+        .map(|cause| cause.to_string())
+        .collect();
+        assert!(!chain.contains("not-a-real-token"));
+        assert!(!format!("{error:?}").contains("not-a-real-token"));
+    }
 }
