@@ -10,3 +10,7 @@ pub fn index(value: &str) -> ShipIndex {
 pub fn tier(value: u32) -> Tier {
     Tier::new(value).unwrap()
 }
+
+pub fn numbered(number: usize) -> ShipIndex {
+    index(&format!("PXSX{number:03}"))
+}
