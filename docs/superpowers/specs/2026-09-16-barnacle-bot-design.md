@@ -259,7 +259,7 @@ Times always show three decimals, followed by " s".
 ### 7.4 `/profile [user]` (public)
 
 - **Whose profile:** the named user, or the person who ran the command when no user is named.
-- **Contents:** for this server only, "Rounds won" and "Best time", or "No rounds won here yet." when there are none.
+- **Contents:** for this server only, "Rounds won here" and "Best time here", or "No rounds won here yet." when there are none. The fields were first labelled "Rounds won" and "Best time". After the live checklist, the owner had them relabelled so the card itself says it counts only the server the command runs in.
 
 ### 7.5 `/about` (public)
 

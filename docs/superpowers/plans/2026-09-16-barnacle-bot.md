@@ -4831,7 +4831,7 @@ Two more steps for the owner's live checklist in Task 10:
 
 ## Changes after the live checklist (2026-09-16)
 
-The owner ran the live checklist and then asked for `/leaderboard`, described in design section 14. The workspace now has 218 tests. Four more steps for the owner's live checklist:
+The owner ran the live checklist and then asked for `/leaderboard`, described in design section 14. The `/profile` fields now read "Rounds won here" and "Best time here" (design 7.4), so item 8 shows those labels. The workspace now has 218 tests. Four more steps for the owner's live checklist:
 
 14. **The default board.** In a server with wins, run `/leaderboard`. The title is "Most wins in this server", and each row reads like "**1.** Name · 12 wins · best 3.412 s", ordered by wins. The numbers match `/profile` for the same players in the same server.
 15. **Fastest times.** Run `/leaderboard sort:Fastest time`. The title is "Fastest times in this server", and the rows are ordered by best time.
