@@ -11,12 +11,17 @@ use super::Context;
 use super::Data;
 use super::Error;
 use super::announcer::cancel_row;
+use crate::attendance::ClearScope;
 use crate::attendance_store::CreateOutcome;
+use crate::attendance_store::EditOutcome;
 use crate::attendance_store::EndOutcome;
 use crate::attendance_store::NewSeason;
+use crate::attendance_store::Season;
+use crate::attendance_store::SeasonChange;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::Place;
+use crate::ids::RoleId;
 use crate::info;
 use crate::schedule::Night;
 use crate::schedule::Range;
@@ -72,13 +77,23 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
                     },
                     poise::Command {
                         description: Some(
+                            "Change a season's number, dates, codename or ping role".into(),
+                        ),
+                        ..season_edit()
+                    },
+                    poise::Command {
+                        description: Some("Move a season's sign-up posts to this channel".into()),
+                        ..season_move()
+                    },
+                    poise::Command {
+                        description: Some("End a season now and clear its sign-up posts".into()),
+                        ..season_end()
+                    },
+                    poise::Command {
+                        description: Some(
                             "List this server's seasons and when each posts next".into(),
                         ),
                         ..season_show()
-                    },
-                    poise::Command {
-                        description: Some("Stop posting sign-ups for a season".into()),
-                        ..season_end()
                     },
                 ],
                 subcommand_required: true,
@@ -465,6 +480,7 @@ async fn season_start(
     #[description = "The season's codename, for example Komodo Dragon"]
     #[max_length = 100]
     codename: Option<String>,
+    #[description = "Role to ping when a sign-up is posted"] ping_role: Option<serenity::RoleId>,
 ) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -498,6 +514,7 @@ async fn season_start(
         range,
         created_by: UserId::new(ctx.author().id.get()),
         created_at_ms,
+        ping_role: ping_role.map(|role| RoleId::new(role.get())),
     };
     match ctx.data().signups.store().create_season(&new).await? {
         CreateOutcome::Created(season) => {
@@ -538,26 +555,162 @@ async fn season_show(ctx: Context<'_>) -> Result<(), Error> {
     private(ctx, text::season_list(&lines)).await
 }
 
-#[poise::command(slash_command, rename = "end")]
-async fn season_end(
+#[poise::command(slash_command, rename = "edit")]
+async fn season_edit(
     ctx: Context<'_>,
-    #[description = "Which season to stop posting, for example 35"]
+    #[description = "Which season to change, for example 35"]
+    #[min = 1]
+    number: u32,
+    #[description = "Change the season number"]
+    #[min = 1]
+    new_number: Option<u32>,
+    #[description = "New first CB day, as 2026-09-16"] first_day: Option<String>,
+    #[description = "New last CB day, as 2026-11-05"] last_day: Option<String>,
+    #[description = "New codename, for example Komodo Dragon"]
+    #[max_length = 100]
+    codename: Option<String>,
+    #[description = "Role to ping when a sign-up is posted"] ping_role: Option<serenity::RoleId>,
+    #[description = "Remove the codename"] clear_codename: Option<bool>,
+    #[description = "Stop pinging a role"] clear_ping_role: Option<bool>,
+) -> Result<(), Error> {
+    let Some(place) = place(ctx) else {
+        return Ok(());
+    };
+    let clearing_codename = clear_codename.unwrap_or(false);
+    let clearing_ping_role = clear_ping_role.unwrap_or(false);
+    let named = new_number.is_some()
+        || first_day.is_some()
+        || last_day.is_some()
+        || codename.is_some()
+        || ping_role.is_some()
+        || clearing_codename
+        || clearing_ping_role;
+    if !named {
+        return private(ctx, text::NOTHING_TO_CHANGE).await;
+    }
+    if codename.is_some() && clearing_codename {
+        return private(ctx, text::CODENAME_BOTH_WAYS).await;
+    }
+    if ping_role.is_some() && clearing_ping_role {
+        return private(ctx, text::PING_BOTH_WAYS).await;
+    }
+    let first = first_day.as_deref().map(parse_day);
+    let last = last_day.as_deref().map(parse_day);
+    if matches!(first, Some(None)) || matches!(last, Some(None)) {
+        return private(ctx, text::DATE_FORMAT).await;
+    }
+    let change = SeasonChange {
+        number: new_number,
+        first_day: first.flatten(),
+        last_day: last.flatten(),
+        codename: if clearing_codename {
+            Some(None)
+        } else {
+            codename.map(Some)
+        },
+        ping_role: if clearing_ping_role {
+            Some(None)
+        } else {
+            ping_role.map(|role| Some(RoleId::new(role.get())))
+        },
+    };
+    let now_unix = super::now_unix();
+    let outcome = ctx
+        .data()
+        .signups
+        .store()
+        .edit_season(place.guild, number, &change)
+        .await?;
+    match outcome {
+        EditOutcome::Edited { after, .. } => {
+            let signups = &ctx.data().signups;
+            let cleared = signups
+                .clear_posts(&after, ClearScope::OutsideRange, now_unix)
+                .await;
+            signups.refresh_posts(&after, now_unix).await;
+            let edited = text::season_edited(
+                &after,
+                after.range.nights_left(now_unix),
+                next_post_at(after.range, now_unix),
+                cleared.touched,
+            );
+            private(ctx, edited).await
+        }
+        EditOutcome::NumberTaken => {
+            private(ctx, text::season_number_taken(new_number.unwrap_or(number))).await
+        }
+        EditOutcome::Overlaps(other) => private(ctx, text::season_overlaps(&other)).await,
+        EditOutcome::BadRange => private(ctx, text::LAST_DAY_BEFORE_FIRST).await,
+        EditOutcome::NotFound => private(ctx, text::season_not_found(number)).await,
+    }
+}
+
+#[poise::command(slash_command, rename = "move")]
+async fn season_move(
+    ctx: Context<'_>,
+    #[description = "Which season to move here, for example 35"]
     #[min = 1]
     number: u32,
 ) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
     };
-    let outcome = ctx
-        .data()
-        .signups
+    if channel_kind(ctx) != Some(serenity::ChannelType::Text) {
+        return private(ctx, text::RUN_IN_TEXT_CHANNEL).await;
+    }
+    let missing = wiring::missing_signup_permissions(channel_access(ctx));
+    if !missing.is_empty() {
+        return private(ctx, text::missing_permissions(&missing)).await;
+    }
+    let signups = &ctx.data().signups;
+    let Some(season) = signups.store().live_season(place.guild, number).await? else {
+        return private(ctx, text::season_not_found(number)).await;
+    };
+    if season.channel == place.channel {
+        return private(ctx, text::season_already_here(number)).await;
+    }
+    let now_unix = super::now_unix();
+    let cleared = signups
+        .clear_posts(&season, ClearScope::All, now_unix)
+        .await;
+    signups
         .store()
-        .end_season(place.guild, number)
+        .move_season(season.id, place.channel)
+        .await?;
+    let after = Season {
+        channel: place.channel,
+        ..season
+    };
+    let moved = text::season_moved(&after, cleared.touched, next_post_at(after.range, now_unix));
+    private(ctx, moved).await
+}
+
+#[poise::command(slash_command, rename = "end")]
+async fn season_end(
+    ctx: Context<'_>,
+    #[description = "Which season to end, for example 35"]
+    #[min = 1]
+    number: u32,
+) -> Result<(), Error> {
+    let Some(place) = place(ctx) else {
+        return Ok(());
+    };
+    let Some(now_ms) = super::now_ms() else {
+        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+    };
+    let now_unix = super::now_unix();
+    let signups = &ctx.data().signups;
+    let outcome = signups
+        .store()
+        .end_season(place.guild, number, now_ms)
         .await?;
     match outcome {
         EndOutcome::Removed => private(ctx, text::season_removed(number)).await,
-        EndOutcome::Shortened { last_day } => {
-            private(ctx, text::season_shortened(number, last_day)).await
+        EndOutcome::Ended { season } => {
+            let cleared = signups
+                .clear_posts(&season, ClearScope::All, now_unix)
+                .await;
+            private(ctx, text::season_ended(number, cleared.touched)).await
         }
         EndOutcome::NotFound => private(ctx, text::season_not_found(number)).await,
     }
