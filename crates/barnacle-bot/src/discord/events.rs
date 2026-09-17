@@ -54,7 +54,7 @@ pub async fn handle(
                 .and_then(|member| member.permissions)
                 .is_some_and(|permissions| permissions.manage_messages());
             let serenity_context = framework.serenity_context;
-            component.defer_ephemeral(serenity_context).await?;
+            component.defer(serenity_context).await?;
             let outcome = data
                 .table
                 .cancel(
@@ -65,12 +65,12 @@ pub async fn handle(
                 )
                 .await;
             match outcome {
-                CancelOutcome::Cancelled => component.delete_response(serenity_context).await?,
+                CancelOutcome::Cancelled => {}
                 CancelOutcome::Refused => {
-                    private_edit(serenity_context, component, text::CANCEL_REFUSED).await?;
+                    private_followup(serenity_context, component, text::CANCEL_REFUSED).await?;
                 }
                 CancelOutcome::AlreadyOver => {
-                    private_edit(serenity_context, component, text::ROUND_OVER).await?;
+                    private_followup(serenity_context, component, text::ROUND_OVER).await?;
                 }
             }
             Ok(())
@@ -79,15 +79,17 @@ pub async fn handle(
     }
 }
 
-async fn private_edit(
+async fn private_followup(
     serenity_context: &serenity::Context,
     component: &serenity::ComponentInteraction,
     content: &str,
 ) -> Result<(), serenity::Error> {
     component
-        .edit_response(
+        .create_followup(
             serenity_context,
-            serenity::EditInteractionResponse::new().content(content),
+            serenity::CreateInteractionResponseFollowup::new()
+                .content(content)
+                .ephemeral(true),
         )
         .await?;
     Ok(())
