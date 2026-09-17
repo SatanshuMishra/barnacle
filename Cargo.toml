@@ -20,6 +20,7 @@ clap = { version = "4", features = ["derive"] }
 deunicode = "1"
 gettext = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
+jiff = { version = "0.2", default-features = false, features = ["std"] }
 poise = "0.7"
 rand = "0.10"
 serde = { version = "1", features = ["derive"] }

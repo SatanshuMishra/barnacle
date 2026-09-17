@@ -1,7 +1,15 @@
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering::SeqCst;
 use std::time::Duration;
 
+use barnacle_bot::attendance::Board;
+use barnacle_bot::attendance::BoardError;
+use barnacle_bot::attendance::PostTag;
+use barnacle_bot::attendance::Removal;
+use barnacle_bot::attendance::SignupView;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::Place;
@@ -19,6 +27,7 @@ use barnacle_guess::Snowflake;
 use barnacle_guess::Timing;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use tokio::sync::Semaphore;
 use tokio::time::Instant;
 
 use super::catalog;
@@ -185,4 +194,189 @@ pub fn table_with(
         Timing::STANDARD,
         StdRng::seed_from_u64(7),
     )
+}
+
+const FIRST_MESSAGE: u64 = 1_000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoardCall {
+    Sent {
+        channel: ChannelId,
+        view: SignupView,
+    },
+    Looked {
+        channel: ChannelId,
+        tag: PostTag,
+    },
+    Edited {
+        channel: ChannelId,
+        message: Snowflake,
+        view: SignupView,
+    },
+    Deleted {
+        channel: ChannelId,
+        message: Snowflake,
+    },
+}
+
+struct BoardState {
+    calls: Mutex<Vec<BoardCall>>,
+    planted: Mutex<Vec<(PostTag, Snowflake)>>,
+    next_message: AtomicU64,
+    fail_sends: AtomicBool,
+    fail_edits: AtomicBool,
+    report_gone: AtomicBool,
+    gate: Semaphore,
+}
+
+#[derive(Clone)]
+pub struct FakeBoard {
+    state: Arc<BoardState>,
+}
+
+impl FakeBoard {
+    pub fn new() -> Self {
+        let board = Self::gated();
+        board.open_edits();
+        board
+    }
+
+    pub fn gated() -> Self {
+        Self {
+            state: Arc::new(BoardState {
+                calls: Mutex::new(Vec::new()),
+                planted: Mutex::new(Vec::new()),
+                next_message: AtomicU64::new(FIRST_MESSAGE),
+                fail_sends: AtomicBool::new(false),
+                fail_edits: AtomicBool::new(false),
+                report_gone: AtomicBool::new(false),
+                gate: Semaphore::new(0),
+            }),
+        }
+    }
+
+    pub fn open_edits(&self) {
+        self.state.gate.close();
+    }
+
+    pub fn fail_sends(&self, fail: bool) {
+        self.state.fail_sends.store(fail, SeqCst);
+    }
+
+    pub fn fail_edits(&self, fail: bool) {
+        self.state.fail_edits.store(fail, SeqCst);
+    }
+
+    pub fn report_gone(&self, gone: bool) {
+        self.state.report_gone.store(gone, SeqCst);
+    }
+
+    pub fn plant(&self, tag: PostTag, message: Snowflake) {
+        self.state.planted.lock().unwrap().push((tag, message));
+    }
+
+    pub fn calls(&self) -> Vec<BoardCall> {
+        self.state.calls.lock().unwrap().clone()
+    }
+
+    pub fn sends(&self) -> Vec<SignupView> {
+        self.calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                BoardCall::Sent { view, .. } => Some(view),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn edits(&self) -> Vec<SignupView> {
+        self.calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                BoardCall::Edited { view, .. } => Some(view),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn deletes(&self) -> Vec<Snowflake> {
+        self.calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                BoardCall::Deleted { message, .. } => Some(message),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn record(&self, call: BoardCall) {
+        self.state.calls.lock().unwrap().push(call);
+    }
+}
+
+impl Default for FakeBoard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Board for FakeBoard {
+    async fn send_post(
+        &self,
+        channel: ChannelId,
+        view: &SignupView,
+    ) -> Result<Snowflake, BoardError> {
+        self.record(BoardCall::Sent {
+            channel,
+            view: view.clone(),
+        });
+        if self.state.fail_sends.load(SeqCst) {
+            return Err(BoardError("the fake board refuses every send".into()));
+        }
+        Ok(Snowflake::new(self.state.next_message.fetch_add(1, SeqCst)))
+    }
+
+    async fn find_post(
+        &self,
+        channel: ChannelId,
+        tag: PostTag,
+    ) -> Result<Option<Snowflake>, BoardError> {
+        self.record(BoardCall::Looked { channel, tag });
+        let planted = self.state.planted.lock().unwrap();
+        Ok(planted
+            .iter()
+            .find(|(placed, _)| *placed == tag)
+            .map(|(_, message)| *message))
+    }
+
+    async fn edit_post(
+        &self,
+        channel: ChannelId,
+        message: Snowflake,
+        view: &SignupView,
+    ) -> Result<(), BoardError> {
+        let _held = self.state.gate.acquire().await;
+        self.record(BoardCall::Edited {
+            channel,
+            message,
+            view: view.clone(),
+        });
+        if self.state.fail_edits.load(SeqCst) {
+            return Err(BoardError("the fake board refuses every edit".into()));
+        }
+        Ok(())
+    }
+
+    async fn delete_post(
+        &self,
+        channel: ChannelId,
+        message: Snowflake,
+    ) -> Result<Removal, BoardError> {
+        self.record(BoardCall::Deleted { channel, message });
+        if self.state.report_gone.load(SeqCst) {
+            Ok(Removal::Gone)
+        } else {
+            Ok(Removal::Deleted)
+        }
+    }
 }

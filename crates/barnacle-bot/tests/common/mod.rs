@@ -2,6 +2,7 @@
 
 pub mod fakes;
 
+use barnacle_bot::attendance_store::Attendance;
 use barnacle_bot::solves::Solves;
 use barnacle_catalog::Catalog;
 use barnacle_catalog::Nation;
@@ -20,6 +21,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 
 pub const MIGRATION: &str = include_str!("../../../../migrations/0001_guess_solves.sql");
+pub const CB_MIGRATION: &str = include_str!("../../../../migrations/0002_cb_attendance.sql");
 pub const BUILD: u32 = 13187581;
 
 pub fn index(value: &str) -> ShipIndex {
@@ -103,4 +105,16 @@ pub async fn migrated_pool() -> SqlitePool {
 
 pub async fn solves() -> Solves {
     Solves::with_pool(migrated_pool().await).await.unwrap()
+}
+
+pub async fn attendance_pool() -> SqlitePool {
+    let pool = memory_pool().await;
+    sqlx::raw_sql(CB_MIGRATION).execute(&pool).await.unwrap();
+    pool
+}
+
+pub async fn attendance() -> Attendance {
+    Attendance::with_pool(attendance_pool().await)
+        .await
+        .unwrap()
 }
