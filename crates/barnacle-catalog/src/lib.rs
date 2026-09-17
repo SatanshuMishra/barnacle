@@ -2,6 +2,7 @@ pub mod curation;
 pub mod diff;
 pub mod model;
 pub mod names;
+pub mod store;
 
 pub use model::Catalog;
 pub use model::ModelError;
