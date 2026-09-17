@@ -6,6 +6,10 @@ use std::path::PathBuf;
 
 use barnacle_catalog::Catalog;
 use barnacle_catalog::Provenance;
+use barnacle_catalog::store::CATALOG_FILE;
+use barnacle_catalog::store::CURRENT_FILE;
+use barnacle_catalog::store::CatalogDirError;
+use barnacle_catalog::store::CatalogRoot;
 use wows_data_mgr::Dump;
 use wows_data_mgr::builds::BuildEntry;
 use wows_data_mgr::download_repo;
@@ -15,8 +19,6 @@ use crate::extract::ExtractError;
 use crate::extract::build_catalog;
 use crate::versions;
 
-const CATALOG_FILE: &str = "catalog.json";
-const CURRENT_FILE: &str = "current";
 const ENGLISH_CATALOG: &str = "translations/en/LC_MESSAGES/global.mo";
 const RAW_GITHUB: &str = "https://raw.githubusercontent.com/";
 const STAGING_PREFIX: &str = ".staging-";
@@ -135,6 +137,15 @@ pub fn check_build_dir(entry: &BuildEntry) -> Result<(), StoreError> {
     }
 }
 
+impl From<CatalogDirError> for StoreError {
+    fn from(error: CatalogDirError) -> Self {
+        match error {
+            CatalogDirError::Io { path, source } => Self::Io { path, source },
+            CatalogDirError::Json { path, source } => Self::CatalogJson { path, source },
+        }
+    }
+}
+
 pub struct DataDir {
     root: PathBuf,
 }
@@ -152,17 +163,16 @@ impl DataDir {
         self.root.join("catalog")
     }
 
+    pub fn catalog_root(&self) -> CatalogRoot {
+        CatalogRoot::new(self.catalogs())
+    }
+
     pub fn catalog_dir(&self, name: &str) -> PathBuf {
-        self.catalogs().join(name)
+        self.catalog_root().dir(name)
     }
 
     pub fn current(&self) -> Result<Option<String>, StoreError> {
-        let path = self.catalogs().join(CURRENT_FILE);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Ok(Some(text.trim().to_owned())),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
-            Err(source) => Err(StoreError::Io { path, source }),
-        }
+        Ok(self.catalog_root().current()?)
     }
 
     pub fn set_current(&self, name: &str) -> Result<(), StoreError> {
@@ -261,9 +271,7 @@ impl DataDir {
     }
 
     pub fn load(&self, name: &str) -> Result<Catalog, StoreError> {
-        let path = self.catalog_dir(name).join(CATALOG_FILE);
-        let text = std::fs::read_to_string(&path).map_err(io_error(path.clone()))?;
-        Catalog::from_json(&text).map_err(|source| StoreError::CatalogJson { path, source })
+        Ok(self.catalog_root().load(name)?)
     }
 }
 

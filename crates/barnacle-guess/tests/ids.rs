@@ -16,6 +16,14 @@ fn reads_the_timestamp_of_discords_documented_example_id() {
 }
 
 #[test]
+fn converts_discords_documented_example_id_to_unix_time() {
+    assert_eq!(
+        Snowflake::new(175_928_847_299_117_063).unix_millis(),
+        1_462_015_105_796
+    );
+}
+
+#[test]
 fn elapsed_time_is_the_difference_between_the_two_timestamps() {
     assert_eq!(
         at(1_000, 4_095).elapsed_until(at(13_345, 0)),

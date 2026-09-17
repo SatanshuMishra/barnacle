@@ -16,7 +16,7 @@ Barnacle will grow beyond this game, so the game is the first module of a genera
 
 The toolkit is Rust-only, so a Rust bot calls it directly. When a toolkit release changes an API, the bot's build fails at the exact call site rather than drifting silently at runtime. The cost is slower iteration on Discord UI code and a heavier CI build.
 
-Discord library: `poise` on top of `serenity`. `poise` 0.7.0 was released 2026-09-06 under MIT and `serenity` 0.12.5 under ISC ([crates.io](https://crates.io/crates/poise), [crates.io](https://crates.io/crates/serenity)). Whether `poise` 0.7 targets `serenity` 0.12 is **unverified**; check the docs through Context7 before implementation starts.
+Discord library: `poise` on top of `serenity`. `poise` 0.7.0 was released 2026-09-06 under MIT and `serenity` 0.12.5 under ISC ([crates.io](https://crates.io/crates/poise), [crates.io](https://crates.io/crates/serenity)). `poise` 0.7.0 requires `serenity` `^0.12.5`, which is the newest serenity release ([crates.io](https://crates.io/api/v1/crates/poise/0.7.0/dependencies), checked 2026-09-16).
 
 ### 2.2 Hosting: local (decided)
 
@@ -228,6 +228,8 @@ Romanization stays even with English-only answers, because some English names co
 
 ## 6. Bot (`barnacle-bot`)
 
+The detailed design is `docs/superpowers/specs/2026-09-16-barnacle-bot-design.md`.
+
 - **Commands:** `/guess` (section 5), `/ship info <ship>` (R14), `/profile` (R10), `/about` (catalog provenance and Wargaming's non-affiliation notice).
 - **Channel lock (R3):** an in-memory map from channel ID to active round, enough for one process. The game module must not depend on it being in memory, which fixes D6 by design.
 - **Persistence (R10):** a local SQLite file with one `guess_solves` table: user ID, server ID, ship index, time taken in milliseconds, solved-at timestamp. The migration SQL is authored as a file and applied by a person, per this project's rules.
@@ -301,6 +303,7 @@ Steps 1-3 and the first catalog are planned in detail in `docs/superpowers/plans
 | Q7 | Which ship groups are allowed in 15.8.0? | Decided 2026-09-16: `premium` is allowed (14 owned ships moved there from `special`); `experimental` (6 paper ships) and `coopOnly` (1 copy of Schlieffen) are not |
 | Q8 | Silhouette background? | Decided 2026-09-16: seafoam `#D3E6E1`. WG's own background is parchment `#C8C2B4` and its silhouettes are dark brown `#261D1A`, so the background must be light; seafoam was chosen over parchment and mist as nautical and distinct from WG's look |
 | Q9 | May CC0-1.0 dependencies be used? | Decided 2026-09-16: yes. The `encoding` index crates pulled in by `gettext`, which wowsunpack requires, are CC0-1.0 |
+| Q10 | May CDLA-Permissive-2.0 dependencies be used? | Decided 2026-09-16: yes. `webpki-roots`, the root certificate list that serenity's default TLS backend pulls in, is CDLA-Permissive-2.0 |
 
 ## 11. Licensing
 
@@ -342,6 +345,8 @@ Every dependency must allow Apache-2.0 distribution. CI enforces this with a lic
 | `serenity` | ISC | [crates.io](https://crates.io/crates/serenity) |
 | `sqlx` | MIT OR Apache-2.0 | [crates.io](https://crates.io/crates/sqlx) |
 | `encoding` index crates (via `gettext`) | CC0-1.0 | `cargo deny check licenses` on 2026-09-16 |
+| `webpki-roots` (via `serenity`) | CDLA-Permissive-2.0 | `cargo deny check licenses` on 2026-09-16 |
+| `tracing`, `tracing-subscriber` | MIT | [crates.io](https://crates.io/crates/tracing), [crates.io](https://crates.io/crates/tracing-subscriber) |
 
 ### 11.4 Wargaming's assets and marks
 

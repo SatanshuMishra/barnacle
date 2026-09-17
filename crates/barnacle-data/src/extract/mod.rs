@@ -13,6 +13,7 @@ use barnacle_catalog::Provenance;
 use barnacle_catalog::Ship;
 use barnacle_catalog::ShipIndex;
 use barnacle_catalog::Silhouette;
+use barnacle_catalog::store::SILHOUETTES_DIR;
 use wowsunpack::vfs::VfsError;
 use wowsunpack::vfs::VfsPath;
 
@@ -82,7 +83,7 @@ pub fn build_catalog(inputs: BuildInputs<'_>) -> Result<Catalog, ExtractError> {
         return Err(ExtractError::NoShips);
     }
     let names = translations::EnglishNames::load(inputs.english_mo)?;
-    let silhouettes = inputs.output_dir.join("silhouettes");
+    let silhouettes = inputs.output_dir.join(SILHOUETTES_DIR);
     std::fs::create_dir_all(&silhouettes)?;
 
     let ships = typed

@@ -1,0 +1,24 @@
+[package]
+name = "barnacle-bot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+barnacle-catalog.workspace = true
+barnacle-guess.workspace = true
+clap.workspace = true
+poise.workspace = true
+rand.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "sync", "time"] }
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
