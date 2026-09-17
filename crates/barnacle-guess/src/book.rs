@@ -7,8 +7,14 @@ use barnacle_catalog::ShipIndex;
 use barnacle_catalog::curation::CurationConfig;
 use barnacle_catalog::curation::curate;
 use barnacle_catalog::names::clean_answer;
+use rand::Rng;
+use rand::seq::IndexedRandom;
 
+use crate::draw::Draw;
+use crate::draw::Hint;
+use crate::error::GameError;
 use crate::options::RoundOptions;
+use crate::recent::RecentShips;
 use crate::reveal::Reveal;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +116,34 @@ impl ShipBook {
             .chain(lookalikes)
             .flat_map(|entry| entry.answers.iter().cloned())
             .collect()
+    }
+
+    pub fn draw<R: Rng + ?Sized>(
+        &self,
+        options: &RoundOptions,
+        recent: &RecentShips,
+        rng: &mut R,
+    ) -> Result<Draw, GameError> {
+        let eligible: Vec<(&ShipIndex, &Entry)> = self.eligible(options).collect();
+        let fresh: Vec<(&ShipIndex, &Entry)> = if eligible.len() > RecentShips::LIMIT {
+            eligible
+                .into_iter()
+                .filter(|(index, _)| !recent.contains(index))
+                .collect()
+        } else {
+            eligible
+        };
+        let (index, entry) = fresh.choose(rng).copied().ok_or(GameError::EmptyPool {
+            min_tier: options.min_tier().get(),
+            max_tier: options.max_tier().get(),
+            historical: options.historical(),
+        })?;
+        Ok(Draw {
+            options: *options,
+            answers: self.answers(index, options),
+            hint: Hint::for_ship(&entry.reveal, options),
+            reveal: entry.reveal.clone(),
+        })
     }
 
     fn eligible(&self, options: &RoundOptions) -> impl Iterator<Item = (&ShipIndex, &Entry)> {

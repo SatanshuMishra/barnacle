@@ -7,3 +7,5 @@ license.workspace = true
 
 [dependencies]
 barnacle-catalog.workspace = true
+rand.workspace = true
+thiserror.workspace = true
