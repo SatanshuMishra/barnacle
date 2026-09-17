@@ -23,6 +23,7 @@ use crate::wiring::ChannelAccess;
 use crate::wiring::SortChoice;
 
 const SILHOUETTE_FILE: &str = "silhouette.png";
+const UNKNOWN_MEMBER: isize = 10007;
 
 pub fn all() -> Vec<poise::Command<Data, Error>> {
     vec![
@@ -274,6 +275,7 @@ fn departed(error: &serenity::Error) -> bool {
         error,
         serenity::Error::Http(serenity::HttpError::UnsuccessfulRequest(response))
             if response.status_code == serenity::StatusCode::NOT_FOUND
+                && response.error.code == UNKNOWN_MEMBER
     )
 }
 
