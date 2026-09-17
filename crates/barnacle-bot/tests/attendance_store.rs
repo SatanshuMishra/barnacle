@@ -3,24 +3,29 @@ mod common;
 use barnacle_bot::attendance_store::Attendance;
 use barnacle_bot::attendance_store::AttendanceError;
 use barnacle_bot::attendance_store::CreateOutcome;
+use barnacle_bot::attendance_store::EditOutcome;
 use barnacle_bot::attendance_store::EndOutcome;
 use barnacle_bot::attendance_store::Mark;
 use barnacle_bot::attendance_store::NewSeason;
 use barnacle_bot::attendance_store::PostState;
 use barnacle_bot::attendance_store::Season;
+use barnacle_bot::attendance_store::SeasonChange;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
+use barnacle_bot::ids::RoleId;
 use barnacle_bot::schedule::Hour;
 use barnacle_bot::schedule::Night;
 use barnacle_bot::schedule::Range;
 use barnacle_bot::schedule::parse_day;
 use barnacle_guess::Snowflake;
 use barnacle_guess::UserId;
-use common::attendance;
-use common::attendance_pool;
+use common::CB_MIGRATION;
 use common::memory_pool;
 use jiff::civil::Date;
 use sqlx::sqlite::SqlitePool;
+
+const CB_CONTROLS: &str = include_str!("../../../migrations/0003_cb_season_controls.sql");
+const CLI_DIRECTIVE: &str = ".bail on\n";
 
 const GUILD: GuildId = GuildId::new(1);
 const OTHER_GUILD: GuildId = GuildId::new(2);
@@ -28,7 +33,26 @@ const CHANNEL: ChannelId = ChannelId::new(10);
 const MANAGER: UserId = UserId::new(100);
 const AKI: UserId = UserId::new(200);
 const BOREALIS: UserId = UserId::new(300);
+const CREWMATES: RoleId = RoleId::new(4242);
+const RESERVES: RoleId = RoleId::new(4343);
 const CREATED_AT: u64 = 1_700_000_000_000;
+const ENDED_AT: u64 = 1_700_000_900_000;
+
+async fn attendance_pool() -> SqlitePool {
+    let pool = memory_pool().await;
+    sqlx::raw_sql(CB_MIGRATION).execute(&pool).await.unwrap();
+    sqlx::raw_sql(CB_CONTROLS.trim_start_matches(CLI_DIRECTIVE))
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool
+}
+
+async fn attendance() -> Attendance {
+    Attendance::with_pool(attendance_pool().await)
+        .await
+        .unwrap()
+}
 
 fn day(text: &str) -> Date {
     parse_day(text).unwrap()
@@ -51,6 +75,7 @@ fn proposal(number: u32, first: &str, last: &str) -> NewSeason {
         range: Range::new(day(first), day(last)).unwrap(),
         created_by: MANAGER,
         created_at_ms: CREATED_AT,
+        ping_role: None,
     }
 }
 
@@ -63,6 +88,21 @@ async fn created(store: &Attendance, new: &NewSeason) -> Season {
 
 async fn season_35(store: &Attendance) -> Season {
     created(store, &proposal(35, "2026-09-16", "2026-11-05")).await
+}
+
+async fn pinging_season_35(store: &Attendance) -> Season {
+    let new = NewSeason {
+        ping_role: Some(CREWMATES),
+        ..proposal(35, "2026-09-16", "2026-11-05")
+    };
+    created(store, &new).await
+}
+
+async fn edited(store: &Attendance, number: u32, change: &SeasonChange) -> (Season, Season) {
+    match store.edit_season(GUILD, number, change).await.unwrap() {
+        EditOutcome::Edited { before, after } => (before, after),
+        other => panic!("expected an edited season, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -109,22 +149,34 @@ async fn create_season_rejects_an_overlapping_range() {
 }
 
 #[tokio::test]
+async fn a_season_stores_and_returns_its_ping_role() {
+    let store = attendance().await;
+    let season = pinging_season_35(&store).await;
+    assert_eq!(season.ping_role, Some(CREWMATES));
+    assert_eq!(season.ended_at_ms, None);
+    assert_eq!(store.season(season.id).await.unwrap(), Some(season.clone()));
+    assert_eq!(store.live_season(GUILD, 35).await.unwrap(), Some(season));
+    assert_eq!(store.live_season(GUILD, 36).await.unwrap(), None);
+    assert_eq!(store.live_season(OTHER_GUILD, 35).await.unwrap(), None);
+}
+
+#[tokio::test]
 async fn end_season_removes_a_season_with_no_posts() {
     let store = attendance().await;
     let season = season_35(&store).await;
     assert_eq!(
-        store.end_season(GUILD, 35).await.unwrap(),
+        store.end_season(GUILD, 35, ENDED_AT).await.unwrap(),
         EndOutcome::Removed
     );
     assert_eq!(store.season(season.id).await.unwrap(), None);
     assert_eq!(
-        store.end_season(GUILD, 35).await.unwrap(),
+        store.end_season(GUILD, 35, ENDED_AT).await.unwrap(),
         EndOutcome::NotFound
     );
 }
 
 #[tokio::test]
-async fn end_season_shortens_a_season_that_has_posted() {
+async fn end_season_marks_a_season_that_has_posted() {
     let store = attendance().await;
     let season = season_35(&store).await;
     store
@@ -136,24 +188,296 @@ async fn end_season_shortens_a_season_that_has_posted() {
         )
         .await
         .unwrap();
+    assert_eq!(
+        store.end_season(GUILD, 35, ENDED_AT).await.unwrap(),
+        EndOutcome::Ended {
+            season: season.clone()
+        }
+    );
+    let ended = store.season(season.id).await.unwrap().unwrap();
+    assert_eq!(ended.ended_at_ms, Some(ENDED_AT));
+    assert_eq!(ended.range, season.range);
+    assert_eq!(
+        store.end_season(GUILD, 35, ENDED_AT).await.unwrap(),
+        EndOutcome::NotFound
+    );
+}
+
+#[tokio::test]
+async fn an_ended_season_frees_its_number() {
+    let store = attendance().await;
+    let season = season_35(&store).await;
     store
         .record_post(
             season.id,
-            night("2026-10-01"),
-            Snowflake::new(8),
+            night("2026-09-16"),
+            Snowflake::new(7),
             CREATED_AT,
         )
         .await
         .unwrap();
     assert_eq!(
-        store.end_season(GUILD, 35).await.unwrap(),
-        EndOutcome::Shortened {
-            last_day: day("2026-10-01")
+        store.end_season(GUILD, 35, ENDED_AT).await.unwrap(),
+        EndOutcome::Ended {
+            season: season.clone()
         }
     );
-    let shortened = store.season(season.id).await.unwrap().unwrap();
-    assert_eq!(shortened.range.last_day(), day("2026-10-01"));
-    assert_eq!(shortened.range.first_day(), day("2026-09-16"));
+    let again = season_35(&store).await;
+    assert_eq!(again.number, 35);
+    assert_ne!(again.id, season.id);
+    assert_eq!(store.live_season(GUILD, 35).await.unwrap(), Some(again));
+}
+
+#[tokio::test]
+async fn an_ended_season_is_not_live_and_not_listed() {
+    let store = attendance().await;
+    let season = season_35(&store).await;
+    let last_moment = season.range.last_moment_unix().unwrap();
+    store
+        .record_post(
+            season.id,
+            night("2026-09-16"),
+            Snowflake::new(7),
+            CREATED_AT,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.live_seasons(last_moment - 1).await.unwrap(),
+        vec![season.clone()]
+    );
+    assert_eq!(store.seasons_in(GUILD).await.unwrap(), vec![season.clone()]);
+    store.end_season(GUILD, 35, ENDED_AT).await.unwrap();
+    assert!(
+        store
+            .live_seasons(last_moment - 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.seasons_in(GUILD).await.unwrap().is_empty());
+    assert_eq!(store.live_season(GUILD, 35).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_click_can_still_resolve_an_ended_season() {
+    let store = attendance().await;
+    let season = pinging_season_35(&store).await;
+    store
+        .record_post(
+            season.id,
+            night("2026-09-16"),
+            Snowflake::new(7),
+            CREATED_AT,
+        )
+        .await
+        .unwrap();
+    store.end_season(GUILD, 35, ENDED_AT).await.unwrap();
+    let found = store.season(season.id).await.unwrap().unwrap();
+    assert_eq!(found.number, 35);
+    assert_eq!(found.guild, GUILD);
+    assert_eq!(found.channel, CHANNEL);
+    assert_eq!(found.ping_role, Some(CREWMATES));
+    assert_eq!(found.ended_at_ms, Some(ENDED_AT));
+}
+
+#[tokio::test]
+async fn edit_season_rejects_a_number_another_live_season_holds() {
+    let store = attendance().await;
+    let season_34 = created(&store, &proposal(34, "2026-06-10", "2026-08-02")).await;
+    let season = season_35(&store).await;
+    let take_34 = SeasonChange {
+        number: Some(34),
+        ..SeasonChange::default()
+    };
+    assert_eq!(
+        store.edit_season(GUILD, 35, &take_34).await.unwrap(),
+        EditOutcome::NumberTaken
+    );
+    assert_eq!(
+        store.live_season(GUILD, 35).await.unwrap(),
+        Some(season.clone())
+    );
+    let keep_35 = SeasonChange {
+        number: Some(35),
+        ..SeasonChange::default()
+    };
+    let (before, after) = edited(&store, 35, &keep_35).await;
+    assert_eq!(before, season);
+    assert_eq!(after, season);
+    store.end_season(GUILD, 34, ENDED_AT).await.unwrap();
+    assert_eq!(store.season(season_34.id).await.unwrap(), None);
+    let (_, renumbered) = edited(&store, 35, &take_34).await;
+    assert_eq!(renumbered.number, 34);
+}
+
+#[tokio::test]
+async fn edit_season_ignores_an_ended_season_when_checking_overlap() {
+    let store = attendance().await;
+    let season_34 = created(&store, &proposal(34, "2026-06-10", "2026-08-02")).await;
+    store
+        .record_post(
+            season_34.id,
+            night("2026-06-10"),
+            Snowflake::new(7),
+            CREATED_AT,
+        )
+        .await
+        .unwrap();
+    let season = season_35(&store).await;
+    let reach_back = SeasonChange {
+        first_day: Some(day("2026-07-01")),
+        ..SeasonChange::default()
+    };
+    assert_eq!(
+        store.edit_season(GUILD, 35, &reach_back).await.unwrap(),
+        EditOutcome::Overlaps(season_34)
+    );
+    store.end_season(GUILD, 34, ENDED_AT).await.unwrap();
+    let (before, after) = edited(&store, 35, &reach_back).await;
+    assert_eq!(before, season);
+    assert_eq!(after.range.first_day(), day("2026-07-01"));
+    assert_eq!(after.range.last_day(), day("2026-11-05"));
+}
+
+#[tokio::test]
+async fn edit_season_rejects_a_backwards_range() {
+    let store = attendance().await;
+    let season = season_35(&store).await;
+    let backwards = SeasonChange {
+        last_day: Some(day("2026-09-15")),
+        ..SeasonChange::default()
+    };
+    assert_eq!(
+        store.edit_season(GUILD, 35, &backwards).await.unwrap(),
+        EditOutcome::BadRange
+    );
+    assert_eq!(store.live_season(GUILD, 35).await.unwrap(), Some(season));
+    assert_eq!(
+        store.edit_season(GUILD, 36, &backwards).await.unwrap(),
+        EditOutcome::NotFound
+    );
+}
+
+#[tokio::test]
+async fn edit_season_changes_only_what_it_is_given() {
+    let store = attendance().await;
+    let season = pinging_season_35(&store).await;
+    let renumber = SeasonChange {
+        number: Some(36),
+        ..SeasonChange::default()
+    };
+    let (before, after) = edited(&store, 35, &renumber).await;
+    assert_eq!(before, season);
+    assert_eq!(after.number, 36);
+    assert_eq!(after.id, season.id);
+    assert_eq!(after.guild, season.guild);
+    assert_eq!(after.channel, season.channel);
+    assert_eq!(after.codename, season.codename);
+    assert_eq!(after.range, season.range);
+    assert_eq!(after.created_by, season.created_by);
+    assert_eq!(after.created_at_ms, season.created_at_ms);
+    assert_eq!(after.ping_role, season.ping_role);
+    assert_eq!(after.ended_at_ms, None);
+    assert_eq!(store.live_season(GUILD, 35).await.unwrap(), None);
+    assert_eq!(store.live_season(GUILD, 36).await.unwrap(), Some(after));
+}
+
+#[tokio::test]
+async fn edit_season_clears_a_codename_and_a_ping_role() {
+    let store = attendance().await;
+    let season = pinging_season_35(&store).await;
+    let clear = SeasonChange {
+        codename: Some(None),
+        ping_role: Some(None),
+        ..SeasonChange::default()
+    };
+    let (before, after) = edited(&store, 35, &clear).await;
+    assert_eq!(before, season);
+    assert_eq!(after.codename, None);
+    assert_eq!(after.ping_role, None);
+    assert_eq!(
+        store.live_season(GUILD, 35).await.unwrap(),
+        Some(after.clone())
+    );
+    let set = SeasonChange {
+        codename: Some(Some("Basilisk".to_owned())),
+        ping_role: Some(Some(RESERVES)),
+        ..SeasonChange::default()
+    };
+    let (was, now) = edited(&store, 35, &set).await;
+    assert_eq!(was, after);
+    assert_eq!(now.codename.as_deref(), Some("Basilisk"));
+    assert_eq!(now.ping_role, Some(RESERVES));
+    assert_eq!(store.live_season(GUILD, 35).await.unwrap(), Some(now));
+}
+
+#[tokio::test]
+async fn move_season_changes_the_channel_and_nothing_else() {
+    let store = attendance().await;
+    let season = pinging_season_35(&store).await;
+    let elsewhere = ChannelId::new(11);
+    store.move_season(season.id, elsewhere).await.unwrap();
+    let moved = store.season(season.id).await.unwrap().unwrap();
+    assert_eq!(moved.channel, elsewhere);
+    assert_eq!(
+        moved,
+        Season {
+            channel: elsewhere,
+            ..season
+        }
+    );
+}
+
+#[tokio::test]
+async fn end_season_keeps_the_marks() {
+    let store = attendance().await;
+    let season = season_35(&store).await;
+    let first = night("2026-09-16");
+    store
+        .record_post(season.id, first, Snowflake::new(7), CREATED_AT)
+        .await
+        .unwrap();
+    store
+        .mark(season.id, first, AKI, &[hour(1)], true, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.end_season(GUILD, 35, ENDED_AT).await.unwrap(),
+        EndOutcome::Ended {
+            season: season.clone()
+        }
+    );
+    assert_eq!(
+        store.roster(season.id, first).await.unwrap(),
+        vec![Mark {
+            user: AKI,
+            hour: hour(1),
+            attending: true,
+            answered_at_ms: 1_000,
+        }]
+    );
+    assert_eq!(store.posts(season.id).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_bad_role_id_is_named() {
+    let pool = attendance_pool().await;
+    sqlx::raw_sql("PRAGMA ignore_check_constraints = on")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let store = Attendance::with_pool(pool.clone()).await.unwrap();
+    sqlx::query("INSERT INTO cb_seasons (id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id) VALUES (1, 1, 10, 35, NULL, '2026-09-16', '2026-11-05', 100, 0, 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let error = store.season(1).await.err().unwrap();
+    assert!(matches!(error, AttendanceError::InvalidRole { value: 0 }));
+    assert_eq!(
+        error.to_string(),
+        "the attendance database holds 0, which is not a role ID"
+    );
 }
 
 async fn posted_season(pool: SqlitePool) -> (Attendance, Season) {
@@ -319,7 +643,7 @@ async fn a_missing_table_is_named() {
     ));
     let pool = memory_pool().await;
     sqlx::raw_sql(
-        "CREATE TABLE cb_seasons (id INTEGER PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL, number INTEGER NOT NULL, codename TEXT, first_day TEXT NOT NULL, last_day TEXT NOT NULL, created_by INTEGER NOT NULL, created_at_ms INTEGER NOT NULL) STRICT",
+        "CREATE TABLE cb_seasons (id INTEGER PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL, number INTEGER NOT NULL, codename TEXT, first_day TEXT NOT NULL, last_day TEXT NOT NULL, created_by INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, ping_role_id INTEGER, ended_at_ms INTEGER) STRICT",
     )
     .execute(&pool)
     .await
@@ -367,12 +691,15 @@ async fn a_post_records_its_state_and_message() {
         store.posts(season.id).await.unwrap()[0].state,
         PostState::Closed
     );
-    assert!(
-        store
-            .record_post(season.id, first, Snowflake::new(9), CREATED_AT)
-            .await
-            .is_err()
-    );
+    store
+        .record_post(season.id, first, Snowflake::new(9), CREATED_AT + 1)
+        .await
+        .unwrap();
+    let reposted = store.post(season.id, first).await.unwrap().unwrap();
+    assert_eq!(reposted.message, Snowflake::new(9));
+    assert_eq!(reposted.state, PostState::Open);
+    assert_eq!(reposted.posted_at_ms, CREATED_AT + 1);
+    assert_eq!(store.posts(season.id).await.unwrap().len(), 1);
     assert_eq!(
         store.post(season.id, night("2026-09-17")).await.unwrap(),
         None
