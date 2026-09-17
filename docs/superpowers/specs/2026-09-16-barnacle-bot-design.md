@@ -1,9 +1,9 @@
 # Design: Barnacle's Discord bot
 
 Date: 2026-09-16
-Status: the owner approved every section one by one in conversation on 2026-09-16; this written form is awaiting their review.
+Status: approved by the owner on 2026-09-16 (decision `01M2PJCA9J95PSZ2VKS0YPM77F`). Sections 4.1, 4.3, 5.1, 6.3, 6.6, 7.2, 9, 10, 11 and 12 were then corrected to match what a compiled prototype showed while Plan 3 was written.
 Extends: `docs/specs/2026-09-16-silhouette-game-spec.md` section 6 (the bot), and uses the game rules from `docs/superpowers/plans/2026-09-16-barnacle-game-rules.md` (merged as `crates/barnacle-guess`).
-Implemented by: Plan 3, to be written after this document is approved.
+Implemented by: `docs/superpowers/plans/2026-09-16-barnacle-bot.md` (Plan 3).
 
 ## 1. Scope
 
@@ -65,6 +65,9 @@ Facts that shape the design:
 | `solves` | SQLite: record a solve, read a player's count and best time, check the schema |
 | `text` | Every user-facing sentence, plus the tier, nation and class labels |
 | `lookup` | Ranks `/ship info` autocomplete suggestions and resolves typed text to a ship |
+| `info` | Builds the `/ship info` card from the catalog, the curation result and the `ShipBook` |
+| `wiring` | Turns command options into `RoundOptions`, and encodes and decodes the Cancel button's ID |
+| `ids` | `GuildId`, `ChannelId` and `Place` newtypes, so the core never sees serenity's types |
 | `discord` | The poise commands, the message and button handlers, and the serenity implementation of the core's Discord interface |
 
 ### 4.2 Moving the catalog folder code
@@ -80,7 +83,7 @@ The bot uses:
 - `Round::judge` and `Round::may_cancel` (`crates/barnacle-guess/src/round.rs:68`, `round.rs:79`);
 - `Timing::STANDARD` (`round.rs:17`).
 
-One addition to `barnacle-guess` is needed: a conversion from `Snowflake` (`crates/barnacle-guess/src/ids.rs:19`) to Unix milliseconds. It uses Discord's epoch, `1420070400000`, and the formula `(snowflake >> 22) + 1420070400000` - [Discord reference, Snowflakes](https://github.com/discord/discord-api-docs/blob/main/developers/reference.mdx).
+Three additions to `barnacle-guess` are needed. `ShipBook::names` returns a ship's own accepted names and `ShipBook::lookalikes` its look-alike indexes, both for `/ship info`. The third is a conversion from `Snowflake` (`crates/barnacle-guess/src/ids.rs:19`) to Unix milliseconds. It uses Discord's epoch, `1420070400000`, and the formula `(snowflake >> 22) + 1420070400000` - [Discord reference, Snowflakes](https://github.com/discord/discord-api-docs/blob/main/developers/reference.mdx).
 
 ## 5. Configuration and startup
 
@@ -93,7 +96,7 @@ One addition to `barnacle-guess` is needed: a conversion from `Snowflake` (`crat
 | `data_dir` | The data folder holding `catalog/` | `data` |
 | `curation` | The curation file | `curation/ships.toml` |
 | `database` | The SQLite file | `data/barnacle.sqlite3` |
-| `commands` | Either `{ scope = "guilds", guilds = [<server id>, ...] }` or `{ scope = "global" }` | none, so it must be set |
+| `commands` | Either `{ scope = "guilds", guilds = [<server id>, ...] }` or `{ scope = "global" }`; `guilds` must be left out with `global`, and a server ID of 0 is refused | none, so it must be set |
 
 The bot token comes only from the `DISCORD_TOKEN` environment variable. It is never read from or written to a file.
 
@@ -132,7 +135,7 @@ Messages that arrive during step 3 wait for the lock. Messages sent before the p
 
 ### 6.3 Guess messages
 
-Messages written by bots return immediately. So do messages in a channel that has no entry or no active round; that check touches only the outer map, never a channel lock. Otherwise, under the channel lock, `judge` runs, and if it returns a `Solve`:
+Messages written by bots return immediately, and so do messages in a channel that has never had a round; that check touches only the outer map. Otherwise the channel lock is taken, a channel with no active round drops the message, and `judge` runs. If it returns a `Solve`:
 1. The round is removed from the channel.
 2. In one transaction, the player's previous best in this server is read and the solve is inserted (section 8).
 3. The ending is posted: the win reply and the disabled button.
@@ -171,7 +174,7 @@ trait Announcer {
 - `TimedOut`: the reveal;
 - `Cancelled`: the reveal and who cancelled.
 
-`post_ending` also disables the round post's button. The round post itself is not part of the trait: the `/guess` handler passes it to the core as a function, because it is the command's reply. The core is generic over `Announcer`. Its tests use a fake that records every call in order.
+`post_ending` also disables the round post's button. The round post itself is not part of the trait: the `/guess` handler passes it to the core as a function, because it is the command's reply. The core is generic over `Announcer`, and over `SolveStore`, a one-operation interface (`record`) that `Solves` implements. Its tests use a fake Discord that records every call in order and a fake store. SQLite does its work on a background thread, so with tokio's paused clock the runtime would look idle during a query and jump to the next timer; the fake store keeps the round tests' timing exact, and `Solves` is tested on its own (section 10).
 
 ### 6.7 Restarts and logging
 
@@ -229,14 +232,14 @@ Times always show three decimals, followed by " s".
   |---|---|
   | `USA` | U.S.A. |
   | `United_Kingdom` | U.K. |
-  | `Russia` | U.S.S.R. (believed to match the game's in-game label **[unverified]**) |
+  | `Russia` | U.S.S.R., the game's own label (`IDS_RUSSIA` in the 15.8.0 English strings) |
   | `Pan_Asia` | Pan-Asia |
   | `Pan_America` | Pan-America |
   | `Events` | Event |
   | `France`, `Germany`, `Italy`, `Japan`, `Netherlands`, `Spain`, `Commonwealth`, `Europe` | as written |
   | anything else | underscores become spaces |
 
-  These are all the nations in the 15.8.0 catalog (`data/catalog/15.8.0_13187581_r4/catalog.json`, counted on 2026-09-16).
+  These are all the nations in the 15.8.0 catalog (`data/catalog/15.8.0_13187581_r4/catalog.json`, counted on 2026-09-16). Two labels differ from the game's own English strings: the game says The Netherlands (`IDS_NETHERLANDS`) and, for `Events`, Alliance of New Earth (`IDS_EVENTS`).
 
 ### 7.3 `/ship info <ship>` (private)
 
@@ -324,7 +327,7 @@ The table holds server IDs, user IDs, ship indexes and times, and nothing else: 
   - A failed hint or ending post is logged, and the state change already made stands.
 - **Database failure during a win:** it is logged, and the win is announced without the personal-best line.
 - **Autocomplete failure:** the command returns an empty suggestion list.
-- **Refused connection:** if Discord refuses the connection because `MESSAGE_CONTENT` is not enabled, the log names the Developer Portal switch. The exact serenity error for close code 4014 is **[unverified]** and must be checked while writing the plan.
+- **Refused connection:** if Discord refuses the connection because `MESSAGE_CONTENT` is not enabled, the log names the Developer Portal switch. serenity reports close code 4014 as `GatewayError::DisallowedGatewayIntents` (`serenity-0.12.5/src/gateway/error.rs:52`), and `Client::start` returns it as `Error::Gateway` (`serenity-0.12.5/src/client/mod.rs:905-906`).
 
 ## 10. Testing
 
@@ -332,7 +335,7 @@ No test uses the network, a Discord account or a live database.
 
 | Area | Method | Cases |
 |---|---|---|
-| `table` | A fake `Announcer`, with `#[tokio::test(start_paused = true)]` (needs tokio's `test-util`; paused time jumps to the next timer when the runtime is idle - [docs.rs](https://docs.rs/tokio/latest/tokio/time/fn.advance.html)) | See the list below |
+| `table` | A fake `Announcer` and a fake `SolveStore`, with `#[tokio::test(start_paused = true)]` (needs tokio's `test-util`; paused time jumps to the next timer when the runtime is idle - [docs.rs](https://docs.rs/tokio/latest/tokio/time/fn.advance.html)) | See the list below |
 | `solves` | In-memory SQLite, created and dropped per test, with the real `0001_guess_solves.sql` applied | record then profile; servers kept separate; strictly faster is a best and a tie is not; the schema check rejects a missing table and wrong columns; an ID above `i64::MAX` is rejected |
 | `text` | Unit tests | numerals 1-11; every nation label and the fallback; class labels; `3251 ms` becomes `3.251 s`; truncation at 1024 characters; both empty-pool sentences |
 | `lookup` | Unit tests | prefix matches before substring matches; alphabetical order; at most 25 results; "konig" finds König; excluded ships included; ships without an English name left out; typed text resolved as an index, then as an exact name |
@@ -349,7 +352,10 @@ The `table` cases:
 - bot messages, messages sent before the post and wrong guesses are ignored;
 - two channels run independently;
 - a win and a cancel at the same moment give exactly one ending;
-- a failed round post leaves the channel free;
+- a failed round post leaves the channel free, and an empty pool starts nothing;
+- a win is recorded with its server, player, ship and time;
+- a storage failure still announces the win, without the personal-best line, and a failing Discord does not stop rounds ending;
+- an earlier round's timer neither hints at nor ends the next round in the same channel;
 - recent ships are skipped across rounds.
 
 ## 11. Discord setup (owner, once)
@@ -357,16 +363,17 @@ The `table` cases:
 The README gains these steps:
 1. Create an application in the Discord Developer Portal and add a bot user, then copy its token into `DISCORD_TOKEN`.
 2. Turn on **Message Content Intent** under Privileged Gateway Intents. Below 10,000 users no review is needed - [Discord Privileged Intent Review](https://github.com/discord/discord-api-docs/blob/main/developers/gateway/getting-started-with-privileged-intent-review.mdx).
-3. Make the bot private, so only the owner can add it to servers. The Developer Portal setting for this is **[unverified]**.
+3. Turn off **Public Bot**, so only the owner can add the bot to servers. Discord's OAuth2 docs: "If unchecked, only you can add the bot to guilds" - [Discord OAuth2](https://github.com/discord/discord-api-docs/blob/main/developers/topics/oauth2.mdx).
 4. Invite the bot with the `bot` and `applications.commands` scopes and the View Channels, Send Messages, Embed Links and Attach Files permissions.
 5. Create `barnacle.toml` from the example, listing the test server's ID.
 6. Apply the migration (8.2), then run `cargo run --release -p barnacle-bot`.
 
-## 12. Unverified items to settle while writing Plan 3
+## 12. Items settled while writing Plan 3
 
-| Item | How to settle |
+| Item | Result |
 |---|---|
-| The poise 0.7 and serenity 0.12.5 API for buttons (component interactions) and for editing the round post | docs.rs for both crates, then a compile check in a scratch copy |
-| The serenity error for close code 4014 | serenity 0.12.5 source |
-| The Developer Portal setting that makes a bot private | Discord developer documentation |
-| `U.S.S.R.` as the game's label for `Russia` | The game's own translation strings, if the dump carries them; otherwise the owner decides |
+| The poise 0.7 and serenity 0.12.5 API for buttons and for editing the round post | `CreateButton`, `CreateActionRow::Buttons`, `ComponentInteraction::create_response` and `ChannelId::edit_message` compile and pass clippy in a scratch copy of the bot |
+| The serenity error for close code 4014 | `GatewayError::DisallowedGatewayIntents`, see section 9 |
+| The Developer Portal setting that makes a bot private | Public Bot, see section 11 |
+| `U.S.S.R.` as the game's label for `Russia` | Confirmed from the game's strings, see 7.2 |
+| A command description without a doc comment | poise 0.7's `command` macro reads a command's description only from doc comments, which this project does not write, so each command is built as a value and its `description` field is set in code (`poise-0.7.0` `Command::description`, `poise_macros-0.7.0/src/command/mod.rs:209-210`) |
