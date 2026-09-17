@@ -1,8 +1,11 @@
+pub mod attendance;
+pub mod attendance_store;
 pub mod config;
 pub mod discord;
 pub mod ids;
 pub mod info;
 pub mod lookup;
+pub mod schedule;
 pub mod solves;
 pub mod startup;
 pub mod table;

@@ -1,0 +1,7 @@
+BEGIN;
+
+DROP TABLE IF EXISTS cb_marks;
+DROP TABLE IF EXISTS cb_posts;
+DROP TABLE IF EXISTS cb_seasons;
+
+COMMIT;
