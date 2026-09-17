@@ -260,8 +260,14 @@ fn a_full_board_of_long_names_is_split_within_discords_limits() {
     let pages = text::leaderboard_pages(&lines);
     let length = |page: &String| page.encode_utf16().count();
     assert!(pages.len() > 1);
-    assert!(pages.iter().all(|page| length(page) <= text::EMBED_DESCRIPTION_LIMIT));
-    let title = text::leaderboard_title(Ranking::FastestTime).encode_utf16().count();
+    assert!(
+        pages
+            .iter()
+            .all(|page| length(page) <= text::EMBED_DESCRIPTION_LIMIT)
+    );
+    let title = text::leaderboard_title(Ranking::FastestTime)
+        .encode_utf16()
+        .count();
     assert!(title + pages.iter().map(length).sum::<usize>() <= text::MESSAGE_EMBEDS_LIMIT);
     assert_eq!(pages.join("\n"), lines.join("\n"));
 }
