@@ -70,10 +70,23 @@ const EXPECTED_COLUMNS: [TableSpec; 3] = [
 
 const SEASON_BY_ID: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms FROM cb_seasons WHERE id = ?";
 const SEASONS_IN_GUILD: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms FROM cb_seasons WHERE guild_id = ? ORDER BY first_day";
-const SEASONS_FROM_DAY: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms FROM cb_seasons WHERE last_day >= ? ORDER BY first_day";
+const SEASONS_LIVE: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE last_day >= ? OR EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') ORDER BY first_day";
 const SEASON_OVERLAPPING: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms FROM cb_seasons WHERE guild_id = ? AND first_day <= ? AND last_day >= ? ORDER BY first_day LIMIT 1";
 
 type SeasonRow = (i64, i64, i64, i64, Option<String>, String, String, i64, i64);
+
+type LiveSeasonRow = (
+    i64,
+    i64,
+    i64,
+    i64,
+    Option<String>,
+    String,
+    String,
+    i64,
+    i64,
+    i64,
+);
 
 type PostRow = (String, i64, String, i64);
 
@@ -102,6 +115,8 @@ pub enum AttendanceError {
     BadState { value: String },
     #[error("the attendance database holds {value}, which is not an hour")]
     BadHour { value: i64 },
+    #[error("the attendance database holds {value}, which is not a season number")]
+    BadSeasonNumber { value: i64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,7 +237,7 @@ impl Attendance {
         let number = i64::from(new.number);
         let first_day = new.range.first_day().to_string();
         let last_day = new.range.last_day().to_string();
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let taken: Option<i64> =
             sqlx::query_scalar("SELECT id FROM cb_seasons WHERE guild_id = ? AND number = ?")
                 .bind(guild)
@@ -285,18 +300,45 @@ impl Attendance {
     }
 
     pub async fn live_seasons(&self, now_unix: i64) -> Result<Vec<Season>, AttendanceError> {
-        let rows: Vec<SeasonRow> = sqlx::query_as(SEASONS_FROM_DAY)
+        let rows: Vec<LiveSeasonRow> = sqlx::query_as(SEASONS_LIVE)
             .bind(lookback_day(now_unix))
             .fetch_all(&self.pool)
             .await?;
         rows.into_iter()
-            .map(to_season)
-            .filter(|season| match season {
-                Ok(season) => season
-                    .range
-                    .last_moment_unix()
-                    .is_some_and(|moment| moment > now_unix),
-                Err(_) => true,
+            .filter_map(|row| {
+                let (
+                    id,
+                    guild,
+                    channel,
+                    number,
+                    codename,
+                    first_day,
+                    last_day,
+                    created_by,
+                    created_at_ms,
+                    unremoved_post,
+                ) = row;
+                let season = to_season((
+                    id,
+                    guild,
+                    channel,
+                    number,
+                    codename,
+                    first_day,
+                    last_day,
+                    created_by,
+                    created_at_ms,
+                ));
+                match season {
+                    Ok(season) => {
+                        let nights_ahead = season
+                            .range
+                            .last_moment_unix()
+                            .is_some_and(|moment| moment > now_unix);
+                        (nights_ahead || unremoved_post != 0).then_some(Ok(season))
+                    }
+                    Err(error) => Some(Err(error)),
+                }
             })
             .collect()
     }
@@ -306,7 +348,7 @@ impl Attendance {
         guild: GuildId,
         number: u32,
     ) -> Result<EndOutcome, AttendanceError> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let found: Option<i64> =
             sqlx::query_scalar("SELECT id FROM cb_seasons WHERE guild_id = ? AND number = ?")
                 .bind(to_integer(guild.get().into())?)
@@ -411,7 +453,7 @@ impl Attendance {
         let label = night.label();
         let user = to_integer(user.get().into())?;
         let at = to_integer(at_ms.into())?;
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         for hour in hours {
             sqlx::query(
                 "INSERT INTO cb_marks (season_id, night, user_id, hour, attending, answered_at_ms, changed_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (season_id, night, user_id, hour) DO UPDATE SET attending = excluded.attending, changed_at_ms = excluded.changed_at_ms",
@@ -538,7 +580,7 @@ fn to_player(value: i64) -> Result<UserId, AttendanceError> {
 }
 
 fn to_number(value: i64) -> Result<u32, AttendanceError> {
-    u32::try_from(value).map_err(|_| AttendanceError::Negative { value })
+    u32::try_from(value).map_err(|_| AttendanceError::BadSeasonNumber { value })
 }
 
 fn to_unsigned(value: i64) -> Result<u64, AttendanceError> {
