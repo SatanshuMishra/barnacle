@@ -17,7 +17,14 @@ pub const SECONDS_PER_HOUR: i64 = 3600;
 pub const POST_LEAD_SECONDS: i64 = 24 * SECONDS_PER_HOUR;
 pub const REMOVE_AFTER_END_SECONDS: i64 = 30 * 60;
 
+pub const RANGE_MONTHS: i32 = 6;
+
 const DAY_TEXT_LENGTH: usize = 10;
+
+pub fn today(now_unix: i64) -> Option<Date> {
+    let stamp = jiff::Timestamp::from_second(now_unix).ok()?;
+    Some(Offset::UTC.to_datetime(stamp).date())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Hour(u8);
@@ -103,6 +110,16 @@ impl Range {
             first_day,
             last_day,
         })
+    }
+
+    pub fn near(self, today: Date) -> bool {
+        let Ok(earliest) = today.checked_sub(RANGE_MONTHS.months()) else {
+            return false;
+        };
+        let Ok(latest) = today.checked_add(RANGE_MONTHS.months()) else {
+            return false;
+        };
+        earliest <= self.first_day && self.last_day <= latest
     }
 
     pub fn first_day(self) -> Date {

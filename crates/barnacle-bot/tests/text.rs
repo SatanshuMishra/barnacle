@@ -9,6 +9,7 @@ use barnacle_bot::attendance::SignupView;
 use barnacle_bot::attendance_store::Season;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
+use barnacle_bot::ids::RoleId;
 use barnacle_bot::schedule::Hour;
 use barnacle_bot::schedule::Night;
 use barnacle_bot::schedule::Range;
@@ -319,6 +320,7 @@ fn signup_view(open: bool, rows: Vec<RosterRow>, hidden: usize) -> SignupView {
         codename: Some("Komodo Dragon".to_owned()),
         night: signup_night(),
         open,
+        ping: None,
         hours: tallies(),
         rows,
         hidden,
@@ -335,6 +337,15 @@ fn season(number: u32, codename: Option<&str>, first_day: &str, last_day: &str) 
         range: Range::new(parse_day(first_day).unwrap(), parse_day(last_day).unwrap()).unwrap(),
         created_by: UserId::new(7),
         created_at_ms: 0,
+        ping_role: None,
+        ended_at_ms: None,
+    }
+}
+
+fn pinging(season: &Season, role: u64) -> Season {
+    Season {
+        ping_role: Some(RoleId::new(role)),
+        ..season.clone()
     }
 }
 
@@ -495,4 +506,83 @@ fn a_long_season_list_is_capped_and_counted() {
     assert!(rendered.encode_utf16().count() <= text::MESSAGE_CONTENT_LIMIT);
     assert!(rendered.lines().last().unwrap().starts_with("and "));
     assert!(rendered.lines().last().unwrap().ends_with(" more."));
+}
+
+#[test]
+fn an_edited_season_reports_what_is_left_and_what_was_cleared() {
+    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-10-21");
+    assert_eq!(
+        text::season_edited(&komodo, 18, Some(1_790_811_000), 0),
+        "Season 35: Komodo Dragon updated. 21 CB nights, 18 still ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>). Manage it with number 35."
+    );
+    assert_eq!(
+        text::season_edited(&komodo, 18, Some(1_790_811_000), 2),
+        "Season 35: Komodo Dragon updated. 21 CB nights, 18 still ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>). 2 sign-up posts outside the new dates were cleared. Manage it with number 35."
+    );
+    assert_eq!(
+        text::season_edited(&komodo, 18, None, 1),
+        "Season 35: Komodo Dragon updated. 21 CB nights, 18 still ahead. Next sign-up post: within a minute. 1 sign-up post outside the new dates was cleared. Manage it with number 35."
+    );
+    let single = season(35, None, "2026-09-16", "2026-09-16");
+    assert_eq!(
+        text::season_edited(&single, 1, None, 0),
+        "Season 35 updated. 1 CB night, 1 still ahead. Next sign-up post: within a minute. Manage it with number 35."
+    );
+    assert_eq!(
+        text::season_edited(&single, 0, None, 1),
+        "Season 35 updated. 1 CB night, 0 still ahead. Nothing further will post. 1 sign-up post outside the new dates was cleared. Manage it with number 35."
+    );
+}
+
+#[test]
+fn a_moved_season_names_the_new_channel_and_the_next_post() {
+    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
+    assert_eq!(
+        text::season_moved(&komodo, 4, 1, Some(1_790_811_000)),
+        "Season 35: Komodo Dragon now posts in this channel. 1 sign-up post was cleared from the old channel. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>)."
+    );
+    assert_eq!(
+        text::season_moved(&komodo, 4, 0, Some(1_790_811_000)),
+        "Season 35: Komodo Dragon now posts in this channel. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>)."
+    );
+    assert_eq!(
+        text::season_moved(&season(35, None, "2026-09-16", "2026-11-05"), 2, 2, None),
+        "Season 35 now posts in this channel. 2 sign-up posts were cleared from the old channel. Next sign-up post: within a minute."
+    );
+    assert_eq!(
+        text::season_moved(&komodo, 0, 1, None),
+        "Season 35: Komodo Dragon now posts in this channel. 1 sign-up post was cleared from the old channel. Nothing further will post."
+    );
+    assert_eq!(
+        text::season_already_here(35),
+        "Season 35 already posts in this channel."
+    );
+}
+
+#[test]
+fn an_ended_season_says_the_answers_are_kept() {
+    assert_eq!(
+        text::season_ended(35, 2),
+        "Season 35 has ended. 2 sign-up posts were cleared, and the answers are kept."
+    );
+    assert_eq!(
+        text::season_ended(35, 1),
+        "Season 35 has ended. 1 sign-up post was cleared, and the answers are kept."
+    );
+    assert_eq!(
+        text::season_ended(35, 0),
+        "Season 35 has ended. The answers are kept."
+    );
+}
+
+#[test]
+fn a_season_line_names_its_ping_role() {
+    assert_eq!(text::pings_line(Some(RoleId::new(123))), " Pings <@&123>.");
+    assert_eq!(text::pings_line(None), "");
+    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
+    assert_eq!(
+        text::season_line(&pinging(&komodo, 456), 23, Some(1_790_811_000)),
+        "<#123> Season 35: Komodo Dragon, 2026-09-16 to 2026-11-05. 23 nights ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>). Pings <@&456>."
+    );
+    assert!(!text::season_line(&komodo, 23, Some(1_790_811_000)).contains("Pings"));
 }

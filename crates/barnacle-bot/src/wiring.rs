@@ -1,7 +1,9 @@
 use barnacle_catalog::Tier;
 use barnacle_guess::RoundOptions;
 
+use crate::attendance::Delivery;
 use crate::attendance::Target;
+use crate::ids::RoleId;
 use crate::schedule::Hour;
 use crate::schedule::Night;
 use crate::solves::Ranking;
@@ -174,5 +176,19 @@ fn parse_choice(text: &str) -> Option<bool> {
         ATTENDING_CHOICE => Some(true),
         NOPE_CHOICE => Some(false),
         _ => None,
+    }
+}
+
+pub fn ping_content(ping: Option<RoleId>) -> String {
+    match ping {
+        Some(role) => format!("<@&{role}>"),
+        None => String::new(),
+    }
+}
+
+pub fn ping_allowance(delivery: Delivery, ping: Option<RoleId>) -> Vec<RoleId> {
+    match (delivery, ping) {
+        (Delivery::New, Some(role)) => vec![role],
+        (Delivery::New, None) | (Delivery::Redraw, _) => Vec::new(),
     }
 }

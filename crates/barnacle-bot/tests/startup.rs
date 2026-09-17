@@ -186,3 +186,39 @@ async fn a_missing_attendance_table_is_named_with_its_migration() {
         layout.config.database.display()
     )));
 }
+
+#[tokio::test]
+async fn a_database_without_the_season_controls_names_the_third_migration() {
+    let layout = layout(
+        &yamato_catalog(),
+        &["PJSB018", "PJSB019"],
+        &curation_text(""),
+    );
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&layout.config.database)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    sqlx::raw_sql(common::MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(common::CB_MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    let error = startup::open_stores(&layout.config.database)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, StartupError::SeasonControls { .. }));
+    assert!(error.to_string().contains(&format!(
+        "sqlite3 {} < migrations/0003_cb_season_controls.sql",
+        layout.config.database.display()
+    )));
+}

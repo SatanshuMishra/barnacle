@@ -16,6 +16,7 @@ use crate::attendance::HourTally;
 use crate::attendance::RosterRow;
 use crate::attendance::SignupView;
 use crate::attendance_store::Season;
+use crate::ids::RoleId;
 use crate::schedule::Hour;
 use crate::schedule::Night;
 use crate::solves::Ranking;
@@ -55,9 +56,18 @@ pub const RUN_IN_TEXT_CHANNEL: &str = "Run this in a text channel.";
 pub const DATE_FORMAT: &str = "Dates look like 2026-09-16.";
 pub const LAST_DAY_BEFORE_FIRST: &str = "The last day is before the first day.";
 pub const NO_NIGHTS_LEFT: &str = "That range has no CB nights left.";
+pub const RANGE_TOO_FAR: &str = "A season has to sit within six months either side of today.";
 pub const NO_SEASON_HERE: &str = "No CB season is set up here.";
 pub const ROSTER_HEADER: &str = "1    2    3    4    ";
+pub const NOTHING_TO_CHANGE: &str = "Name at least one thing to change.";
+pub const CODENAME_BOTH_WAYS: &str = "Pass a codename or clear it, not both.";
+pub const PING_BOTH_WAYS: &str = "Pass a ping role or clear it, not both.";
+pub const CLEAR_FAILED_MOVE: &str = "Some sign-up posts could not be removed from the old channel, so nothing moved. Check that the bot can manage messages there, then run this again.";
+pub const CLEAR_FAILED_END: &str = "Some sign-up posts could not be removed, so the season is still running. Check that the bot can manage messages in its channel, then run this again.";
+pub const REFRESH_FAILED: &str =
+    " Its sign-up post could not be updated; run this again once the bot can edit it.";
 
+const NOTHING_AHEAD: &str = "Nothing further will post.";
 const NAME_LIMIT: usize = 32;
 const SEASON_LIST_TAIL: usize = 32;
 const CELL_WIDTH: usize = 5;
@@ -311,13 +321,14 @@ pub fn season_started(season: &Season, nights_left: usize, post_at_unix: Option<
 
 pub fn season_line(season: &Season, nights_left: usize, post_at_unix: Option<i64>) -> String {
     format!(
-        "<#{}> {}, {} to {}. {} ahead. Next sign-up post: {}.",
+        "<#{}> {}, {} to {}. {} ahead. Next sign-up post: {}.{}",
         season.channel.get(),
         season_name(season.number, season.codename.as_deref()),
         season.range.first_day(),
         season.range.last_day(),
         nights_ahead(nights_left),
-        post_time(post_at_unix)
+        post_time(post_at_unix),
+        pings_line(season.ping_role)
     )
 }
 
@@ -380,6 +391,120 @@ pub fn season_not_found(number: u32) -> String {
     format!("No Season {number} is set up here.")
 }
 
+pub fn season_already_here(number: u32) -> String {
+    format!("Season {number} already posts in this channel.")
+}
+
+pub fn season_edited(
+    season: &Season,
+    nights_left: usize,
+    post_at_unix: Option<i64>,
+    cleared: usize,
+) -> String {
+    sentences(&[
+        format!(
+            "{} updated.",
+            season_name(season.number, season.codename.as_deref())
+        ),
+        format!(
+            "{}, {nights_left} still ahead.",
+            nights(season.range.night_count())
+        ),
+        next_post(nights_left, post_at_unix),
+        cleared_outside_the_range(cleared),
+        format!("Manage it with number {}.", season.number),
+    ])
+}
+
+pub fn season_moved(
+    season: &Season,
+    nights_left: usize,
+    cleared: usize,
+    post_at_unix: Option<i64>,
+) -> String {
+    sentences(&[
+        format!(
+            "{} now posts in this channel.",
+            season_name(season.number, season.codename.as_deref())
+        ),
+        cleared_from_the_old_channel(cleared),
+        next_post(nights_left, post_at_unix),
+    ])
+}
+
+pub fn season_ended(number: u32, cleared: usize) -> String {
+    let kept = match cleared {
+        0 => "The answers are kept.".to_owned(),
+        cleared => format!(
+            "{} {}, and the answers are kept.",
+            signup_posts(cleared),
+            cleared_verb(cleared)
+        ),
+    };
+    format!("Season {number} has ended. {kept}")
+}
+
+pub fn pings_line(ping: Option<RoleId>) -> String {
+    match ping {
+        Some(role) => format!(" Pings <@&{role}>."),
+        None => String::new(),
+    }
+}
+
+fn next_post(nights_left: usize, post_at_unix: Option<i64>) -> String {
+    if nights_left == 0 {
+        NOTHING_AHEAD.to_owned()
+    } else {
+        format!("Next sign-up post: {}.", post_time(post_at_unix))
+    }
+}
+
+fn cleared_outside_the_range(cleared: usize) -> String {
+    match cleared {
+        0 => String::new(),
+        cleared => format!(
+            "{} outside the new dates {}.",
+            signup_posts(cleared),
+            cleared_verb(cleared)
+        ),
+    }
+}
+
+fn cleared_from_the_old_channel(cleared: usize) -> String {
+    match cleared {
+        0 => String::new(),
+        cleared => format!(
+            "{} {} from the old channel.",
+            signup_posts(cleared),
+            cleared_verb(cleared)
+        ),
+    }
+}
+
+fn signup_posts(count: usize) -> String {
+    match count {
+        1 => "1 sign-up post".to_owned(),
+        count => format!("{count} sign-up posts"),
+    }
+}
+
+fn cleared_verb(count: usize) -> &'static str {
+    if count == 1 {
+        "was cleared"
+    } else {
+        "were cleared"
+    }
+}
+
+fn sentences(parts: &[String]) -> String {
+    parts
+        .iter()
+        .filter(|part| !part.is_empty())
+        .cloned()
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
 fn discord_length(text: &str) -> usize {
     text.encode_utf16().count()
 }
@@ -394,7 +519,7 @@ fn sentence(text: &str) -> String {
 
 fn season_name(number: u32, codename: Option<&str>) -> String {
     match codename {
-        Some(codename) => format!("Season {number}: {codename}"),
+        Some(codename) => format!("Season {number}: {}", escape(codename)),
         None => format!("Season {number}"),
     }
 }
