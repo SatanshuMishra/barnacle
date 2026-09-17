@@ -77,21 +77,15 @@ impl ShipBook {
                 ))
             })
             .collect();
-        let lookalikes = config
-            .lookalikes
-            .iter()
-            .flat_map(|group| {
-                group.ships.iter().map(|member| {
-                    let others = group
-                        .ships
-                        .iter()
-                        .filter(|other| *other != member)
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    (member.clone(), others)
-                })
+        let lookalikes = group_by_key(config.lookalikes.iter().flat_map(|group| {
+            group.ships.iter().flat_map(move |member| {
+                group
+                    .ships
+                    .iter()
+                    .filter(move |other| *other != member)
+                    .map(move |other| (member.clone(), other.clone()))
             })
-            .collect();
+        }));
         Self {
             entries,
             lookalikes,
@@ -103,6 +97,9 @@ impl ShipBook {
     }
 
     pub fn answers(&self, index: &ShipIndex, options: &RoundOptions) -> BTreeSet<String> {
+        let Some(own) = self.entries.get(index) else {
+            return BTreeSet::new();
+        };
         let lookalikes = self
             .lookalikes
             .get(index)
@@ -110,9 +107,7 @@ impl ShipBook {
             .flatten()
             .filter_map(|other| self.entries.get(other))
             .filter(|entry| options.allows(entry.reveal.tier, entry.is_paper));
-        self.entries
-            .get(index)
-            .into_iter()
+        std::iter::once(own)
             .chain(lookalikes)
             .flat_map(|entry| entry.answers.iter().cloned())
             .collect()

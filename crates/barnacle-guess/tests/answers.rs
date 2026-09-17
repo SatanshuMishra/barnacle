@@ -126,10 +126,99 @@ ships = ["PASB009", "PASB109"]
 }
 
 #[test]
-fn a_ship_outside_the_pool_has_no_answers() {
-    let book = book(vec![ship("PASB009", "Iowa", 9, "iowa")], "");
+fn a_lookalike_brings_its_variants_and_aliases() {
+    let book = book(
+        vec![
+            ship("PASB009", "Iowa", 9, "iowa"),
+            ship("PASB509", "Missouri", 9, "missouri"),
+            ship("PASB709", "Missouri Golden", 9, "missouri-golden"),
+        ],
+        r#"
+[[lookalikes]]
+ships = ["PASB009", "PASB509"]
+
+[[aliases]]
+index = "PASB509"
+names = ["Mighty Mo"]
+"#,
+    );
+    assert_eq!(
+        book.pool(&RoundOptions::default()),
+        [&index("PASB009"), &index("PASB509")]
+    );
+    assert_eq!(
+        book.answers(&index("PASB009"), &RoundOptions::default()),
+        set(["iowa", "missouri", "missourigolden", "mightymo"])
+    );
+}
+
+#[test]
+fn a_ship_in_two_lookalike_groups_accepts_both_groups() {
+    let book = book(
+        vec![
+            ship("PBSC507", "Belfast", 7, "belfast"),
+            ship("PBSC528", "Belfast '43", 8, "belfast-43"),
+            ship("PBSC108", "Edinburgh", 8, "edinburgh"),
+        ],
+        r#"
+[[lookalikes]]
+ships = ["PBSC507", "PBSC528"]
+
+[[lookalikes]]
+ships = ["PBSC507", "PBSC108"]
+"#,
+    );
+    assert_eq!(
+        book.answers(&index("PBSC507"), &RoundOptions::default()),
+        set(["belfast", "belfast43", "edinburgh"])
+    );
+}
+
+#[test]
+fn a_copy_of_a_variant_counts_and_a_baseless_exclusion_does_not() {
+    let book = book(
+        vec![
+            ship("PASB010", "Montana", 10, "montana"),
+            ship("PASB510", "Montana B", 10, "montana"),
+            ship("PASB610", "Montana Event", 10, "montana-event"),
+            ship("PASB611", "Montana Prototype", 10, "montana-prototype"),
+        ],
+        r#"
+[[exclude]]
+index = "PASB610"
+reason = "carbon_copy"
+base = "PASB510"
+
+[[exclude]]
+index = "PASB611"
+reason = "bad_silhouette"
+"#,
+    );
+    assert_eq!(
+        book.answers(&index("PASB010"), &RoundOptions::default()),
+        set(["montana", "montanab", "montanaevent"])
+    );
+}
+
+#[test]
+fn ships_outside_the_pool_have_no_answers() {
+    let book = book(
+        vec![
+            ship("PASB010", "Montana", 10, "montana"),
+            ship("PASB510", "Montana B", 10, "montana"),
+            ship("PASB011", "Ohio", 10, "ohio"),
+        ],
+        r#"
+[[lookalikes]]
+ships = ["PASB510", "PASB011"]
+"#,
+    );
     assert!(
         book.answers(&index("PZSX999"), &RoundOptions::default())
+            .is_empty()
+    );
+    assert!(
+        book.answers(&index("PASB510"), &RoundOptions::default())
             .is_empty()
     );
 }
