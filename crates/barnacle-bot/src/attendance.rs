@@ -358,10 +358,16 @@ impl<B: Board> Signups<B> {
     }
 
     fn forget(&self, message: Snowflake) {
-        self.slots
+        let mut slots = self
+            .slots
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&message);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slots
+            .get(&message)
+            .is_some_and(|slot| Arc::strong_count(slot) == 1)
+        {
+            slots.remove(&message);
+        }
     }
 }
 
@@ -400,24 +406,23 @@ fn tally(hour: Hour, marks: &[Mark]) -> HourTally {
 }
 
 fn roster_rows(marks: &[Mark]) -> Vec<RosterRow> {
-    let mut order: Vec<UserId> = Vec::new();
+    let mut rows: Vec<RosterRow> = Vec::new();
+    let mut seen: HashMap<UserId, usize> = HashMap::new();
     for mark in marks {
-        if !order.contains(&mark.user) {
-            order.push(mark.user);
+        let index = *seen.entry(mark.user).or_insert_with(|| {
+            rows.push(RosterRow {
+                user: mark.user,
+                cells: [Cell::None; 4],
+            });
+            rows.len() - 1
+        });
+        let cell = if mark.attending { Cell::In } else { Cell::Out };
+        let hour = usize::from(mark.hour.get() - 1);
+        if let Some(row) = rows.get_mut(index)
+            && let Some(slot) = row.cells.get_mut(hour)
+        {
+            *slot = cell;
         }
     }
-    order
-        .into_iter()
-        .map(|user| RosterRow {
-            user,
-            cells: std::array::from_fn(|index| {
-                marks
-                    .iter()
-                    .find(|mark| mark.user == user && usize::from(mark.hour.get()) == index + 1)
-                    .map_or(Cell::None, |mark| {
-                        if mark.attending { Cell::In } else { Cell::Out }
-                    })
-            }),
-        })
-        .collect()
+    rows
 }
