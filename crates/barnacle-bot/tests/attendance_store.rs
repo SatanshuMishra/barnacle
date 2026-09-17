@@ -243,7 +243,7 @@ async fn roster_is_ordered_by_first_answer() {
 }
 
 #[tokio::test]
-async fn live_seasons_drops_a_season_past_its_last_removal() {
+async fn live_seasons_drops_a_season_whose_posts_are_all_removed() {
     let store = attendance().await;
     let season = season_35(&store).await;
     let last_moment = season.range.last_moment_unix().unwrap();
@@ -260,6 +260,52 @@ async fn live_seasons_drops_a_season_past_its_last_removal() {
     assert_eq!(
         store.live_seasons(last_moment - 1).await.unwrap(),
         vec![season, next]
+    );
+}
+
+#[tokio::test]
+async fn live_seasons_keeps_a_season_until_its_last_post_is_removed() {
+    let store = attendance().await;
+    let season = season_35(&store).await;
+    let last = season.range.nights().last().unwrap();
+    let last_moment = season.range.last_moment_unix().unwrap();
+    store
+        .record_post(season.id, last, Snowflake::new(500), CREATED_AT)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.live_seasons(last_moment).await.unwrap(),
+        vec![season.clone()]
+    );
+    assert_eq!(
+        store.live_seasons(last_moment + 86_400).await.unwrap(),
+        vec![season.clone()]
+    );
+    store
+        .set_post_state(season.id, last, PostState::Removed)
+        .await
+        .unwrap();
+    assert!(store.live_seasons(last_moment).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_season_number_above_the_ceiling_is_named_as_one() {
+    let pool = attendance_pool().await;
+    let store = Attendance::with_pool(pool.clone()).await.unwrap();
+    sqlx::query("INSERT INTO cb_seasons (id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms) VALUES (1, 1, 10, 5000000000, NULL, '2026-09-16', '2026-11-05', 100, 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let error = store.season(1).await.err().unwrap();
+    assert!(matches!(
+        error,
+        AttendanceError::BadSeasonNumber {
+            value: 5_000_000_000
+        }
+    ));
+    assert_eq!(
+        error.to_string(),
+        "the attendance database holds 5000000000, which is not a season number"
     );
 }
 

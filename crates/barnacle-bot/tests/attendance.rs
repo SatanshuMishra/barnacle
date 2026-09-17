@@ -6,6 +6,7 @@ use barnacle_bot::attendance::Cell;
 use barnacle_bot::attendance::Click;
 use barnacle_bot::attendance::ClickOutcome;
 use barnacle_bot::attendance::PostTag;
+use barnacle_bot::attendance::ROSTER_LIMIT;
 use barnacle_bot::attendance::Signups;
 use barnacle_bot::attendance::Target;
 use barnacle_bot::attendance_store::Attendance;
@@ -499,4 +500,65 @@ async fn the_last_edit_shows_the_last_mark() {
     assert_eq!(drawn.number, 35);
     assert_eq!(drawn.codename.as_deref(), Some("Komodo Dragon"));
     assert_eq!(SECOND_START, second_night().start_unix());
+}
+
+#[tokio::test]
+async fn removes_the_last_night_of_a_season() {
+    let board = FakeBoard::new();
+    let store = Attendance::with_pool(attendance_pool().await)
+        .await
+        .unwrap();
+    let one_night = NewSeason {
+        range: Range::new(
+            parse_day("2026-09-16").unwrap(),
+            parse_day("2026-09-16").unwrap(),
+        )
+        .unwrap(),
+        ..proposal()
+    };
+    let season = match store.create_season(&one_night).await.unwrap() {
+        CreateOutcome::Created(season) => season,
+        other => panic!("expected a created season, got {other:?}"),
+    };
+    let signups = Signups::new(board.clone(), store.clone());
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    signups.tick(FIRST_START, millis(FIRST_START)).await;
+    let report = signups.tick(FIRST_REMOVE_AT, millis(FIRST_REMOVE_AT)).await;
+    assert_eq!(report.removed, vec![tag(&season, first_night())]);
+    assert_eq!(board.deletes().len(), 1);
+    assert_eq!(
+        state_of(&store, &season, first_night()).await,
+        PostState::Removed
+    );
+}
+
+#[tokio::test]
+async fn the_roster_stops_at_the_limit_and_counts_the_rest() {
+    let board = FakeBoard::new();
+    let (signups, season, store) = ready(board.clone()).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let message = message_for(&store, &season, first_night()).await;
+    let crowd = u64::try_from(ROSTER_LIMIT + 3).unwrap();
+    for number in 0..crowd {
+        signups
+            .click(
+                press(&season, message, UserId::new(1_000 + number), Target::All),
+                FIRST_POST_AT,
+                millis(FIRST_POST_AT) + number,
+            )
+            .await;
+    }
+    let view = signups
+        .view(&season, first_night(), FIRST_POST_AT)
+        .await
+        .unwrap();
+    assert_eq!(view.rows.len(), ROSTER_LIMIT);
+    assert_eq!(view.hidden, 3);
+    assert_eq!(view.rows.first().unwrap().user, UserId::new(1_000));
+    assert_eq!(
+        view.rows.last().unwrap().user,
+        UserId::new(1_000 + crowd - 4)
+    );
+    assert_eq!(view.hours[0].attending, u32::try_from(crowd).unwrap());
+    assert_eq!(view.rows.first().unwrap().cells, [Cell::In; 4]);
 }

@@ -112,11 +112,18 @@ pub fn signup_click(custom_id: &str) -> Option<SignupClick> {
     let fields: Vec<&str> = custom_id.strip_prefix(SIGNUP_PREFIX)?.split(':').collect();
     let [season, night, target, choice] = <[&str; SIGNUP_FIELDS]>::try_from(fields).ok()?;
     Some(SignupClick {
-        season: season.parse().ok().filter(|season| *season > 0)?,
+        season: canonical_season(season)?,
         night: Night::parse(night)?,
         target: parse_target(target)?,
         attending: parse_choice(choice)?,
     })
+}
+
+fn canonical_season(text: &str) -> Option<i64> {
+    if text.starts_with('0') || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok().filter(|season| *season > 0)
 }
 
 pub fn missing_signup_permissions(access: ChannelAccess) -> Vec<&'static str> {
