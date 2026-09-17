@@ -32,6 +32,8 @@ pub enum SolvesError {
     OutOfRange { value: u128 },
     #[error("guess_solves holds a negative value, {value}")]
     Negative { value: i64 },
+    #[error("guess_solves holds a player ID below 1, {value}")]
+    InvalidPlayer { value: i64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,7 +156,7 @@ impl Solves {
         rows.into_iter()
             .map(|(user, wins, best)| {
                 Ok(Standing {
-                    user: UserId::new(to_unsigned(user)?),
+                    user: to_player(user)?,
                     wins: to_unsigned(wins)?,
                     best: Duration::from_millis(to_unsigned(best)?),
                 })
@@ -207,6 +209,14 @@ async fn columns(pool: &SqlitePool) -> Result<Vec<Column>, SolvesError> {
             primary_key: primary_key != 0,
         })
         .collect())
+}
+
+fn to_player(value: i64) -> Result<UserId, SolvesError> {
+    u64::try_from(value)
+        .ok()
+        .filter(|id| *id > 0)
+        .map(UserId::new)
+        .ok_or(SolvesError::InvalidPlayer { value })
 }
 
 fn to_unsigned(value: i64) -> Result<u64, SolvesError> {

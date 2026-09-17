@@ -260,18 +260,28 @@ async fn a_leaderboard_stops_at_its_size_and_counts_only_its_server() {
     );
 }
 
-#[tokio::test]
-async fn a_negative_stored_player_id_is_reported() {
+async fn solves_with_row(insert: &'static str) -> Solves {
     let pool = migrated_pool().await;
-    sqlx::raw_sql(
+    sqlx::raw_sql(insert).execute(&pool).await.unwrap();
+    Solves::with_pool(pool).await.unwrap()
+}
+
+#[tokio::test]
+async fn a_stored_player_id_below_one_is_reported() {
+    let negative = solves_with_row(
         "INSERT INTO guess_solves (guild_id, user_id, ship_index, elapsed_ms, solved_at_ms) VALUES (1, -5, 'PJSB018', 1000, 0)",
     )
-    .execute(&pool)
-    .await
-    .unwrap();
-    let solves = Solves::with_pool(pool).await.unwrap();
+    .await;
     assert!(matches!(
-        solves.leaderboard(GUILD, Ranking::MostWins, 10).await,
-        Err(SolvesError::Negative { value: -5 })
+        negative.leaderboard(GUILD, Ranking::MostWins, 10).await,
+        Err(SolvesError::InvalidPlayer { value: -5 })
+    ));
+    let zero = solves_with_row(
+        "INSERT INTO guess_solves (guild_id, user_id, ship_index, elapsed_ms, solved_at_ms) VALUES (1, 0, 'PJSB018', 1000, 0)",
+    )
+    .await;
+    assert!(matches!(
+        zero.leaderboard(GUILD, Ranking::MostWins, 10).await,
+        Err(SolvesError::InvalidPlayer { value: 0 })
     ));
 }
