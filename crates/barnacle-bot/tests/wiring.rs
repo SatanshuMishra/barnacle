@@ -1,6 +1,8 @@
 mod common;
 
+use barnacle_bot::attendance::Delivery;
 use barnacle_bot::attendance::Target;
+use barnacle_bot::ids::RoleId;
 use barnacle_bot::schedule::Hour;
 use barnacle_bot::schedule::Night;
 use barnacle_bot::solves::Ranking;
@@ -229,4 +231,22 @@ fn a_signup_channel_needs_four_permissions() {
         }),
         ["Embed Links"]
     );
+}
+
+#[test]
+fn a_ping_role_renders_as_a_role_mention() {
+    assert_eq!(wiring::ping_content(Some(RoleId::new(123))), "<@&123>");
+    assert_eq!(wiring::ping_content(None), "");
+}
+
+#[test]
+fn only_a_new_post_may_ping() {
+    let role = RoleId::new(123);
+    assert_eq!(wiring::ping_allowance(Delivery::New, Some(role)), [role]);
+    assert!(wiring::ping_allowance(Delivery::New, None).is_empty());
+    assert!(
+        wiring::ping_allowance(Delivery::Redraw, Some(role)).is_empty(),
+        "a redraw may never ping"
+    );
+    assert!(wiring::ping_allowance(Delivery::Redraw, None).is_empty());
 }
