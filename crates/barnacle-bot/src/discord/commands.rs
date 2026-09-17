@@ -20,6 +20,7 @@ use crate::table::StartOutcome;
 use crate::text;
 use crate::wiring;
 use crate::wiring::ChannelAccess;
+use crate::wiring::LeaderboardRequest;
 use crate::wiring::SortChoice;
 
 const SILHOUETTE_FILE: &str = "silhouette.png";
@@ -328,6 +329,22 @@ async fn leaderboard(
     };
     let request = wiring::leaderboard_request(sort, limit);
     ctx.defer().await?;
+    let response = match leaderboard_embeds(ctx, place, request).await {
+        Ok(embeds) => serenity::EditInteractionResponse::new().embeds(embeds),
+        Err(error) => {
+            tracing::error!(command = %ctx.command().qualified_name, %error, "a command failed");
+            serenity::EditInteractionResponse::new().content(text::SOMETHING_WENT_WRONG)
+        }
+    };
+    app.interaction.edit_response(ctx.http(), response).await?;
+    Ok(())
+}
+
+async fn leaderboard_embeds(
+    ctx: Context<'_>,
+    place: Place,
+    request: LeaderboardRequest,
+) -> Result<Vec<serenity::CreateEmbed>, Error> {
     let standings = ctx
         .data()
         .table
@@ -345,7 +362,7 @@ async fn leaderboard(
         pages if pages.is_empty() => vec![text::NO_WINS_HERE.to_owned()],
         pages => pages,
     };
-    let embeds = pages
+    Ok(pages
         .into_iter()
         .enumerate()
         .map(|(position, page)| {
@@ -358,14 +375,7 @@ async fn leaderboard(
                 embed
             }
         })
-        .collect();
-    app.interaction
-        .edit_response(
-            ctx.http(),
-            serenity::EditInteractionResponse::new().embeds(embeds),
-        )
-        .await?;
-    Ok(())
+        .collect())
 }
 
 #[poise::command(slash_command)]
