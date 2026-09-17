@@ -274,6 +274,8 @@ pub enum AttendanceError {
     BadState { value: String },
     #[error("the attendance database holds {value}, which is not an hour")]
     BadHour { value: i64 },
+    #[error("the attendance database holds {value}, which is not a season number")]
+    BadSeasonNumber { value: i64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -361,13 +363,14 @@ Behaviour, exactly:
 - `with_pool` checks `cb_seasons`, `cb_posts` and `cb_marks` with the same `pragma_table_info` query `solves.rs` uses, in the column order of the migration above. A missing table is `MissingTable`; wrong columns are `UnexpectedColumns`.
 - `create_season` runs in one transaction: `NumberTaken` when this guild already has that season number; `Overlaps(existing)` when another season in this guild has `first_day <= new.last_day AND last_day >= new.first_day`, returning the first such season ordered by `first_day`; otherwise it inserts and returns `Created` with the assigned `id`.
 - `seasons_in` returns every season in that guild ordered by `first_day`.
-- `live_seasons(now)` returns seasons from every guild whose `Range::last_moment_unix()` is greater than `now`. The SQL narrows with `last_day >= ?`, passing the UTC date two days before `now`, and the exact test is done in Rust.
+- `live_seasons(now)` returns seasons from every guild that still have work: either `Range::last_moment_unix()` is greater than `now`, or the season holds a `cb_posts` row whose `state` is not `removed`. The second half is load-bearing. A season's last removal moment is exactly its `last_moment_unix()`, so a liveness test on that alone drops the season one instant before the tick would sweep its final post, and that post is then never deleted. The SQL selects `last_day >= ?`, passing the UTC date two days before `now`, or `EXISTS (SELECT 1 FROM cb_posts WHERE season_id = cb_seasons.id AND state <> 'removed')`, and returns that existence as a column so the exact test can be done in Rust.
 - `end_season` finds the season by guild and number: `NotFound` when there is none; `Removed` when it has no `cb_posts` row, deleting it; otherwise `Shortened` with `last_day` set to the latest `night` in `cb_posts` for that season, updating the row.
 - `record_post` inserts with `state = 'open'`; it is an error for the row to already exist, so callers check `post` first.
 - `set_post_state` updates one row's `state`.
 - `mark` writes one row per hour in `hours` in one transaction, each with `INSERT INTO cb_marks (...) VALUES (...) ON CONFLICT (season_id, night, user_id, hour) DO UPDATE SET attending = excluded.attending, changed_at_ms = excluded.changed_at_ms`, so `answered_at_ms` keeps its first value.
 - `roster` returns every mark for that night ordered by `answered_at_ms`, then `user_id`, then `hour`.
-- Every `u64` to `i64` conversion goes through a checked helper, as `solves.rs` does. A stored value that is out of range, negative, not a CB night, not a state or not an hour is an error, never a silent default.
+- `create_season` and `mark` open their transaction with `BEGIN IMMEDIATE`, taking the write lock before the read. `create_season`'s overlap rule has no constraint behind it, so a deferred transaction lets two overlapping seasons with different numbers both pass the check and both insert.
+- Every `u64` to `i64` conversion goes through a checked helper, as `solves.rs` does. A stored value that is out of range, negative, not a CB night, not a state, not an hour or not a season number is an error, never a silent default. A season number above `u32::MAX` is `BadSeasonNumber`: the column already forbids negatives, so reporting it as one would be a false sentence.
 
 ### 6.3 One pool
 
@@ -551,7 +554,7 @@ The guarantees this buys, which the tests in section 15 pin:
 - **Bursts collapse.** Twenty clicks arriving during one slow edit produce at most two further edits.
 - **The tick can trust it.** `tick` marks a post `Closed` only when its redraw returned `Ok`.
 
-A slot is removed from the map when its post is removed.
+A slot is removed from the map when its post is removed, and only when the entry still in the map is the same `Arc` the remover looked up. Removing by key alone would let a later redraw build a fresh slot, with its own mutex and zeroed counters, while a redraw on the old slot is still in flight, which is two concurrent edits of one message.
 
 ### 7.4 `view`
 
@@ -560,6 +563,7 @@ A slot is removed from the map when its post is removed.
 - `hours[i]` counts the marks for that hour: `attending` where the mark is true, `nope` where it is false.
 - `rows` holds one row per player in roster order (first answer first), with `cells[h-1]` set from that player's mark for hour h, or `Cell::None` when they have no mark for it.
 - At most `ROSTER_LIMIT` rows are kept; `hidden` is how many players were left out.
+- The fold runs once over the marks, keeping an index from player to row, because it runs inside the redraw lock. Scanning the rows per mark is quadratic in the number of players and would block that message's edits while it ran.
 
 ## 8. Strings and IDs
 
@@ -584,7 +588,7 @@ pub fn missing_signup_permissions(access: ChannelAccess) -> Vec<&'static str>;
 
 `missing_signup_permissions` is the sign-up channel's permission set: View Channel, Send Messages, Embed Links and Read Message History. It sits beside the existing `missing_permissions`, which keeps its own set for `/guess`, and neither changes the other.
 
-The grammar is `barnacle-cb:{season}:{night}:{target}:{choice}` where `target` is `all`, `1`, `2`, `3` or `4` and `choice` is `in` or `out`; `night` is `Night::label`. `barnacle-cb:3:2026-09-23:all:in` is an example. `signup_tag_prefix` returns everything through the night and its trailing colon. `signup_click` returns `None` for anything that does not parse, including an unknown target, an unknown choice, a season that is not a positive integer and a date that is not a CB night.
+The grammar is `barnacle-cb:{season}:{night}:{target}:{choice}` where `target` is `all`, `1`, `2`, `3` or `4` and `choice` is `in` or `out`; `night` is `Night::label`. `barnacle-cb:3:2026-09-23:all:in` is an example. `signup_tag_prefix` returns everything through the night and its trailing colon. `signup_click` accepts only what `signup_button_id` can produce and returns `None` for everything else, including an unknown target, an unknown choice, a date that is not a CB night, and a season that is not a plain positive integer: `+3` and `003` are rejected, because `i64::from_str` accepts them and the bot can never write them.
 
 ### 8.2 `crates/barnacle-bot/src/text.rs`
 
@@ -615,7 +619,10 @@ pub fn season_overlaps(other: &Season) -> String;
 pub fn season_removed(number: u32) -> String;
 pub fn season_shortened(number: u32, last_day: Date) -> String;
 pub fn season_not_found(number: u32) -> String;
+pub fn season_list(lines: &[String]) -> String;
 ```
+
+`season_list` joins the lines with newlines while the result stays inside `MESSAGE_CONTENT_LIMIT`, which is 2000, and ends with `and 3 more.` when it had to stop. It lives here rather than in the command so it can be tested without Discord.
 
 Rendered output, exactly:
 
@@ -629,6 +636,7 @@ Rendered output, exactly:
 - `season_not_found(35)` is `No Season 35 is set up here.`
 - `season_started` is `Season 35: Komodo Dragon will post here. 30 CB nights, 23 still ahead. First sign-up post: <t:1790811000:F> (<t:1790811000:R>).` Without a codename the first clause is `Season 35 will post here.`; when `post_at_unix` is `None`, because the next post is already due, the last sentence is `First sign-up post: within a minute.`
 - `season_line` is the same shape as `season_started` for `/cb season show`, prefixed with the channel mention: `<#123> Season 35: Komodo Dragon, 2026-09-16 to 2026-11-05. 23 nights ahead. Next sign-up post: <t:…:F> (<t:…:R>).`
+- Both count sentences go singular at one: `1 CB night, 1 still ahead` and `1 night ahead`. Every season reaches one night ahead on its last night, so the plural form is not an edge case. `standing_line` in the same file already has the shape to follow.
 
 `signup_description(view)` builds these lines, joined with `\n`:
 
@@ -651,6 +659,7 @@ The em dash, the middle dot and the en dash in these strings are exact. There ar
 - **`edit_post`** edits the message with the same embed and components.
 - **`find_post`** reads the channel's last 50 messages with `GetMessages::new().limit(50)` and returns the first message whose author is `self.bot` and which has a button whose `custom_id` starts with `wiring::signup_tag_prefix(tag.season, tag.night)`. A button's ID lives in `serenity::ButtonKind::NonLink { custom_id, .. }`.
 - **`delete_post`** deletes the message, returning `Removal::Gone` for Discord error codes 10008 (Unknown Message) and 10003 (Unknown Channel), matched the way `departed` in `commands.rs` matches 10007, and `Removal::Deleted` otherwise.
+- **Every ID crosses into serenity fallibly.** `serenity::ChannelId::new` and `serenity::MessageId::new` panic on zero, and this crate's `ChannelId` and `Snowflake` are plain `u64` with no non-zero invariant, so a zeroed row in the database would panic inside the tick task and stop every future post for every server. Each of the four methods converts through `NonZeroU64` and returns a `BoardError` instead.
 - Every other failure is a `BoardError`.
 
 ### 9.2 `crates/barnacle-bot/src/discord/commands.rs`
@@ -676,7 +685,9 @@ Checks in this order, each replying with the named string and stopping:
 
 On success it replies with `text::season_started`, passing `due_night(now).is_none().then(...)`: the post time when the next post is still in the future, and `None` when it is already due.
 
-**`/cb season show`** replies with one `text::season_line` per season from `seasons_in(guild)` whose `last_moment_unix()` is still ahead, newest last, or `text::NO_SEASON_HERE`.
+**`/cb season show`** replies with one `text::season_line` per season from `seasons_in(guild)` whose `last_moment_unix()` is still ahead, newest last, or `text::NO_SEASON_HERE`. The reply is capped the way the roster is: lines are taken while the total stays inside Discord's 2,000-character message limit, and a last line counts the rest. Nothing stops a manager creating a dozen one-night seasons, and an over-long reply fails the whole command rather than truncating itself.
+
+Descriptions shown in Discord's command picker: `cb` is `Clan Battle sign-ups`, the `season` group is `Clan Battle seasons for this server`, `start` is `Set up a season and post its sign-ups in this channel`, `show` is `List this server's seasons and when each posts next`, and `end` is `Stop posting sign-ups for a season`. `end`'s `number` option is `Which season to stop posting, for example 35`. A description that names the wrong scope is worse than none: `show` lists the whole server, not the channel it was run in.
 
 **`/cb season end`** takes `number` and replies with `text::season_removed`, `text::season_shortened` or `text::season_not_found` from the `EndOutcome`.
 
@@ -713,6 +724,10 @@ tokio::spawn(async move {
 ```
 
 `TICK` is 60 seconds. `now_unix` is `jiff::Timestamp::now().as_second()` and `now_ms` its millisecond equivalent; both live in `discord.rs`.
+
+This one task drives the whole feature, so its death must not be silent:
+- The body runs inside `catch_unwind` over an `AssertUnwindSafe` future, and a panic is logged at error and the loop continues. Without it, one panic anywhere under `tick` leaves a bot that still answers commands and clicks but never posts, closes or deletes another night, with nothing in the log.
+- `now_ms` returns an `Option`. A clock reading before 1970 fails the conversion, and the beat is skipped with a warning rather than writing zero into `answered_at_ms`, which is the column the roster orders by.
 
 ## 10. The sign-up post
 
@@ -787,8 +802,10 @@ Each test file is owned by the item that owns its subject (section 16). Names ar
 - `end_season_shortens_a_season_that_has_posted`.
 - `marks_upsert_and_keep_the_first_answer_time`.
 - `roster_is_ordered_by_first_answer`.
-- `live_seasons_drops_a_season_past_its_last_removal`.
+- `live_seasons_keeps_a_season_until_its_last_post_is_removed`, which fails if liveness is tested on the range alone.
+- `live_seasons_drops_a_season_whose_posts_are_all_removed`.
 - `a_missing_table_is_named` and `unexpected_columns_are_reported`.
+- `a_season_number_above_the_ceiling_is_named_as_one`.
 
 `tests/attendance.rs`, with a fake board in `tests/common/fakes.rs` and chosen times
 - `posts_the_due_night_once_across_repeated_ticks`.
@@ -804,6 +821,8 @@ Each test file is owned by the item that owns its subject (section 16). Names ar
 - `attend_all_writes_four_marks`.
 - `twenty_clicks_during_one_slow_edit_make_at_most_three_edits`.
 - `the_last_edit_shows_the_last_mark`.
+- `removes_the_last_night_of_a_season`, which fails if a season stops being live at the moment its last post is due for removal.
+- `the_roster_stops_at_the_limit_and_counts_the_rest`, marking more players than `ROSTER_LIMIT` and asserting the row count, the hidden count and the order.
 
 `tests/text.rs`
 - `roster_rows_are_aligned_and_mention_the_player`.
@@ -811,10 +830,13 @@ Each test file is owned by the item that owns its subject (section 16). Names ar
 - `a_closed_view_says_closed_and_drops_the_notice`.
 - `hidden_players_are_counted`.
 - `a_title_without_a_codename_omits_the_colon`.
+- `a_full_roster_fits_discords_description_limit`, building `ROSTER_LIMIT` rows with the longest possible user IDs and asserting the rendered description stays inside `EMBED_DESCRIPTION_LIMIT`. Without it, raising `ROSTER_LIMIT` later makes Discord reject every edit while the suite stays green.
+- `one_night_reads_as_singular` over both count sentences.
+- `a_long_season_list_is_capped_and_counted`.
 
 `tests/wiring.rs`
 - `signup_ids_round_trip` for every target and both choices.
-- `a_malformed_signup_id_is_rejected`.
+- `a_malformed_signup_id_is_rejected`, including `+3` and `003` as season numbers.
 - `the_longest_signup_id_fits_discords_limit`.
 
 `tests/startup.rs`
