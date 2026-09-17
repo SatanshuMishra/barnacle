@@ -238,3 +238,38 @@ names = ["- . ,"]
         set(["iowa"])
     );
 }
+
+#[test]
+fn a_ships_own_names_and_its_lookalikes_can_be_listed() {
+    let book = book(
+        vec![
+            ship("PBSC507", "Belfast", 7, "belfast"),
+            ship("PBSC528", "Belfast '43", 8, "belfast-43"),
+            ship("PBSC108", "Edinburgh", 8, "edinburgh"),
+        ],
+        r#"
+[[lookalikes]]
+ships = ["PBSC507", "PBSC528"]
+
+[[lookalikes]]
+ships = ["PBSC507", "PBSC108"]
+
+[[aliases]]
+index = "PBSC507"
+names = ["Belfast Classic"]
+"#,
+    );
+    assert_eq!(
+        book.names(&index("PBSC507")),
+        set(["belfast", "belfastclassic"])
+    );
+    assert_eq!(
+        book.lookalikes(&index("PBSC507")),
+        [&index("PBSC108"), &index("PBSC528")].into_iter().collect()
+    );
+    assert!(book.names(&index("PZSX999")).is_empty());
+    assert!(
+        book.lookalikes(&index("PBSC108"))
+            .contains(&index("PBSC507"))
+    );
+}

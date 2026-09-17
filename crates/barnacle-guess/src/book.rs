@@ -113,6 +113,17 @@ impl ShipBook {
             .collect()
     }
 
+    pub fn names(&self, index: &ShipIndex) -> BTreeSet<String> {
+        self.entries
+            .get(index)
+            .map(|entry| entry.answers.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn lookalikes(&self, index: &ShipIndex) -> BTreeSet<&ShipIndex> {
+        self.lookalikes.get(index).into_iter().flatten().collect()
+    }
+
     pub fn draw<R: Rng + ?Sized>(
         &self,
         options: &RoundOptions,

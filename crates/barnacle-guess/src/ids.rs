@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 const TIMESTAMP_SHIFT: u32 = 22;
+const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct UserId(u64);
@@ -29,6 +30,10 @@ impl Snowflake {
 
     pub const fn millis_since_discord_epoch(self) -> u64 {
         self.0 >> TIMESTAMP_SHIFT
+    }
+
+    pub const fn unix_millis(self) -> u64 {
+        self.millis_since_discord_epoch() + DISCORD_EPOCH_MS
     }
 
     pub fn elapsed_until(self, later: Snowflake) -> Duration {
