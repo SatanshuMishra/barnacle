@@ -2,6 +2,17 @@ mod common;
 
 use std::time::Duration;
 
+use barnacle_bot::attendance::Cell;
+use barnacle_bot::attendance::HourTally;
+use barnacle_bot::attendance::RosterRow;
+use barnacle_bot::attendance::SignupView;
+use barnacle_bot::attendance_store::Season;
+use barnacle_bot::ids::ChannelId;
+use barnacle_bot::ids::GuildId;
+use barnacle_bot::schedule::Hour;
+use barnacle_bot::schedule::Night;
+use barnacle_bot::schedule::Range;
+use barnacle_bot::schedule::parse_day;
 use barnacle_bot::solves::Ranking;
 use barnacle_bot::solves::Standing;
 use barnacle_bot::text;
@@ -270,4 +281,175 @@ fn a_full_board_of_long_names_is_split_within_discords_limits() {
         .count();
     assert!(title + pages.iter().map(length).sum::<usize>() <= text::MESSAGE_EMBEDS_LIMIT);
     assert_eq!(pages.join("\n"), lines.join("\n"));
+}
+
+const NIGHT_START: i64 = 1_790_206_200;
+const ROSTER_CELLS: usize = 20;
+
+fn signup_night() -> Night {
+    Night::parse("2026-09-23").unwrap()
+}
+
+fn tallies() -> [HourTally; 4] {
+    let counts = [(6, 1), (7, 1), (5, 2), (3, 3)];
+    std::array::from_fn(|index| HourTally {
+        hour: Hour::ALL[index],
+        attending: counts[index].0,
+        nope: counts[index].1,
+    })
+}
+
+fn roster() -> Vec<RosterRow> {
+    vec![
+        RosterRow {
+            user: UserId::new(11),
+            cells: [Cell::In, Cell::In, Cell::In, Cell::None],
+        },
+        RosterRow {
+            user: UserId::new(22),
+            cells: [Cell::In, Cell::In, Cell::Out, Cell::Out],
+        },
+    ]
+}
+
+fn signup_view(open: bool, rows: Vec<RosterRow>, hidden: usize) -> SignupView {
+    SignupView {
+        season: 1,
+        number: 35,
+        codename: Some("Komodo Dragon".to_owned()),
+        night: signup_night(),
+        open,
+        hours: tallies(),
+        rows,
+        hidden,
+    }
+}
+
+fn season(number: u32, codename: Option<&str>, first_day: &str, last_day: &str) -> Season {
+    Season {
+        id: 1,
+        guild: GuildId::new(1),
+        channel: ChannelId::new(123),
+        number,
+        codename: codename.map(str::to_owned),
+        range: Range::new(parse_day(first_day).unwrap(), parse_day(last_day).unwrap()).unwrap(),
+        created_by: UserId::new(7),
+        created_at_ms: 0,
+    }
+}
+
+#[test]
+fn roster_rows_are_aligned_and_mention_the_player() {
+    let description = text::signup_description(&signup_view(true, roster(), 0));
+    assert_eq!(
+        description,
+        [
+            "<t:1790206200:F> · starts <t:1790206200:R>",
+            "Sign-ups close when the night starts.",
+            "",
+            "**Hour 1** · <t:1790206200:t> – <t:1790209800:t> · 6 in · 1 out",
+            "**Hour 2** · <t:1790209800:t> – <t:1790213400:t> · 7 in · 1 out",
+            "**Hour 3** · <t:1790213400:t> – <t:1790217000:t> · 5 in · 2 out",
+            "**Hour 4** · <t:1790217000:t> – <t:1790220600:t> · 3 in · 3 out",
+            "",
+            "`1    2    3    4    `",
+            "`in   in   in   -    ` <@11>",
+            "`in   in   out  out  ` <@22>",
+        ]
+        .join("\n")
+    );
+    let spans: Vec<usize> = description
+        .lines()
+        .filter(|line| line.starts_with('`'))
+        .map(|line| line.split('`').nth(1).unwrap().chars().count())
+        .collect();
+    assert_eq!(spans, [ROSTER_CELLS; 3]);
+    assert_eq!(text::ROSTER_HEADER.chars().count(), ROSTER_CELLS);
+}
+
+#[test]
+fn an_empty_roster_says_so() {
+    let description = text::signup_description(&signup_view(true, Vec::new(), 0));
+    assert!(description.ends_with(&format!("\n\n{}", text::NO_ANSWERS_YET)));
+    assert!(!description.contains('`'));
+    assert!(!description.contains("<@"));
+}
+
+#[test]
+fn a_closed_view_says_closed_and_drops_the_notice() {
+    let description = text::signup_description(&signup_view(false, roster(), 0));
+    let lines: Vec<&str> = description.lines().collect();
+    assert_eq!(lines[0], "<t:1790206200:F> · Sign-ups closed");
+    assert_eq!(lines[1], "");
+    assert!(!description.contains(text::SIGNUPS_CLOSE_AT_START));
+    assert!(!description.contains("starts <t:"));
+    assert_eq!(lines.last(), Some(&"`in   in   out  out  ` <@22>"));
+}
+
+#[test]
+fn hidden_players_are_counted() {
+    let description = text::signup_description(&signup_view(true, roster(), 7));
+    assert!(description.ends_with("\n`in   in   out  out  ` <@22>\nand 7 more."));
+    assert!(!text::signup_description(&signup_view(true, roster(), 0)).contains("more."));
+}
+
+#[test]
+fn a_title_without_a_codename_omits_the_colon() {
+    assert_eq!(text::signup_title(35, None), "Clan Battles · Season 35");
+    assert!(!text::signup_title(35, None).contains(':'));
+    assert_eq!(
+        text::signup_title(35, Some("Komodo Dragon")),
+        "Clan Battles · Season 35: Komodo Dragon"
+    );
+}
+
+#[test]
+fn hour_buttons_and_the_closed_notice_name_the_hour_and_the_time() {
+    assert_eq!(
+        text::hour_button_label(Hour::ALL[0], true),
+        "Hour 1: Attending"
+    );
+    assert_eq!(text::hour_button_label(Hour::ALL[3], false), "Hour 4: Nope");
+    assert_eq!(
+        text::signups_closed_at(NIGHT_START),
+        "Sign-ups for this night closed at <t:1790206200:t>."
+    );
+}
+
+#[test]
+fn a_started_season_names_its_nights_and_its_first_post() {
+    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
+    assert_eq!(
+        text::season_started(&komodo, 23, Some(1_790_811_000)),
+        "Season 35: Komodo Dragon will post here. 30 CB nights, 23 still ahead. First sign-up post: <t:1790811000:F> (<t:1790811000:R>)."
+    );
+    assert_eq!(
+        text::season_started(&season(35, None, "2026-09-16", "2026-11-05"), 23, None),
+        "Season 35 will post here. 30 CB nights, 23 still ahead. First sign-up post: within a minute."
+    );
+    assert_eq!(
+        text::season_line(&komodo, 23, Some(1_790_811_000)),
+        "<#123> Season 35: Komodo Dragon, 2026-09-16 to 2026-11-05. 23 nights ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>)."
+    );
+}
+
+#[test]
+fn season_replies_name_the_season_and_its_dates() {
+    assert_eq!(
+        text::season_number_taken(35),
+        "Season 35 already exists. End it first with /cb season end."
+    );
+    assert_eq!(
+        text::season_overlaps(&season(34, None, "2026-06-10", "2026-08-02")),
+        "That range overlaps Season 34 (2026-06-10 to 2026-08-02)."
+    );
+    assert_eq!(
+        text::season_removed(35),
+        "Season 35 was removed. Nothing had been posted."
+    );
+    assert_eq!(
+        text::season_shortened(35, parse_day("2026-10-01").unwrap()),
+        "Season 35 ends after 2026-10-01. No more sign-up posts."
+    );
+    assert_eq!(text::season_not_found(35), "No Season 35 is set up here.");
 }
