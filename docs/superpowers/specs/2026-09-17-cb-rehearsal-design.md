@@ -44,7 +44,7 @@ Three new `ConfigError` variants, with these exact messages:
 | `RehearsalWithGlobal` | `commands.scope is "global", so rehearsal.guilds must be left out` | the section is present and scope is global |
 | `RehearsalNotRegistered { guild }` | `rehearsal.guilds lists {guild}, which is not in commands.guilds` | any entry is absent from `commands.guilds` |
 
-An empty `[rehearsal] guilds = []` is accepted and means no rehearsal server, identical to leaving the section out.
+Under `scope = "guilds"`, an empty `[rehearsal] guilds = []` is accepted and means no rehearsal server, identical to leaving the section out. Under `scope = "global"` the section must be left out entirely, empty or not, because a section that names no server it could scope is an operator saying something that cannot work.
 
 `barnacle.example.toml` gains the section, commented out, with a line saying a server listed there is wiped by `/rehearse reset`.
 
@@ -53,6 +53,10 @@ An empty `[rehearsal] guilds = []` is accepted and means no rehearsal server, id
 `register` currently sends one command list to every guild. It now sends a different list per guild: `commands::all()` everywhere, and `commands::all()` plus `commands::rehearsal()` in a guild that appears in `rehearsal`.
 
 This is what makes the guarantee structural. In a server that is not listed, the rehearsal commands are not registered, so they do not appear in Discord's command list at all: not hidden, not permission-denied, absent.
+
+The guarantee holds for every server the running config names, which is every server `register` writes to. It does not extend to a server the config has stopped naming: the bot never writes to one, so it keeps the list it was last given. Taking a server out of `rehearsal` alone is safe, because it is still in `commands.guilds` and gets rewritten on the next start. Taking it out of both in one edit strands its command list, and the in-command guard is what stops that stale `/rehearse reset` doing anything. The README states the order: drop it from `rehearsal`, start once, then drop it from `commands.guilds`.
+
+The per-guild selection is the pure function `command_list_for(guild, rehearsal)`, public so a test can prove it directly. That test is the only thing standing between a future edit and shipping `/rehearse` into a real server, so it is named in section 11 rather than left to the reviewer to think of.
 
 `register` takes `rehearsal: &[u64]` alongside the scope. Under `CommandScope::Global` the rehearsal list is empty by section 4's validation, so the global branch is unchanged.
 
@@ -118,12 +122,17 @@ pub async fn purge_season(&self, guild: GuildId, id: i64) -> Result<u64, Attenda
 `purge_season` runs in one `BEGIN IMMEDIATE` transaction and deletes in foreign-key order, since `cb_marks` references `cb_posts` and `cb_posts` references `cb_seasons`:
 
 ```sql
+SELECT id FROM cb_seasons WHERE id = ? AND guild_id = ? AND number = ?
 DELETE FROM cb_marks WHERE season_id = ?
 DELETE FROM cb_posts WHERE season_id = ?
-DELETE FROM cb_seasons WHERE id = ? AND guild_id = ?
+DELETE FROM cb_seasons WHERE id = ? AND guild_id = ? AND number = ?
 ```
 
-It returns the number of `cb_marks` rows deleted. The season delete carries `guild_id` so a mistaken id cannot reach another server's season; if it matches no row the transaction still commits, having deleted nothing, because the marks and posts deletes are keyed on the same id and a caller that passed a foreign id has already been told nothing by `seasons_in_any_state`.
+**The guard is the first statement and it is not optional.** Without it the three deletes reach another server's data: the marks and posts deletes are keyed on the season id alone, so a foreign id destroys that season's posts and answers and hands their count back to the caller, while only the season row survives. The guard returns `Ok(None)` and deletes nothing when it matches no row.
+
+`number` is in the guard as well as `guild_id` because `cb_seasons.id` is a reused rowid. Across the purge window - list the seasons, delete their messages, then delete their rows - an `end_season` that removes a postless season frees its rowid, and a season created in that window can be issued the same one. Matching the number the caller read makes the delete hit the season it meant.
+
+It returns `Ok(Some(answers))` when the season was deleted, carrying the number of `cb_marks` rows removed, and `Ok(None)` when the guard matched nothing. The two cases must be distinguishable: a season that held no answers deletes successfully and returns `Some(0)`, and a caller that treats zero as no-match would miscount it.
 
 No migration. Nothing in this section changes a table.
 
@@ -171,15 +180,24 @@ Exactly these, in `text.rs`:
 ```rust
 pub const REHEARSAL_ONLY: &str = "This server is not set up for rehearsals.";
 pub const NOTHING_TO_ADVANCE: &str = "Nothing is waiting for that step.";
-pub const RESET_BLOCKED: &str = "Some sign-up posts could not be removed, so nothing was deleted. Check that the bot can manage messages here, then run this again.";
 ```
 
 ```rust
 pub fn advanced(moment_unix: i64, report: &TickReport) -> String
 pub fn reset_done(purge: &PurgeReport) -> String
+pub fn reset_blocked(purge: &PurgeReport) -> String
 ```
 
-`advanced` renders `Ran the beat at <t:MOMENT:F>.` followed by one sentence per non-empty count, in the order posted, adopted, closed, removed, then failures, each using the existing singular and plural helpers:
+`reset_blocked` must not claim that nothing was deleted. By the time a purge refuses, the posts it already cleared are gone from Discord and their rows carry state `removed`; only the seasons and the answers are untouched. It renders a head sentence, then the count it had already cleared when that count is not zero, then the advice:
+
+```
+Some sign-up posts could not be removed, so no season or answer was deleted. Check that the bot can manage messages here, then run this again.
+Some sign-up posts could not be removed, so no season or answer was deleted. 8 sign-up posts were already cleared. Check that the bot can manage messages here, then run this again.
+```
+
+`already cleared` rather than `deleted`, because the count includes posts a delete found already gone.
+
+`advanced` renders `Ran the beat at <t:MOMENT:F>.` followed by one sentence per non-empty count, in the order posted, adopted, closed, removed, then failures, each using the existing singular and plural helpers. Adopting is the beat finding a post already in the channel and taking it over instead of sending one, and it renders `1 sign-up post was adopted.` on the same pattern as removed:
 
 ```
 Ran the beat at <t:1790811000:F>. 1 sign-up post went up.
@@ -220,6 +238,7 @@ Named exactly. `tests/config.rs`:
 
 - `a_rehearsal_server_is_read_from_the_config`
 - `a_rehearsal_server_outside_the_command_guilds_is_refused`
+- `the_example_rehearsal_section_parses_when_uncommented`
 - `a_rehearsal_server_with_global_scope_is_refused`
 - `a_zero_rehearsal_server_is_refused`
 - `an_empty_rehearsal_list_is_no_rehearsal_server`
@@ -228,6 +247,8 @@ Named exactly. `tests/config.rs`:
 
 - `purge_season_deletes_its_marks_posts_and_season`
 - `purge_season_leaves_another_guilds_season_alone`
+- `purge_season_ignores_a_number_that_is_not_the_one_it_read`
+- `purge_season_reports_a_deleted_season_that_held_no_answers`
 - `seasons_in_any_state_lists_an_ended_season`
 
 `tests/attendance.rs`:
@@ -237,13 +258,23 @@ Named exactly. `tests/config.rs`:
 - `advancing_to_the_post_moment_posts_the_night`
 - `a_purge_deletes_every_message_row_and_answer`
 - `a_purge_whose_delete_fails_deletes_no_rows`
+- `a_purge_stops_at_the_first_season_whose_delete_fails`
 
-The last one is the important one: with `FakeBoard::fail_deletes` set, assert `failures` is non-zero, `seasons` and `answers` are zero, and that the season, its post row and its marks are all still readable afterwards.
+Two of these carry the weight. `a_purge_whose_delete_fails_deletes_no_rows` sets `FakeBoard::fail_deletes` and asserts `failures` is non-zero, `seasons` and `answers` are zero, and that the season, its post row and its marks are all still readable afterwards. `a_purge_stops_at_the_first_season_whose_delete_fails` does the harder half with a per-channel failure switch, `FakeBoard::fail_deletes_in`, so one season clears and the next refuses: that is the shape a refactor would break by moving the row deletion inside the clearing loop, and a single-season test cannot see it.
+
+`the_beat_skips_a_rehearsal_server` must tick at the night's start and at its removal moment **after** the rehearsal night has been posted by hand. Ticking only before it exists exercises the posting pass alone, and a weakened filter would then close and delete a live rehearsal post with every test still green.
 
 `tests/text.rs`:
 
 - `an_advance_reports_what_the_beat_did`
 - `a_reset_reports_what_it_cleared`
+- `a_blocked_reset_says_what_it_had_already_cleared`
+
+`tests/discord.rs`, new, covering the per-guild command selection:
+
+- `a_server_outside_the_rehearsal_list_is_sent_no_rehearsal_commands`
+- `a_rehearsal_server_is_sent_the_rehearsal_commands`
+- `the_rehearsal_list_adds_nothing_but_the_rehearse_group`
 
 ## 12. Work split
 

@@ -242,3 +242,22 @@ guilds = [111111111111111111]
     assert!(with_section.rehearsal.is_empty());
     assert_eq!(with_section, without_section);
 }
+
+#[test]
+fn the_example_rehearsal_section_parses_when_uncommented() {
+    let text = include_str!("../../../barnacle.example.toml")
+        .replace(
+            "guilds = []\n\n# A server",
+            "guilds = [111111111111111111]\n\n# A server",
+        )
+        .replace("# [rehearsal]", "[rehearsal]")
+        .replace("# guilds = []", "guilds = []");
+    let config = Config::from_toml(&text).unwrap();
+    assert!(config.rehearsal.is_empty());
+    assert_eq!(
+        config.commands,
+        CommandScope::Guilds {
+            guilds: vec![111111111111111111],
+        }
+    );
+}

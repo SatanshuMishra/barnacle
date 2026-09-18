@@ -99,6 +99,26 @@ Three commands change a season once it is running:
 - `/cb season move` is run in the channel the season should post in from now on. It removes the season's posts from the old channel and posts them there instead. If any of the old posts cannot be removed, nothing moves and the season stays where it is.
 - `/cb season end` stops a season at once: every sign-up post it still has is deleted from Discord and nothing more posts. If any post cannot be deleted, the season keeps running so you can fix the bot's permissions and run it again. Every answer already given stays in the database, and the season's number is free to reuse.
 
+### Rehearsing in a throwaway server
+
+Every step above is driven by the clock, so a change to the sign-up flow cannot be watched on the day it is written. A rehearsal server is a Discord server that holds nothing anyone cares about, listed in `barnacle.toml` under `[rehearsal]`:
+
+```toml
+[rehearsal]
+guilds = [222222222222222222]
+```
+
+A server listed there has to be in `commands.guilds` as well, which means `commands.scope` has to be `"guilds"`. In a rehearsal server the bot's timer does nothing: a season there advances only when you advance it by hand, so the same run produces the same sequence every time.
+
+Two commands exist only in a server the section names. The bot registers a command list per server every time it starts, so a server the section does not name is sent a list without them and they do not appear in its command list. Both also refuse to run in a server the section does not name, so the guard does not depend on the registration being right.
+
+Taking a server out of `[rehearsal]` while leaving it in `commands.guilds` removes the commands on the next start. Removing it from `commands.guilds` as well does not: the bot never writes to a server it is not told about, so that server keeps the list it was last given until you clear its commands by hand. Take it out of `[rehearsal]`, start the bot once, and only then remove it from `commands.guilds`.
+
+- `/rehearse advance to:post`, `to:close` or `to:remove` runs the real sign-up step at the moment the server's own data is waiting for: the next night with no post, the earliest open post, or the earliest post still on screen. It runs exactly what the timer would run at that moment, so advancing to a later step also performs every earlier step that moment implies.
+- `/rehearse reset` deletes every Clan Battle season, sign-up post and answer in that server, including seasons that have already ended. If any post cannot be removed from Discord, no season and no answer is deleted, and the reply says how many posts had already been cleared before it stopped. The silhouette game's rounds and solves are left alone.
+
+A full rehearsal is `/cb season start` with a range covering the next CB nights, then `advance to:post`, some clicks, `/cb season edit`, `/cb season move` in another channel, `advance to:close`, `advance to:remove`, `/cb season end`, and finally `/rehearse reset`. Do not list a real clan server here: a reset deletes its seasons without asking which of them mattered.
+
 ## License
 
 Apache-2.0. See `LICENSE`.
