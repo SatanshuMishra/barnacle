@@ -8,6 +8,7 @@ use barnacle_bot::attendance::Click;
 use barnacle_bot::attendance::ClickOutcome;
 use barnacle_bot::attendance::PostTag;
 use barnacle_bot::attendance::PostsReport;
+use barnacle_bot::attendance::PurgeReport;
 use barnacle_bot::attendance::ROSTER_LIMIT;
 use barnacle_bot::attendance::Signups;
 use barnacle_bot::attendance::Target;
@@ -35,8 +36,10 @@ use common::fakes::FakeBoard;
 const TODAY: &str = "2026-09-16";
 
 const GUILD: GuildId = GuildId::new(1);
+const REHEARSAL: GuildId = GuildId::new(2);
 const CHANNEL: ChannelId = ChannelId::new(10);
 const OTHER_CHANNEL: ChannelId = ChannelId::new(11);
+const REHEARSAL_CHANNEL: ChannelId = ChannelId::new(20);
 const MANAGER: UserId = UserId::new(100);
 const AKI: UserId = UserId::new(200);
 const BOREALIS: UserId = UserId::new(300);
@@ -80,6 +83,13 @@ fn proposal() -> NewSeason {
     }
 }
 
+async fn created(store: &Attendance, new: &NewSeason) -> Season {
+    match store.create_season(new).await.unwrap() {
+        CreateOutcome::Created(season) => season,
+        other => panic!("expected a created season, got {other:?}"),
+    }
+}
+
 async fn ready_from(
     board: FakeBoard,
     new: &NewSeason,
@@ -87,11 +97,25 @@ async fn ready_from(
     let store = Attendance::with_pool(attendance_pool().await)
         .await
         .unwrap();
-    let season = match store.create_season(new).await.unwrap() {
-        CreateOutcome::Created(season) => season,
-        other => panic!("expected a created season, got {other:?}"),
-    };
+    let season = created(&store, new).await;
     (Signups::new(board, store.clone()), season, store)
+}
+
+fn rehearsal_proposal() -> NewSeason {
+    NewSeason {
+        guild: REHEARSAL,
+        channel: REHEARSAL_CHANNEL,
+        ..proposal()
+    }
+}
+
+async fn two_servers() -> (Attendance, Season, Season) {
+    let store = Attendance::with_pool(attendance_pool().await)
+        .await
+        .unwrap();
+    let clan = created(&store, &proposal()).await;
+    let elsewhere = created(&store, &rehearsal_proposal()).await;
+    (store, clan, elsewhere)
 }
 
 async fn ready(board: FakeBoard) -> (Arc<Signups<FakeBoard>>, Season, Attendance) {
@@ -1032,5 +1056,194 @@ async fn a_redraw_renders_the_season_as_it_is_now() {
     assert_eq!(
         edits.last().unwrap().codename.as_deref(),
         Some("Blue Whale")
+    );
+}
+
+#[tokio::test]
+async fn the_beat_skips_a_rehearsal_server() {
+    let board = FakeBoard::new();
+    let (store, clan, elsewhere) = two_servers().await;
+    let signups = Signups::rehearsing(board.clone(), store.clone(), vec![REHEARSAL]);
+    let report = signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    assert_eq!(report.posted, vec![tag(&clan, first_night())]);
+    assert_eq!(report.failures, 0);
+    assert_eq!(store.post(elsewhere.id, first_night()).await.unwrap(), None);
+    assert!(board.sends_to(REHEARSAL_CHANNEL).is_empty());
+    let swept = signups.tick(FIRST_REMOVE_AT, millis(FIRST_REMOVE_AT)).await;
+    assert_eq!(swept.removed, vec![tag(&clan, first_night())]);
+    assert!(board.sends_to(REHEARSAL_CHANNEL).is_empty());
+    let by_hand = signups
+        .tick_in(REHEARSAL, FIRST_POST_AT, millis(FIRST_POST_AT))
+        .await;
+    assert_eq!(by_hand.posted, vec![tag(&elsewhere, first_night())]);
+    assert_eq!(board.sends_to(REHEARSAL_CHANNEL).len(), 1);
+    assert_eq!(
+        state_of(&store, &elsewhere, first_night()).await,
+        PostState::Open
+    );
+}
+
+#[tokio::test]
+async fn tick_in_runs_only_the_guild_it_is_given() {
+    let board = FakeBoard::new();
+    let (store, clan, elsewhere) = two_servers().await;
+    let signups = Signups::new(board.clone(), store.clone());
+    let report = signups
+        .tick_in(GUILD, FIRST_POST_AT, millis(FIRST_POST_AT))
+        .await;
+    assert_eq!(report.posted, vec![tag(&clan, first_night())]);
+    assert_eq!(report.failures, 0);
+    assert_eq!(store.post(elsewhere.id, first_night()).await.unwrap(), None);
+    assert_eq!(board.sends_to(CHANNEL).len(), 1);
+    assert!(board.sends_to(REHEARSAL_CHANNEL).is_empty());
+    let scoped = signups
+        .tick_in(REHEARSAL, FIRST_POST_AT, millis(FIRST_POST_AT))
+        .await;
+    assert_eq!(scoped.posted, vec![tag(&elsewhere, first_night())]);
+    assert_eq!(scoped.failures, 0);
+    assert_eq!(board.sends_to(REHEARSAL_CHANNEL).len(), 1);
+    assert_eq!(board.sends_to(CHANNEL).len(), 1);
+}
+
+#[tokio::test]
+async fn advancing_to_the_post_moment_posts_the_night() {
+    let board = FakeBoard::new();
+    let store = Attendance::with_pool(attendance_pool().await)
+        .await
+        .unwrap();
+    let season = created(&store, &rehearsal_proposal()).await;
+    let signups = Signups::rehearsing(board.clone(), store.clone(), vec![REHEARSAL]);
+    let moment = season
+        .range
+        .nights()
+        .find(|night| night == &first_night())
+        .unwrap()
+        .post_at_unix();
+    assert_eq!(moment, FIRST_POST_AT);
+    assert_eq!(
+        signups.tick(moment, millis(moment)).await,
+        TickReport::default()
+    );
+    let report = signups.tick_in(REHEARSAL, moment, millis(moment)).await;
+    assert_eq!(report.posted, vec![tag(&season, first_night())]);
+    assert_eq!(report.failures, 0);
+    assert_eq!(
+        state_of(&store, &season, first_night()).await,
+        PostState::Open
+    );
+    let posted = board.sends_to(REHEARSAL_CHANNEL);
+    assert_eq!(posted.len(), 1);
+    assert_eq!(posted[0].night, first_night());
+    assert!(posted[0].open);
+}
+
+#[tokio::test]
+async fn a_purge_deletes_every_message_row_and_answer() {
+    let board = FakeBoard::new();
+    let (signups, season, store, first, second) = both_nights(board.clone()).await;
+    let attending = Click {
+        night: second_night(),
+        ..press(&season, second, AKI, Target::All)
+    };
+    assert_eq!(
+        signups
+            .click(attending, FIRST_START, millis(FIRST_START))
+            .await,
+        ClickOutcome::Recorded
+    );
+    let nope = Click {
+        night: second_night(),
+        attending: false,
+        ..press(
+            &season,
+            second,
+            BOREALIS,
+            Target::One(Hour::new(1).unwrap()),
+        )
+    };
+    assert_eq!(
+        signups.click(nope, FIRST_START, millis(FIRST_START)).await,
+        ClickOutcome::Recorded
+    );
+    let report = signups.purge(GUILD, FIRST_START).await;
+    assert_eq!(
+        report,
+        PurgeReport {
+            seasons: 1,
+            messages: 2,
+            answers: 5,
+            failures: 0
+        }
+    );
+    assert_eq!(board.deletes(), vec![first, second]);
+    assert_eq!(store.season(season.id).await.unwrap(), None);
+    assert!(store.posts(season.id).await.unwrap().is_empty());
+    assert!(
+        store
+            .roster(season.id, second_night())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.seasons_in_any_state(GUILD).await.unwrap().is_empty());
+    assert_eq!(
+        signups.purge(GUILD, FIRST_START).await,
+        PurgeReport::default()
+    );
+    assert_eq!(board.deletes().len(), 2);
+}
+
+#[tokio::test]
+async fn a_purge_whose_delete_fails_deletes_no_rows() {
+    let board = FakeBoard::new();
+    let (signups, season, store) = ready(board.clone()).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let message = message_for(&store, &season, first_night()).await;
+    signups
+        .click(
+            press(&season, message, AKI, Target::All),
+            FIRST_POST_AT,
+            millis(FIRST_POST_AT),
+        )
+        .await;
+    board.fail_deletes(true);
+    let refused = signups.purge(GUILD, FIRST_POST_AT).await;
+    assert_eq!(refused.failures, 1);
+    assert_eq!(refused.seasons, 0);
+    assert_eq!(refused.answers, 0);
+    assert_eq!(refused.messages, 0);
+    assert_eq!(board.deletes_in(CHANNEL), vec![message]);
+    assert_eq!(store.season(season.id).await.unwrap(), Some(season.clone()));
+    assert_eq!(
+        store.seasons_in_any_state(GUILD).await.unwrap(),
+        vec![season.clone()]
+    );
+    assert_eq!(message_for(&store, &season, first_night()).await, message);
+    assert_eq!(
+        state_of(&store, &season, first_night()).await,
+        PostState::Open
+    );
+    assert_eq!(
+        store.roster(season.id, first_night()).await.unwrap().len(),
+        4
+    );
+    board.fail_deletes(false);
+    let cleared = signups.purge(GUILD, FIRST_POST_AT).await;
+    assert_eq!(
+        cleared,
+        PurgeReport {
+            seasons: 1,
+            messages: 1,
+            answers: 4,
+            failures: 0
+        }
+    );
+    assert_eq!(store.season(season.id).await.unwrap(), None);
+    assert!(
+        store
+            .roster(season.id, first_night())
+            .await
+            .unwrap()
+            .is_empty()
     );
 }
