@@ -13,17 +13,20 @@ use barnacle_bot::attendance::ROSTER_LIMIT;
 use barnacle_bot::attendance::Signups;
 use barnacle_bot::attendance::Target;
 use barnacle_bot::attendance::TickReport;
+use barnacle_bot::attendance::next_moment;
 use barnacle_bot::attendance_store::Attendance;
 use barnacle_bot::attendance_store::CreateOutcome;
 use barnacle_bot::attendance_store::EditOutcome;
 use barnacle_bot::attendance_store::EndOutcome;
 use barnacle_bot::attendance_store::NewSeason;
+use barnacle_bot::attendance_store::Post;
 use barnacle_bot::attendance_store::PostState;
 use barnacle_bot::attendance_store::Season;
 use barnacle_bot::attendance_store::SeasonChange;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::RoleId;
+use barnacle_bot::schedule::Days;
 use barnacle_bot::schedule::Hour;
 use barnacle_bot::schedule::Night;
 use barnacle_bot::schedule::Range;
@@ -32,6 +35,7 @@ use barnacle_guess::Snowflake;
 use barnacle_guess::UserId;
 use common::attendance_pool;
 use common::fakes::FakeBoard;
+use sqlx::sqlite::SqlitePool;
 
 const TODAY: &str = "2026-09-16";
 
@@ -45,10 +49,14 @@ const AKI: UserId = UserId::new(200);
 const BOREALIS: UserId = UserId::new(300);
 const CREWMATES: RoleId = RoleId::new(4242);
 
+const REAL_NOW: i64 = 1_789_473_600;
 const FIRST_POST_AT: i64 = 1_789_515_000;
 const FIRST_START: i64 = 1_789_601_400;
 const FIRST_REMOVE_AT: i64 = 1_789_617_600;
 const SECOND_START: i64 = 1_789_687_800;
+const SECOND_REMOVE_AT: i64 = 1_789_704_000;
+const THIRD_START: i64 = 1_789_774_200;
+const THIRD_REMOVE_AT: i64 = 1_789_790_400;
 
 fn millis(now_unix: i64) -> u64 {
     u64::try_from(now_unix).unwrap() * 1_000
@@ -66,6 +74,10 @@ fn second_night() -> Night {
     night("2026-09-17")
 }
 
+fn third_night() -> Night {
+    night("2026-09-18")
+}
+
 fn proposal() -> NewSeason {
     NewSeason {
         guild: GUILD,
@@ -77,6 +89,7 @@ fn proposal() -> NewSeason {
             parse_day("2026-11-05").unwrap(),
         )
         .unwrap(),
+        days: Days::ClanBattle,
         created_by: MANAGER,
         created_at_ms: millis(FIRST_POST_AT),
         ping_role: None,
@@ -105,6 +118,13 @@ fn rehearsal_proposal() -> NewSeason {
     NewSeason {
         guild: REHEARSAL,
         channel: REHEARSAL_CHANNEL,
+        range: Range::every_day(
+            parse_day("2026-09-16").unwrap(),
+            parse_day("2026-09-18").unwrap(),
+        )
+        .unwrap(),
+        days: Days::Every,
+        created_at_ms: millis(REAL_NOW),
         ..proposal()
     }
 }
@@ -1060,39 +1080,6 @@ async fn a_redraw_renders_the_season_as_it_is_now() {
 }
 
 #[tokio::test]
-async fn the_beat_skips_a_rehearsal_server() {
-    let board = FakeBoard::new();
-    let (store, clan, elsewhere) = two_servers().await;
-    let signups = Signups::rehearsing(board.clone(), store.clone(), vec![REHEARSAL]);
-    let report = signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
-    assert_eq!(report.posted, vec![tag(&clan, first_night())]);
-    assert_eq!(report.failures, 0);
-    assert_eq!(store.post(elsewhere.id, first_night()).await.unwrap(), None);
-    assert!(board.sends_to(REHEARSAL_CHANNEL).is_empty());
-    let swept = signups.tick(FIRST_REMOVE_AT, millis(FIRST_REMOVE_AT)).await;
-    assert_eq!(swept.removed, vec![tag(&clan, first_night())]);
-    assert!(board.sends_to(REHEARSAL_CHANNEL).is_empty());
-    let by_hand = signups
-        .tick_in(REHEARSAL, FIRST_POST_AT, millis(FIRST_POST_AT))
-        .await;
-    assert_eq!(by_hand.posted, vec![tag(&elsewhere, first_night())]);
-    assert_eq!(board.sends_to(REHEARSAL_CHANNEL).len(), 1);
-    assert_eq!(
-        state_of(&store, &elsewhere, first_night()).await,
-        PostState::Open
-    );
-    let closing = signups.tick(FIRST_START, millis(FIRST_START)).await;
-    assert!(closing.closed.is_empty());
-    let sweeping = signups.tick(FIRST_REMOVE_AT, millis(FIRST_REMOVE_AT)).await;
-    assert!(sweeping.removed.is_empty());
-    assert_eq!(
-        state_of(&store, &elsewhere, first_night()).await,
-        PostState::Open
-    );
-    assert!(board.deletes_in(REHEARSAL_CHANNEL).is_empty());
-}
-
-#[tokio::test]
 async fn a_purge_stops_at_the_first_season_whose_delete_fails() {
     let board = FakeBoard::new();
     let store = Attendance::with_pool(attendance_pool().await)
@@ -1158,38 +1145,6 @@ async fn tick_in_runs_only_the_guild_it_is_given() {
     assert_eq!(scoped.failures, 0);
     assert_eq!(board.sends_to(REHEARSAL_CHANNEL).len(), 1);
     assert_eq!(board.sends_to(CHANNEL).len(), 1);
-}
-
-#[tokio::test]
-async fn advancing_to_the_post_moment_posts_the_night() {
-    let board = FakeBoard::new();
-    let store = Attendance::with_pool(attendance_pool().await)
-        .await
-        .unwrap();
-    let season = created(&store, &rehearsal_proposal()).await;
-    let signups = Signups::rehearsing(board.clone(), store.clone(), vec![REHEARSAL]);
-    let moment = season
-        .range
-        .nights()
-        .find(|night| night == &first_night())
-        .unwrap()
-        .post_at_unix();
-    assert_eq!(moment, FIRST_POST_AT);
-    assert_eq!(
-        signups.tick(moment, millis(moment)).await,
-        TickReport::default()
-    );
-    let report = signups.tick_in(REHEARSAL, moment, millis(moment)).await;
-    assert_eq!(report.posted, vec![tag(&season, first_night())]);
-    assert_eq!(report.failures, 0);
-    assert_eq!(
-        state_of(&store, &season, first_night()).await,
-        PostState::Open
-    );
-    let posted = board.sends_to(REHEARSAL_CHANNEL);
-    assert_eq!(posted.len(), 1);
-    assert_eq!(posted[0].night, first_night());
-    assert!(posted[0].open);
 }
 
 #[tokio::test]
@@ -1301,4 +1256,428 @@ async fn a_purge_whose_delete_fails_deletes_no_rows() {
             .unwrap()
             .is_empty()
     );
+}
+
+async fn posts_of(store: &Attendance, seasons: &[Season]) -> Vec<(i64, Vec<Post>)> {
+    let mut posts = Vec::new();
+    for season in seasons {
+        posts.push((season.id, store.posts(season.id).await.unwrap()));
+    }
+    posts
+}
+
+async fn offered(store: &Attendance, guild: GuildId, now_unix: i64) -> Option<i64> {
+    let seasons = store.seasons_in(guild).await.unwrap();
+    let posts = posts_of(store, &seasons).await;
+    next_moment(&seasons, &posts, now_unix)
+}
+
+async fn step(signups: &Arc<Signups<FakeBoard>>, guild: GuildId) -> Option<(i64, TickReport)> {
+    let store = signups.store();
+    let offset = store.rehearsal_clock(guild).await.unwrap();
+    let moment = offered(store, guild, REAL_NOW + offset).await?;
+    store
+        .set_rehearsal_clock(guild, moment - REAL_NOW)
+        .await
+        .unwrap();
+    let report = signups.tick_in(guild, moment, millis(moment)).await;
+    Some((moment, report))
+}
+
+fn acted(report: &TickReport) -> bool {
+    !(report.posted.is_empty()
+        && report.adopted.is_empty()
+        && report.closed.is_empty()
+        && report.removed.is_empty())
+}
+
+fn post_in(night: Night, state: PostState) -> Post {
+    Post {
+        night,
+        message: Snowflake::new(9_000),
+        state,
+        posted_at_ms: millis(FIRST_POST_AT),
+    }
+}
+
+async fn clock_rows(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM cb_rehearsal_clock")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_beat_uses_a_rehearsal_servers_own_clock() {
+    let board = FakeBoard::new();
+    let (store, clan, elsewhere) = two_servers().await;
+    let signups = Signups::rehearsing(board.clone(), store.clone(), vec![REHEARSAL]);
+    assert_eq!(
+        signups.tick(REAL_NOW, millis(REAL_NOW)).await,
+        TickReport::default()
+    );
+    store
+        .set_rehearsal_clock(REHEARSAL, FIRST_POST_AT - REAL_NOW)
+        .await
+        .unwrap();
+    let report = signups.tick(REAL_NOW, millis(REAL_NOW)).await;
+    assert_eq!(report.posted, vec![tag(&elsewhere, first_night())]);
+    assert_eq!(report.failures, 0);
+    assert_eq!(board.sends_to(REHEARSAL_CHANNEL).len(), 1);
+    assert!(board.sends_to(CHANNEL).is_empty());
+    assert_eq!(store.post(clan.id, first_night()).await.unwrap(), None);
+    assert_eq!(
+        store
+            .post(elsewhere.id, first_night())
+            .await
+            .unwrap()
+            .unwrap()
+            .posted_at_ms,
+        millis(FIRST_POST_AT)
+    );
+    store
+        .set_rehearsal_clock(REHEARSAL, FIRST_START - REAL_NOW)
+        .await
+        .unwrap();
+    let stepped = signups.tick(REAL_NOW, millis(REAL_NOW)).await;
+    assert_eq!(stepped.closed, vec![tag(&elsewhere, first_night())]);
+    assert_eq!(stepped.posted, vec![tag(&elsewhere, second_night())]);
+    assert_eq!(stepped.failures, 0);
+    assert!(board.sends_to(CHANNEL).is_empty());
+    assert_eq!(store.post(clan.id, first_night()).await.unwrap(), None);
+    assert_eq!(
+        state_of(&store, &elsewhere, first_night()).await,
+        PostState::Closed
+    );
+}
+
+#[tokio::test]
+async fn an_ordinary_server_is_beaten_at_the_real_instant() {
+    let board = FakeBoard::new();
+    let (store, clan, elsewhere) = two_servers().await;
+    let signups = Signups::rehearsing(board.clone(), store.clone(), vec![REHEARSAL]);
+    store
+        .set_rehearsal_clock(REHEARSAL, FIRST_START - FIRST_POST_AT)
+        .await
+        .unwrap();
+    let report = signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    assert_eq!(report.posted.len(), 2);
+    assert!(report.posted.contains(&tag(&clan, first_night())));
+    assert!(report.posted.contains(&tag(&elsewhere, second_night())));
+    assert_eq!(report.failures, 0);
+    assert_eq!(
+        store
+            .post(clan.id, first_night())
+            .await
+            .unwrap()
+            .unwrap()
+            .posted_at_ms,
+        millis(FIRST_POST_AT)
+    );
+    assert_eq!(store.post(elsewhere.id, first_night()).await.unwrap(), None);
+    assert_eq!(
+        store
+            .post(elsewhere.id, second_night())
+            .await
+            .unwrap()
+            .unwrap()
+            .posted_at_ms,
+        millis(FIRST_START)
+    );
+    let plain = FakeBoard::new();
+    let (quiet_store, quiet_clan, quiet_elsewhere) = two_servers().await;
+    let quiet = Signups::rehearsing(plain.clone(), quiet_store.clone(), vec![REHEARSAL]);
+    let both = quiet.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    assert_eq!(both.posted.len(), 2);
+    assert!(both.posted.contains(&tag(&quiet_clan, first_night())));
+    assert!(both.posted.contains(&tag(&quiet_elsewhere, first_night())));
+    assert_eq!(both.failures, 0);
+    for season in [&quiet_clan, &quiet_elsewhere] {
+        assert_eq!(
+            quiet_store
+                .post(season.id, first_night())
+                .await
+                .unwrap()
+                .unwrap()
+                .posted_at_ms,
+            millis(FIRST_POST_AT)
+        );
+    }
+}
+
+#[tokio::test]
+async fn next_moment_never_returns_an_instant_that_has_passed() {
+    let (_, clan, elsewhere) = two_servers().await;
+    let seasons = vec![clan.clone(), elsewhere.clone()];
+    assert_eq!(next_moment(&seasons, &[], REAL_NOW), Some(FIRST_POST_AT));
+    assert_eq!(
+        next_moment(&seasons, &[], FIRST_POST_AT - 1),
+        Some(FIRST_POST_AT)
+    );
+    assert_eq!(next_moment(&seasons, &[], FIRST_POST_AT), Some(FIRST_START));
+    assert_eq!(next_moment(&seasons, &[], FIRST_START), Some(SECOND_START));
+    let clan_only = vec![clan.clone()];
+    let open = vec![(clan.id, vec![post_in(first_night(), PostState::Open)])];
+    assert_eq!(
+        next_moment(&clan_only, &open, FIRST_START - 1),
+        Some(FIRST_START)
+    );
+    assert_eq!(
+        next_moment(&clan_only, &open, FIRST_START),
+        Some(FIRST_REMOVE_AT)
+    );
+    let closed = vec![(clan.id, vec![post_in(first_night(), PostState::Closed)])];
+    assert_eq!(
+        next_moment(&clan_only, &closed, FIRST_REMOVE_AT - 1),
+        Some(FIRST_REMOVE_AT)
+    );
+    assert_eq!(
+        next_moment(&clan_only, &closed, FIRST_REMOVE_AT),
+        Some(THIRD_START)
+    );
+    let removed = vec![(clan.id, vec![post_in(first_night(), PostState::Removed)])];
+    assert_eq!(
+        next_moment(&clan_only, &removed, FIRST_REMOVE_AT),
+        Some(THIRD_START)
+    );
+    let spent = vec![(
+        elsewhere.id,
+        vec![
+            post_in(first_night(), PostState::Removed),
+            post_in(second_night(), PostState::Removed),
+            post_in(third_night(), PostState::Removed),
+        ],
+    )];
+    let rehearsal_only = vec![elsewhere.clone()];
+    assert_eq!(
+        next_moment(&rehearsal_only, &spent, THIRD_REMOVE_AT - 1),
+        None
+    );
+    assert_eq!(next_moment(&rehearsal_only, &spent, THIRD_REMOVE_AT), None);
+    for now in [
+        REAL_NOW,
+        FIRST_POST_AT,
+        FIRST_START,
+        FIRST_REMOVE_AT,
+        SECOND_START,
+        SECOND_REMOVE_AT,
+        THIRD_START,
+        THIRD_REMOVE_AT,
+    ] {
+        for posts in [&open, &closed, &removed] {
+            if let Some(moment) = next_moment(&seasons, posts, now) {
+                assert!(moment > now, "{moment} is not after {now}");
+            }
+        }
+    }
+    let board = FakeBoard::new();
+    let thursday_store = Attendance::with_pool(attendance_pool().await)
+        .await
+        .unwrap();
+    let thursday = created(
+        &thursday_store,
+        &NewSeason {
+            range: Range::new(
+                parse_day("2026-09-17").unwrap(),
+                parse_day("2026-09-17").unwrap(),
+            )
+            .unwrap(),
+            ..proposal()
+        },
+    )
+    .await;
+    thursday_store
+        .record_post(
+            thursday.id,
+            second_night(),
+            Snowflake::new(9_000),
+            millis(REAL_NOW),
+        )
+        .await
+        .unwrap();
+    thursday_store
+        .set_post_state(thursday.id, second_night(), PostState::Removed)
+        .await
+        .unwrap();
+    assert_eq!(
+        offered(&thursday_store, GUILD, FIRST_POST_AT).await,
+        Some(FIRST_START)
+    );
+    let signups = Signups::new(board.clone(), thursday_store.clone());
+    let again = signups
+        .tick_in(GUILD, FIRST_START, millis(FIRST_START))
+        .await;
+    assert_eq!(again.posted, vec![tag(&thursday, second_night())]);
+    assert_eq!(
+        state_of(&thursday_store, &thursday, second_night()).await,
+        PostState::Open
+    );
+}
+
+#[tokio::test]
+async fn stepping_walks_post_then_close_and_successor_then_removal() {
+    let board = FakeBoard::new();
+    let store = Attendance::with_pool(attendance_pool().await)
+        .await
+        .unwrap();
+    let season = created(&store, &rehearsal_proposal()).await;
+    let signups = Signups::rehearsing(board.clone(), store.clone(), vec![REHEARSAL]);
+    let (moment, report) = step(&signups, REHEARSAL).await.unwrap();
+    assert_eq!(moment, FIRST_POST_AT);
+    assert_eq!(
+        report,
+        TickReport {
+            posted: vec![tag(&season, first_night())],
+            ..TickReport::default()
+        }
+    );
+    assert_eq!(
+        store.rehearsal_clock(REHEARSAL).await.unwrap(),
+        FIRST_POST_AT - REAL_NOW
+    );
+    let first = message_for(&store, &season, first_night()).await;
+    let (moment, report) = step(&signups, REHEARSAL).await.unwrap();
+    assert_eq!(moment, FIRST_START);
+    assert_eq!(
+        report,
+        TickReport {
+            posted: vec![tag(&season, second_night())],
+            closed: vec![tag(&season, first_night())],
+            ..TickReport::default()
+        }
+    );
+    assert_eq!(
+        state_of(&store, &season, first_night()).await,
+        PostState::Closed
+    );
+    assert_eq!(
+        state_of(&store, &season, second_night()).await,
+        PostState::Open
+    );
+    let (moment, report) = step(&signups, REHEARSAL).await.unwrap();
+    assert_eq!(moment, FIRST_REMOVE_AT);
+    assert_eq!(
+        report,
+        TickReport {
+            removed: vec![tag(&season, first_night())],
+            ..TickReport::default()
+        }
+    );
+    assert_eq!(
+        state_of(&store, &season, first_night()).await,
+        PostState::Removed
+    );
+    assert_eq!(board.deletes_in(REHEARSAL_CHANNEL), vec![first]);
+    assert_eq!(board.sends_to(REHEARSAL_CHANNEL).len(), 2);
+    assert_eq!(
+        store.rehearsal_clock(REHEARSAL).await.unwrap(),
+        FIRST_REMOVE_AT - REAL_NOW
+    );
+    assert_eq!(
+        signups.tick(REAL_NOW, millis(REAL_NOW)).await,
+        TickReport::default()
+    );
+}
+
+#[tokio::test]
+async fn every_step_the_beat_takes_was_offered_by_next_moment() {
+    let board = FakeBoard::new();
+    let store = Attendance::with_pool(attendance_pool().await)
+        .await
+        .unwrap();
+    let season = created(&store, &rehearsal_proposal()).await;
+    let signups = Signups::rehearsing(board.clone(), store.clone(), vec![REHEARSAL]);
+    let mut now = REAL_NOW;
+    let mut walked = Vec::new();
+    while let Some(moment) = offered(&store, REHEARSAL, now).await {
+        assert!(moment > now, "{moment} is not after {now}");
+        let early = signups
+            .tick_in(REHEARSAL, moment - 1, millis(moment - 1))
+            .await;
+        assert_eq!(
+            early,
+            TickReport::default(),
+            "the beat acted at {}, which next_moment did not offer",
+            moment - 1
+        );
+        let report = signups.tick_in(REHEARSAL, moment, millis(moment)).await;
+        assert!(
+            acted(&report),
+            "next_moment offered {moment} but the beat did nothing there"
+        );
+        assert_eq!(report.failures, 0);
+        walked.push(moment);
+        now = moment;
+    }
+    assert_eq!(
+        walked,
+        vec![
+            FIRST_POST_AT,
+            FIRST_START,
+            FIRST_REMOVE_AT,
+            SECOND_START,
+            SECOND_REMOVE_AT,
+            THIRD_START,
+            THIRD_REMOVE_AT,
+        ]
+    );
+    for night in season.range.nights() {
+        assert_eq!(state_of(&store, &season, night).await, PostState::Removed);
+    }
+    assert_eq!(board.sends_to(REHEARSAL_CHANNEL).len(), 3);
+    assert_eq!(board.deletes_in(REHEARSAL_CHANNEL).len(), 3);
+    let far = THIRD_REMOVE_AT + 30 * 86_400;
+    assert_eq!(
+        signups.tick_in(REHEARSAL, far, millis(far)).await,
+        TickReport::default()
+    );
+}
+
+#[tokio::test]
+async fn a_purge_clears_the_rehearsal_clock() {
+    let board = FakeBoard::new();
+    let pool = attendance_pool().await;
+    let store = Attendance::with_pool(pool.clone()).await.unwrap();
+    let season = created(&store, &rehearsal_proposal()).await;
+    let signups = Signups::rehearsing(board.clone(), store.clone(), vec![REHEARSAL]);
+    let (moment, _) = step(&signups, REHEARSAL).await.unwrap();
+    store.set_rehearsal_clock(GUILD, 5).await.unwrap();
+    assert_eq!(
+        store.rehearsal_clock(REHEARSAL).await.unwrap(),
+        moment - REAL_NOW
+    );
+    let message = message_for(&store, &season, first_night()).await;
+    board.fail_deletes(true);
+    let refused = signups.purge(REHEARSAL, REAL_NOW).await;
+    assert_eq!(refused.failures, 1);
+    assert_eq!(refused.seasons, 0);
+    assert_eq!(
+        store.rehearsal_clock(REHEARSAL).await.unwrap(),
+        moment - REAL_NOW
+    );
+    assert_eq!(clock_rows(&pool).await, 2);
+    board.fail_deletes(false);
+    let cleared = signups.purge(REHEARSAL, REAL_NOW).await;
+    assert_eq!(
+        cleared,
+        PurgeReport {
+            seasons: 1,
+            messages: 1,
+            answers: 0,
+            failures: 0
+        }
+    );
+    assert_eq!(board.deletes_in(REHEARSAL_CHANNEL), vec![message, message]);
+    assert!(
+        store
+            .seasons_in_any_state(REHEARSAL)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(store.rehearsal_clock(REHEARSAL).await.unwrap(), 0);
+    assert_eq!(store.rehearsal_clock(GUILD).await.unwrap(), 5);
+    assert_eq!(clock_rows(&pool).await, 1);
+    assert_eq!(signups.purge(GUILD, REAL_NOW).await, PurgeReport::default());
+    assert_eq!(clock_rows(&pool).await, 0);
 }
