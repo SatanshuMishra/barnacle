@@ -66,7 +66,6 @@ fn proposal(number: u32, first: &str, last: &str) -> NewSeason {
         number,
         codename: Some("Komodo Dragon".to_owned()),
         range: Range::new(day(first), day(last)).unwrap(),
-        days: Days::ClanBattle,
         created_by: MANAGER,
         created_at_ms: CREATED_AT,
         ping_role: None,
@@ -76,7 +75,6 @@ fn proposal(number: u32, first: &str, last: &str) -> NewSeason {
 fn rehearsal_proposal(number: u32, first: &str, last: &str) -> NewSeason {
     NewSeason {
         range: Range::every_day(day(first), day(last)).unwrap(),
-        days: Days::Every,
         ..proposal(number, first, last)
     }
 }
@@ -1036,4 +1034,58 @@ async fn clock_rows(pool: &SqlitePool) -> i64 {
         .fetch_one(pool)
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn a_database_without_the_rehearsal_clock_is_named() {
+    let pool = memory_pool().await;
+    sqlx::raw_sql(common::CB_MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(common::CB_CONTROLS.trim_start_matches(".bail on\n"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql("ALTER TABLE cb_seasons ADD COLUMN every_day INTEGER NOT NULL DEFAULT 0")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let error = Attendance::with_pool(pool).await.err().unwrap();
+    assert!(matches!(
+        error,
+        AttendanceError::MissingTable {
+            table: "cb_rehearsal_clock"
+        }
+    ));
+}
+
+#[tokio::test]
+async fn creating_a_season_clears_the_servers_rehearsal_clock() {
+    let store = attendance().await;
+    store.set_rehearsal_clock(GUILD, 86_400).await.unwrap();
+    assert_eq!(store.rehearsal_clock(GUILD).await.unwrap(), 86_400);
+    assert!(matches!(
+        store
+            .create_season(&proposal(35, "2026-09-16", "2026-11-05"))
+            .await
+            .unwrap(),
+        CreateOutcome::NumberTaken | CreateOutcome::Created(_)
+    ));
+    assert_eq!(store.rehearsal_clock(GUILD).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_refused_season_leaves_the_rehearsal_clock_alone() {
+    let store = attendance().await;
+    season_35(&store).await;
+    store.set_rehearsal_clock(GUILD, 86_400).await.unwrap();
+    assert_eq!(
+        store
+            .create_season(&proposal(35, "2027-01-06", "2027-02-24"))
+            .await
+            .unwrap(),
+        CreateOutcome::NumberTaken
+    );
+    assert_eq!(store.rehearsal_clock(GUILD).await.unwrap(), 86_400);
 }

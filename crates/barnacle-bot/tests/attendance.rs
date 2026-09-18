@@ -26,7 +26,6 @@ use barnacle_bot::attendance_store::SeasonChange;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::RoleId;
-use barnacle_bot::schedule::Days;
 use barnacle_bot::schedule::Hour;
 use barnacle_bot::schedule::Night;
 use barnacle_bot::schedule::Range;
@@ -89,7 +88,6 @@ fn proposal() -> NewSeason {
             parse_day("2026-11-05").unwrap(),
         )
         .unwrap(),
-        days: Days::ClanBattle,
         created_by: MANAGER,
         created_at_ms: millis(FIRST_POST_AT),
         ping_role: None,
@@ -123,7 +121,6 @@ fn rehearsal_proposal() -> NewSeason {
             parse_day("2026-09-18").unwrap(),
         )
         .unwrap(),
-        days: Days::Every,
         created_at_ms: millis(REAL_NOW),
         ..proposal()
     }
@@ -1690,4 +1687,41 @@ async fn a_purge_clears_the_rehearsal_clock() {
     assert_eq!(clock_rows(&pool).await, 1);
     assert_eq!(signups.purge(GUILD, REAL_NOW).await, PurgeReport::default());
     assert_eq!(clock_rows(&pool).await, 0);
+}
+
+#[tokio::test]
+async fn a_click_uses_the_rehearsal_clock() {
+    let board = FakeBoard::new();
+    let (store, _clan, elsewhere) = two_servers().await;
+    let signups = Signups::rehearsing(board.clone(), store.clone(), vec![REHEARSAL]);
+    store
+        .set_rehearsal_clock(REHEARSAL, FIRST_POST_AT - REAL_NOW)
+        .await
+        .unwrap();
+    signups.tick(REAL_NOW, millis(REAL_NOW)).await;
+    let message = message_for(&store, &elsewhere, first_night()).await;
+    let press = Click {
+        guild: REHEARSAL,
+        channel: REHEARSAL_CHANNEL,
+        message,
+        user: AKI,
+        season: elsewhere.id,
+        night: first_night(),
+        target: Target::All,
+        attending: true,
+    };
+    assert_eq!(
+        signups.click(press, REAL_NOW, millis(REAL_NOW)).await,
+        ClickOutcome::Recorded
+    );
+    store
+        .set_rehearsal_clock(REHEARSAL, FIRST_START - REAL_NOW)
+        .await
+        .unwrap();
+    assert_eq!(
+        signups.click(press, REAL_NOW, millis(REAL_NOW)).await,
+        ClickOutcome::Closed {
+            start_unix: FIRST_START
+        }
+    );
 }

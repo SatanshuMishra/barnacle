@@ -178,7 +178,6 @@ pub struct NewSeason {
     pub number: u32,
     pub codename: Option<String>,
     pub range: Range,
-    pub days: Days,
     pub created_by: UserId,
     pub created_at_ms: u64,
     pub ping_role: Option<RoleId>,
@@ -307,11 +306,9 @@ impl Attendance {
         let created_at = to_integer(new.created_at_ms.into())?;
         let ping_role = to_role_id(new.ping_role)?;
         let number = i64::from(new.number);
-        let range =
-            to_range(new.range.first_day(), new.range.last_day(), new.days).unwrap_or(new.range);
-        let first_day = range.first_day().to_string();
-        let last_day = range.last_day().to_string();
-        let every_day = to_every_day(new.days);
+        let first_day = new.range.first_day().to_string();
+        let last_day = new.range.last_day().to_string();
+        let every_day = to_every_day(new.range.days());
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let taken: Option<i64> = sqlx::query_scalar(
             "SELECT id FROM cb_seasons WHERE guild_id = ? AND number = ? AND ended_at_ms IS NULL",
@@ -348,6 +345,10 @@ impl Attendance {
         .execute(&mut *transaction)
         .await?;
         let id = inserted.last_insert_rowid();
+        sqlx::query("DELETE FROM cb_rehearsal_clock WHERE guild_id = ?")
+            .bind(guild)
+            .execute(&mut *transaction)
+            .await?;
         transaction.commit().await?;
         Ok(CreateOutcome::Created(Season {
             id,
@@ -355,7 +356,7 @@ impl Attendance {
             channel: new.channel,
             number: new.number,
             codename: new.codename.clone(),
-            range,
+            range: new.range,
             created_by: new.created_by,
             created_at_ms: new.created_at_ms,
             ping_role: new.ping_role,
@@ -658,6 +659,25 @@ impl Attendance {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn clear_rehearsal_clocks_except(
+        &self,
+        keep: &[GuildId],
+    ) -> Result<usize, AttendanceError> {
+        let held: Vec<i64> = sqlx::query_scalar("SELECT guild_id FROM cb_rehearsal_clock")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut cleared = 0;
+        for guild_id in held {
+            let guild = GuildId::new(to_unsigned(guild_id)?);
+            if keep.contains(&guild) {
+                continue;
+            }
+            self.clear_rehearsal_clock(guild).await?;
+            cleared += 1;
+        }
+        Ok(cleared)
     }
 
     pub async fn post(&self, season: i64, night: Night) -> Result<Option<Post>, AttendanceError> {

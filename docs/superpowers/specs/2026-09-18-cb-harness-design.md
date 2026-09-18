@@ -251,3 +251,44 @@ The last two carry the weight. `stepping_walks_post_then_close_and_successor_the
 ## 13. What the owner checks
 
 Apply 0004 after backing the database up, restart, and in the rehearsal server run section 10 start to finish. The three things worth watching: the post appears with its ping on the first step, the second step shows a close and a new post in one reply, and the third deletes the closed post. Then confirm in the clan server that a real season still posts on its own schedule and that `/rehearse` is absent from the command list.
+
+## 14. Amendments from review
+
+Four fresh-eyes reviews ran against the built branch. Where this section contradicts anything above it, this section is what shipped.
+
+### 14.1 The night rule lives on Range and nowhere else
+
+Section 6.2 said `NewSeason` gains a `days` field. That was wrong: `Range` already carries the rule, so the struct held it twice and `create_season` stored one copy while both callers rendered the other. A caller passing `Range::new` beside `Days::Every` would have stored thirty nights while its own reply said eight, silently. `NewSeason` has no `days` field; `create_season` reads `new.range.days()`.
+
+### 14.2 A new season clears its server's clock, inside the same transaction
+
+A spent rehearsal left its offset behind, and nothing cleared it but `/rehearse reset`. Starting a fresh rehearsal in that server then beat it at the stale instant, skipping the first nights entirely and showing the developer a season that had already half happened.
+
+The clearing is part of `create_season`'s `BEGIN IMMEDIATE` transaction rather than a step the command remembers. A refused create leaves the clock untouched, a successful one resets it, and no future command can forget it. Two tests pin both halves.
+
+Separately, `discord::run` clears the clock of every server the configuration no longer names, at startup. Without it an offset survives a server being delisted and applies again if it is ever re-listed, which would close sign-ups before their night in whatever that server has become.
+
+### 14.3 The clock reaches clicks, not only the beat
+
+`click` resolved the night's start against real time, so after a stepped close the post rendered as closed and still recorded marks. The harness could not demonstrate the one transition it exists to demonstrate. `Signups::rehearsal_instant` resolves a guild's offset and `click` uses it; an unreadable offset falls back to real time rather than refusing the click.
+
+### 14.4 Beats do not overlap
+
+Removing the rehearsal skip made the background beat and `/rehearse next` concurrent writers on one server for the first time. Two beats at the same instant both find no post row and both send, and the upsert on `(season_id, night)` leaves one message with no row: never closed, never deleted, not removed by a reset. `beat` now takes a mutex, so beats are serialised across the process.
+
+### 14.5 The rehearsal range is bounded and always has a future first post
+
+`/rehearse start` applies the same six-month window `/cb season start` applies; neither `create_season` nor the store ever carried that rule, so a rehearsal created one was missing. `nights` is clamped in code rather than trusted from the option declaration, and the first night is pushed forward when its post moment has already passed, which otherwise made the first `next` skip night one for any rehearsal started between 23:30 and midnight UTC.
+
+The codename is clipped to its declared length before it is stored, on both `/cb season start` and `/rehearse start`. Unclipped, an overlong codename overflows the embed title, every send fails, no post row is written, and the beat retries the identical failing send every sixty seconds for the life of the season.
+
+### 14.6 Smaller corrections
+
+- `purge` clears the clock only when nothing failed, matching the rule two branches above it that refuses to delete rows when a board delete failed.
+- The rollback rebuilds `cb_seasons` rather than using `ALTER TABLE DROP COLUMN`, which needs SQLite 3.35 and failed with a bare syntax error on anything older. Proven to restore all eleven columns, the partial index, the posts and the marks.
+- `Range::holds` had an untested lower bound: flipping it left every schedule test green, while a season whose first day is itself a CB night would refuse every click on its opening night and delete that night's post as out of range. One assertion pins it.
+- Nothing asserted the readiness check's new table arm; deleting the check left the suite green.
+
+### 14.7 What section 12 got wrong
+
+Section 12 claimed each of the first two items passes the gates alone. `cb4-store` could not: it added a required field to a struct literal built in files it did not own, and it extended the readiness check without the shared test fixture applying the migration. Two files needed by the change belonged to no item: `tests/common/mod.rs`, which applies the migrations, and `tests/wiring.rs`, which asserted that a non-CB day is rejected by the button-id parser and therefore contradicted section 5 by design. Both are integrator work, and a future split must list every file whose meaning the change alters, not only the files it primarily edits.

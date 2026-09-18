@@ -187,6 +187,7 @@ pub struct Signups<B: Board> {
     store: Attendance,
     rehearsal: Vec<GuildId>,
     slots: std::sync::Mutex<HashMap<Snowflake, Arc<Slot>>>,
+    beats: Mutex<()>,
 }
 
 impl<B: Board> Signups<B> {
@@ -200,6 +201,7 @@ impl<B: Board> Signups<B> {
             store,
             rehearsal,
             slots: std::sync::Mutex::new(HashMap::new()),
+            beats: Mutex::new(()),
         })
     }
 
@@ -303,13 +305,29 @@ impl<B: Board> Signups<B> {
                 Err(_) => report.failures += 1,
             }
         }
-        if self.store.clear_rehearsal_clock(guild).await.is_err() {
+        if report.failures == 0 && self.store.clear_rehearsal_clock(guild).await.is_err() {
             report.failures += 1;
         }
         report
     }
 
+    pub async fn rehearsal_instant(
+        &self,
+        guild: GuildId,
+        now_unix: i64,
+        now_ms: u64,
+    ) -> (i64, u64) {
+        if !self.rehearsal.contains(&guild) {
+            return (now_unix, now_ms);
+        }
+        let Ok(offset) = self.store.rehearsal_clock(guild).await else {
+            return (now_unix, now_ms);
+        };
+        shifted(now_unix, now_ms, offset).unwrap_or((now_unix, now_ms))
+    }
+
     async fn beat(&self, seasons: Vec<Season>, now_unix: i64, now_ms: u64) -> TickReport {
+        let _beating = self.beats.lock().await;
         let mut report = TickReport::default();
         for season in &seasons {
             let Ok(posts) = self.store.posts(season.id).await else {
@@ -498,6 +516,7 @@ impl<B: Board> Signups<B> {
         {
             return ClickOutcome::UnknownSeason;
         }
+        let (now_unix, now_ms) = self.rehearsal_instant(season.guild, now_unix, now_ms).await;
         if click.night.start_unix() <= now_unix {
             return ClickOutcome::Closed {
                 start_unix: click.night.start_unix(),

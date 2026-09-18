@@ -225,6 +225,7 @@ fn a_clan_battle_range_still_holds_only_clan_battle_nights() {
         Some("2026-09-19")
     );
     assert_eq!(week.due_night(night("2026-09-17").start_unix()), None);
+    assert!(season_35().holds(night("2026-09-16")));
     assert_eq!(season_35().nights_left(0), 30);
     assert_eq!(
         Range::every_day(day("2026-09-16"), day("2026-11-05"))

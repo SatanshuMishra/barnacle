@@ -29,7 +29,6 @@ use crate::ids::Place;
 use crate::ids::RoleId;
 use crate::info;
 use crate::schedule;
-use crate::schedule::Days;
 use crate::schedule::Night;
 use crate::schedule::Range;
 use crate::schedule::parse_day;
@@ -45,6 +44,8 @@ const SILHOUETTE_FILE: &str = "silhouette.png";
 const UNKNOWN_MEMBER: isize = 10007;
 const MILLIS_PER_SECOND: u64 = 1000;
 const REHEARSAL_NIGHTS: u32 = 3;
+const REHEARSAL_NIGHTS_MAX: u32 = 7;
+const CODENAME_LIMIT: usize = 100;
 
 pub fn all() -> Vec<poise::Command<Data, Error>> {
     vec![
@@ -559,9 +560,8 @@ async fn season_start(
         guild: place.guild,
         channel: place.channel,
         number,
-        codename,
+        codename: clipped_codename(codename),
         range,
-        days: Days::ClanBattle,
         created_by: UserId::new(ctx.author().id.get()),
         created_at_ms,
         ping_role: ping_role.map(|role| RoleId::new(role.get())),
@@ -824,9 +824,19 @@ fn rehearsing(ctx: Context<'_>, guild: GuildId) -> bool {
     ctx.data().rehearsal.contains(&guild)
 }
 
-fn rehearsal_range(today: Date, nights: u32) -> Option<Range> {
-    let first = today.checked_add(1.day()).ok()?;
-    let last = today.checked_add(i64::from(nights).days()).ok()?;
+fn clipped_codename(codename: Option<String>) -> Option<String> {
+    codename.map(|text| text.chars().take(CODENAME_LIMIT).collect())
+}
+
+fn rehearsal_range(today: Date, nights: u32, now_unix: i64) -> Option<Range> {
+    let nights = nights.clamp(1, REHEARSAL_NIGHTS_MAX);
+    let mut first = today.checked_add(1.day()).ok()?;
+    if Night::on(first).is_some_and(|night| night.post_at_unix() <= now_unix) {
+        first = first.checked_add(1.day()).ok()?;
+    }
+    let last = first
+        .checked_add(i64::from(nights.saturating_sub(1)).days())
+        .ok()?;
     Range::every_day(first, last)
 }
 
@@ -870,9 +880,12 @@ async fn rehearse_start(
     let Some(today) = schedule::today(now_unix) else {
         return private(ctx, text::SOMETHING_WENT_WRONG).await;
     };
-    let Some(range) = rehearsal_range(today, nights.unwrap_or(REHEARSAL_NIGHTS)) else {
+    let Some(range) = rehearsal_range(today, nights.unwrap_or(REHEARSAL_NIGHTS), now_unix) else {
         return private(ctx, text::SOMETHING_WENT_WRONG).await;
     };
+    if !range.near(today) {
+        return private(ctx, text::RANGE_TOO_FAR).await;
+    }
     let nights_left = range.nights_left(now_unix);
     let Some(created_at_ms) = super::now_ms() else {
         return private(ctx, text::SOMETHING_WENT_WRONG).await;
@@ -881,9 +894,8 @@ async fn rehearse_start(
         guild: place.guild,
         channel: place.channel,
         number,
-        codename,
+        codename: clipped_codename(codename),
         range,
-        days: Days::Every,
         created_by: UserId::new(ctx.author().id.get()),
         created_at_ms,
         ping_role: ping_role.map(|role| RoleId::new(role.get())),
