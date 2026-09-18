@@ -694,3 +694,34 @@ fn a_reset_reports_what_it_cleared() {
         "Nothing was there to clear."
     );
 }
+
+#[test]
+fn a_blocked_reset_says_what_it_had_already_cleared() {
+    assert_eq!(
+        text::reset_blocked(&PurgeReport {
+            seasons: 0,
+            messages: 0,
+            answers: 0,
+            failures: 1
+        }),
+        "Some sign-up posts could not be removed, so no season or answer was deleted. Check that the bot can manage messages here, then run this again."
+    );
+    assert_eq!(
+        text::reset_blocked(&PurgeReport {
+            seasons: 0,
+            messages: 1,
+            answers: 0,
+            failures: 1
+        }),
+        "Some sign-up posts could not be removed, so no season or answer was deleted. 1 sign-up post was already cleared. Check that the bot can manage messages here, then run this again."
+    );
+    assert_eq!(
+        text::reset_blocked(&PurgeReport {
+            seasons: 0,
+            messages: 8,
+            answers: 0,
+            failures: 2
+        }),
+        "Some sign-up posts could not be removed, so no season or answer was deleted. 8 sign-up posts were already cleared. Check that the bot can manage messages here, then run this again."
+    );
+}

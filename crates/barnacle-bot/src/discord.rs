@@ -154,13 +154,17 @@ pub async fn run(
     Ok(())
 }
 
-fn command_list(rehearsing: bool) -> Vec<poise::Command<Data, Error>> {
+pub fn command_list(rehearsing: bool) -> Vec<poise::Command<Data, Error>> {
     let extra = if rehearsing {
         commands::rehearsal()
     } else {
         Vec::new()
     };
     commands::all().into_iter().chain(extra).collect()
+}
+
+pub fn command_list_for(guild: u64, rehearsal: &[u64]) -> Vec<poise::Command<Data, Error>> {
+    command_list(rehearsal.contains(&guild))
 }
 
 async fn register(
@@ -174,15 +178,18 @@ async fn register(
             tracing::info!("commands registered globally");
         }
         CommandScope::Guilds { guilds } => {
+            tracing::debug!(
+                count = rehearsal.len(),
+                "rehearsal servers named in the config"
+            );
             for guild in guilds {
-                let rehearsing = rehearsal.contains(guild);
                 poise::builtins::register_in_guild(
                     http,
-                    &command_list(rehearsing),
+                    &command_list_for(*guild, rehearsal),
                     serenity::GuildId::new(*guild),
                 )
                 .await?;
-                tracing::info!(guild, rehearsing, "commands registered in server");
+                tracing::info!(guild, "commands registered in server");
             }
         }
     }

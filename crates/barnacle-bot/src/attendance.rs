@@ -250,8 +250,13 @@ impl<B: Board> Signups<B> {
             ..PurgeReport::default()
         };
         for season in &seasons {
-            match self.store.purge_season(guild, season.id).await {
-                Ok(answers) => {
+            match self
+                .store
+                .purge_season(guild, season.id, season.number)
+                .await
+            {
+                Ok(None) => {}
+                Ok(Some(answers)) => {
                     report.seasons += 1;
                     report.answers += usize::try_from(answers).unwrap_or(usize::MAX);
                 }

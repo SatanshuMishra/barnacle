@@ -75,7 +75,7 @@ const EXPECTED_COLUMNS: [TableSpec; 3] = [
 const SEASON_BY_ID: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE id = ?";
 const SEASON_LIVE_BY_NUMBER: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? AND number = ? AND ended_at_ms IS NULL";
 const SEASONS_IN_GUILD: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? AND ended_at_ms IS NULL ORDER BY first_day";
-const SEASONS_IN_GUILD_ANY_STATE: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? ORDER BY first_day";
+const SEASONS_IN_GUILD_ANY_STATE: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? ORDER BY first_day, id";
 const SEASONS_LIVE: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE ended_at_ms IS NULL AND (last_day >= ? OR EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed')) ORDER BY first_day";
 const SEASON_OVERLAPPING: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? AND ended_at_ms IS NULL AND first_day <= ? AND last_day >= ? ORDER BY first_day LIMIT 1";
 const SEASON_OVERLAPPING_OTHER: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? AND ended_at_ms IS NULL AND id <> ? AND first_day <= ? AND last_day >= ? ORDER BY first_day LIMIT 1";
@@ -570,17 +570,24 @@ impl Attendance {
         Ok(outcome)
     }
 
-    pub async fn purge_season(&self, guild: GuildId, id: i64) -> Result<u64, AttendanceError> {
+    pub async fn purge_season(
+        &self,
+        guild: GuildId,
+        id: i64,
+        number: u32,
+    ) -> Result<Option<u64>, AttendanceError> {
         let guild_id = to_integer(guild.get().into())?;
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let held: Option<i64> =
-            sqlx::query_scalar("SELECT id FROM cb_seasons WHERE id = ? AND guild_id = ?")
-                .bind(id)
-                .bind(guild_id)
-                .fetch_optional(&mut *transaction)
-                .await?;
+        let held: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM cb_seasons WHERE id = ? AND guild_id = ? AND number = ?",
+        )
+        .bind(id)
+        .bind(guild_id)
+        .bind(i64::from(number))
+        .fetch_optional(&mut *transaction)
+        .await?;
         if held.is_none() {
-            return Ok(0);
+            return Ok(None);
         }
         let marks = sqlx::query("DELETE FROM cb_marks WHERE season_id = ?")
             .bind(id)
@@ -591,13 +598,14 @@ impl Attendance {
             .bind(id)
             .execute(&mut *transaction)
             .await?;
-        sqlx::query("DELETE FROM cb_seasons WHERE id = ? AND guild_id = ?")
+        sqlx::query("DELETE FROM cb_seasons WHERE id = ? AND guild_id = ? AND number = ?")
             .bind(id)
             .bind(guild_id)
+            .bind(i64::from(number))
             .execute(&mut *transaction)
             .await?;
         transaction.commit().await?;
-        Ok(marks)
+        Ok(Some(marks))
     }
 
     pub async fn post(&self, season: i64, night: Night) -> Result<Option<Post>, AttendanceError> {

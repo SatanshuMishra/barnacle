@@ -831,12 +831,24 @@ async fn purge_season_deletes_its_marks_posts_and_season() {
         .await
         .unwrap();
     store.end_season(GUILD, 35, ENDED_AT).await.unwrap();
-    assert_eq!(store.purge_season(GUILD, season.id).await.unwrap(), 3);
+    assert_eq!(
+        store
+            .purge_season(GUILD, season.id, season.number)
+            .await
+            .unwrap(),
+        Some(3)
+    );
     assert_eq!(store.season(season.id).await.unwrap(), None);
     assert_eq!(counted(&pool, POSTS_OF_SEASON, season.id).await, 0);
     assert_eq!(counted(&pool, MARKS_OF_SEASON, season.id).await, 0);
     assert!(store.seasons_in_any_state(GUILD).await.unwrap().is_empty());
-    assert_eq!(store.purge_season(GUILD, season.id).await.unwrap(), 0);
+    assert_eq!(
+        store
+            .purge_season(GUILD, season.id, season.number)
+            .await
+            .unwrap(),
+        None
+    );
 }
 
 #[tokio::test]
@@ -849,11 +861,23 @@ async fn purge_season_leaves_another_guilds_season_alone() {
         ..proposal(35, "2026-09-16", "2026-11-05")
     };
     let theirs = marked_season(&store, &theirs).await;
-    assert_eq!(store.purge_season(OTHER_GUILD, ours.id).await.unwrap(), 0);
+    assert_eq!(
+        store
+            .purge_season(OTHER_GUILD, ours.id, ours.number)
+            .await
+            .unwrap(),
+        None
+    );
     assert_eq!(store.season(ours.id).await.unwrap(), Some(ours.clone()));
     assert_eq!(counted(&pool, POSTS_OF_SEASON, ours.id).await, 1);
     assert_eq!(counted(&pool, MARKS_OF_SEASON, ours.id).await, 1);
-    assert_eq!(store.purge_season(GUILD, ours.id).await.unwrap(), 1);
+    assert_eq!(
+        store
+            .purge_season(GUILD, ours.id, ours.number)
+            .await
+            .unwrap(),
+        Some(1)
+    );
     assert_eq!(store.season(ours.id).await.unwrap(), None);
     assert_eq!(store.season(theirs.id).await.unwrap(), Some(theirs.clone()));
     assert_eq!(counted(&pool, POSTS_OF_SEASON, theirs.id).await, 1);
@@ -895,4 +919,32 @@ async fn seasons_in_any_state_lists_an_ended_season() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn purge_season_ignores_a_number_that_is_not_the_one_it_read() {
+    let store = attendance().await;
+    let season = season_35(&store).await;
+    assert_eq!(
+        store
+            .purge_season(GUILD, season.id, season.number + 1)
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(store.season(season.id).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn purge_season_reports_a_deleted_season_that_held_no_answers() {
+    let store = attendance().await;
+    let season = season_35(&store).await;
+    assert_eq!(
+        store
+            .purge_season(GUILD, season.id, season.number)
+            .await
+            .unwrap(),
+        Some(0)
+    );
+    assert!(store.season(season.id).await.unwrap().is_none());
 }

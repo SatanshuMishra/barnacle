@@ -228,6 +228,7 @@ struct BoardState {
     fail_sends: AtomicBool,
     fail_edits: AtomicBool,
     fail_deletes: AtomicBool,
+    fail_deletes_in: Mutex<Vec<ChannelId>>,
     report_gone: AtomicBool,
     gate: Semaphore,
 }
@@ -253,6 +254,7 @@ impl FakeBoard {
                 fail_sends: AtomicBool::new(false),
                 fail_edits: AtomicBool::new(false),
                 fail_deletes: AtomicBool::new(false),
+                fail_deletes_in: Mutex::new(Vec::new()),
                 report_gone: AtomicBool::new(false),
                 gate: Semaphore::new(0),
             }),
@@ -273,6 +275,10 @@ impl FakeBoard {
 
     pub fn fail_deletes(&self, fail: bool) {
         self.state.fail_deletes.store(fail, SeqCst);
+    }
+
+    pub fn fail_deletes_in(&self, channel: ChannelId) {
+        self.state.fail_deletes_in.lock().unwrap().push(channel);
     }
 
     pub fn report_gone(&self, gone: bool) {
@@ -417,7 +423,14 @@ impl Board for FakeBoard {
         message: Snowflake,
     ) -> Result<Removal, BoardError> {
         self.record(BoardCall::Deleted { channel, message });
-        if self.state.fail_deletes.load(SeqCst) {
+        if self.state.fail_deletes.load(SeqCst)
+            || self
+                .state
+                .fail_deletes_in
+                .lock()
+                .unwrap()
+                .contains(&channel)
+        {
             return Err(BoardError("the fake board refuses every delete".into()));
         }
         if self.state.report_gone.load(SeqCst) {

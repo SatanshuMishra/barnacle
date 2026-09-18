@@ -911,7 +911,7 @@ async fn rehearse_reset(ctx: Context<'_>) -> Result<(), Error> {
             failures = purged.failures,
             "a rehearsal reset left sign-up posts behind, so nothing was deleted"
         );
-        return private(ctx, text::RESET_BLOCKED).await;
+        return private(ctx, text::reset_blocked(&purged)).await;
     }
     private(ctx, text::reset_done(&purged)).await
 }

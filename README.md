@@ -110,10 +110,12 @@ guilds = [222222222222222222]
 
 A server listed there has to be in `commands.guilds` as well, which means `commands.scope` has to be `"guilds"`. In a rehearsal server the bot's timer does nothing: a season there advances only when you advance it by hand, so the same run produces the same sequence every time.
 
-Two commands exist only in a server the section names. They are not registered anywhere else, so they do not appear in any other server's command list, and both refuse to run in a server the section does not name.
+Two commands exist only in a server the section names. The bot registers a command list per server every time it starts, so a server the section does not name is sent a list without them and they do not appear in its command list. Both also refuse to run in a server the section does not name, so the guard does not depend on the registration being right.
+
+Taking a server out of `[rehearsal]` while leaving it in `commands.guilds` removes the commands on the next start. Removing it from `commands.guilds` as well does not: the bot never writes to a server it is not told about, so that server keeps the list it was last given until you clear its commands by hand. Take it out of `[rehearsal]`, start the bot once, and only then remove it from `commands.guilds`.
 
 - `/rehearse advance to:post`, `to:close` or `to:remove` runs the real sign-up step at the moment the server's own data is waiting for: the next night with no post, the earliest open post, or the earliest post still on screen. It runs exactly what the timer would run at that moment, so advancing to a later step also performs every earlier step that moment implies.
-- `/rehearse reset` deletes every Clan Battle season, sign-up post and answer in that server, including seasons that have already ended. If any post cannot be removed from Discord, nothing is deleted. The silhouette game's rounds and solves are left alone.
+- `/rehearse reset` deletes every Clan Battle season, sign-up post and answer in that server, including seasons that have already ended. If any post cannot be removed from Discord, no season and no answer is deleted, and the reply says how many posts had already been cleared before it stopped. The silhouette game's rounds and solves are left alone.
 
 A full rehearsal is `/cb season start` with a range covering the next CB nights, then `advance to:post`, some clicks, `/cb season edit`, `/cb season move` in another channel, `advance to:close`, `advance to:remove`, `/cb season end`, and finally `/rehearse reset`. Do not list a real clan server here: a reset deletes its seasons without asking which of them mattered.
 

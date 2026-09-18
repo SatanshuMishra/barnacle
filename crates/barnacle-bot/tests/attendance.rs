@@ -1081,6 +1081,61 @@ async fn the_beat_skips_a_rehearsal_server() {
         state_of(&store, &elsewhere, first_night()).await,
         PostState::Open
     );
+    let closing = signups.tick(FIRST_START, millis(FIRST_START)).await;
+    assert!(closing.closed.is_empty());
+    let sweeping = signups.tick(FIRST_REMOVE_AT, millis(FIRST_REMOVE_AT)).await;
+    assert!(sweeping.removed.is_empty());
+    assert_eq!(
+        state_of(&store, &elsewhere, first_night()).await,
+        PostState::Open
+    );
+    assert!(board.deletes_in(REHEARSAL_CHANNEL).is_empty());
+}
+
+#[tokio::test]
+async fn a_purge_stops_at_the_first_season_whose_delete_fails() {
+    let board = FakeBoard::new();
+    let store = Attendance::with_pool(attendance_pool().await)
+        .await
+        .unwrap();
+    let first = created(&store, &proposal()).await;
+    let second = created(
+        &store,
+        &NewSeason {
+            number: 36,
+            channel: OTHER_CHANNEL,
+            range: Range::new(
+                parse_day("2026-11-11").unwrap(),
+                parse_day("2026-12-20").unwrap(),
+            )
+            .unwrap(),
+            ..proposal()
+        },
+    )
+    .await;
+    let signups = Signups::new(board.clone(), store.clone());
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let message = message_for(&store, &first, first_night()).await;
+    store
+        .record_post(
+            second.id,
+            night("2026-11-11"),
+            Snowflake::new(9_999),
+            millis(FIRST_POST_AT),
+        )
+        .await
+        .unwrap();
+    board.fail_deletes_in(OTHER_CHANNEL);
+    let refused = signups.purge(GUILD, FIRST_POST_AT).await;
+    assert_eq!(refused.seasons, 0);
+    assert_eq!(refused.answers, 0);
+    assert_eq!(refused.failures, 1);
+    assert_eq!(refused.messages, 1);
+    assert_eq!(board.deletes_in(CHANNEL), vec![message]);
+    assert_eq!(
+        store.seasons_in_any_state(GUILD).await.unwrap(),
+        vec![first, second]
+    );
 }
 
 #[tokio::test]

@@ -70,7 +70,10 @@ pub const REFRESH_FAILED: &str =
     " Its sign-up post could not be updated; run this again once the bot can edit it.";
 pub const REHEARSAL_ONLY: &str = "This server is not set up for rehearsals.";
 pub const NOTHING_TO_ADVANCE: &str = "Nothing is waiting for that step.";
-pub const RESET_BLOCKED: &str = "Some sign-up posts could not be removed, so nothing was deleted. Check that the bot can manage messages here, then run this again.";
+const RESET_BLOCKED_HEAD: &str =
+    "Some sign-up posts could not be removed, so no season or answer was deleted.";
+const RESET_BLOCKED_TAIL: &str =
+    "Check that the bot can manage messages here, then run this again.";
 
 const NOTHING_AHEAD: &str = "Nothing further will post.";
 const NOTHING_HAPPENED: &str = "Nothing happened.";
@@ -467,6 +470,25 @@ pub fn advanced(moment_unix: i64, report: &TickReport) -> String {
             steps
         },
     ])
+}
+
+pub fn reset_blocked(purge: &PurgeReport) -> String {
+    sentences(&[
+        RESET_BLOCKED_HEAD.to_owned(),
+        already_cleared(purge.messages),
+        RESET_BLOCKED_TAIL.to_owned(),
+    ])
+}
+
+fn already_cleared(count: usize) -> String {
+    match count {
+        0 => String::new(),
+        count => format!(
+            "{} {} already cleared.",
+            signup_posts(count),
+            was_verb(count)
+        ),
+    }
 }
 
 pub fn reset_done(purge: &PurgeReport) -> String {
