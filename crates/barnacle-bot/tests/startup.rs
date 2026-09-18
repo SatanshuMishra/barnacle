@@ -42,6 +42,7 @@ fn layout(catalog: &Catalog, silhouettes: &[&str], curation: &str) -> Layout {
         curation: curation_path,
         database: dir.path().join("barnacle.sqlite3"),
         commands: CommandScope::Global,
+        rehearsal: Vec::new(),
     };
     Layout { _dir: dir, config }
 }

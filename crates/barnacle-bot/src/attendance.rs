@@ -149,6 +149,14 @@ pub struct TickReport {
     pub failures: usize,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PurgeReport {
+    pub seasons: usize,
+    pub messages: usize,
+    pub answers: usize,
+    pub failures: usize,
+}
+
 pub const ROSTER_LIMIT: usize = 60;
 
 #[derive(Default)]
@@ -161,14 +169,20 @@ struct Slot {
 pub struct Signups<B: Board> {
     board: B,
     store: Attendance,
+    rehearsal: Vec<GuildId>,
     slots: std::sync::Mutex<HashMap<Snowflake, Arc<Slot>>>,
 }
 
 impl<B: Board> Signups<B> {
     pub fn new(board: B, store: Attendance) -> Arc<Self> {
+        Self::rehearsing(board, store, Vec::new())
+    }
+
+    pub fn rehearsing(board: B, store: Attendance, rehearsal: Vec<GuildId>) -> Arc<Self> {
         Arc::new(Self {
             board,
             store,
+            rehearsal,
             slots: std::sync::Mutex::new(HashMap::new()),
         })
     }
@@ -184,6 +198,75 @@ impl<B: Board> Signups<B> {
                 ..TickReport::default()
             };
         };
+        let seasons = seasons
+            .into_iter()
+            .filter(|season| !self.rehearsal.contains(&season.guild))
+            .collect();
+        self.beat(seasons, now_unix, now_ms).await
+    }
+
+    pub async fn tick_in(
+        self: &Arc<Self>,
+        guild: GuildId,
+        now_unix: i64,
+        now_ms: u64,
+    ) -> TickReport {
+        let Ok(seasons) = self.store.live_seasons(now_unix).await else {
+            return TickReport {
+                failures: 1,
+                ..TickReport::default()
+            };
+        };
+        let seasons = seasons
+            .into_iter()
+            .filter(|season| season.guild == guild)
+            .collect();
+        self.beat(seasons, now_unix, now_ms).await
+    }
+
+    pub async fn purge(self: &Arc<Self>, guild: GuildId, now_unix: i64) -> PurgeReport {
+        let Ok(seasons) = self.store.seasons_in_any_state(guild).await else {
+            return PurgeReport {
+                failures: 1,
+                ..PurgeReport::default()
+            };
+        };
+        let mut cleared = PostsReport::default();
+        for season in &seasons {
+            let posts = self.clear_posts(season, ClearScope::All, now_unix).await;
+            cleared.touched += posts.touched;
+            cleared.failures += posts.failures;
+        }
+        if cleared.failures != 0 {
+            return PurgeReport {
+                seasons: 0,
+                messages: cleared.touched,
+                answers: 0,
+                failures: cleared.failures,
+            };
+        }
+        let mut report = PurgeReport {
+            messages: cleared.touched,
+            ..PurgeReport::default()
+        };
+        for season in &seasons {
+            match self
+                .store
+                .purge_season(guild, season.id, season.number)
+                .await
+            {
+                Ok(None) => {}
+                Ok(Some(answers)) => {
+                    report.seasons += 1;
+                    report.answers += usize::try_from(answers).unwrap_or(usize::MAX);
+                }
+                Err(_) => report.failures += 1,
+            }
+        }
+        report
+    }
+
+    async fn beat(&self, seasons: Vec<Season>, now_unix: i64, now_ms: u64) -> TickReport {
         let mut report = TickReport::default();
         for season in &seasons {
             let Ok(posts) = self.store.posts(season.id).await else {

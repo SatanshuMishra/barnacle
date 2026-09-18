@@ -47,6 +47,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
     discord::run(
         token,
         config.commands,
+        config.rehearsal,
         loaded,
         stores.solves,
         stores.attendance,

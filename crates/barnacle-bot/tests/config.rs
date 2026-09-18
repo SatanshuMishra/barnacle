@@ -23,6 +23,7 @@ guilds = [123456789012345678]
             commands: CommandScope::Guilds {
                 guilds: vec![123456789012345678],
             },
+            rehearsal: Vec::new(),
         }
     );
     assert_eq!(config.catalogs(), PathBuf::from("data/catalog"));
@@ -78,6 +79,16 @@ fn unknown_keys_and_a_missing_scope_are_refused() {
         Config::from_toml("data_dir = \"data\"\n"),
         Err(ConfigError::Toml { .. })
     ));
+    assert!(matches!(
+        Config::from_toml(
+            "[commands]\nscope = \"guilds\"\nguilds = [1]\n[rehearsals]\nguilds = [1]\n"
+        ),
+        Err(ConfigError::Toml { .. })
+    ));
+    assert!(matches!(
+        Config::from_toml("[commands]\nscope = \"guilds\"\nguilds = [1]\n[rehearsal]\nguild = 1\n"),
+        Err(ConfigError::Toml { .. })
+    ));
 }
 
 #[test]
@@ -118,5 +129,135 @@ fn a_config_error_names_where_the_problem_is() {
     assert_eq!(
         error.to_string(),
         "the config is not valid at line 2, column 9; compare it with barnacle.example.toml"
+    );
+}
+
+#[test]
+fn a_rehearsal_server_is_read_from_the_config() {
+    let config = Config::from_toml(
+        r#"
+[commands]
+scope = "guilds"
+guilds = [111111111111111111, 222222222222222222]
+
+[rehearsal]
+guilds = [222222222222222222]
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        config.commands,
+        CommandScope::Guilds {
+            guilds: vec![111111111111111111, 222222222222222222],
+        }
+    );
+    assert_eq!(config.rehearsal, vec![222222222222222222]);
+}
+
+#[test]
+fn a_rehearsal_server_outside_the_command_guilds_is_refused() {
+    let error = Config::from_toml(
+        r#"
+[commands]
+scope = "guilds"
+guilds = [111111111111111111]
+
+[rehearsal]
+guilds = [111111111111111111, 333333333333333333]
+"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ConfigError::RehearsalNotRegistered {
+            guild: 333333333333333333
+        }
+    ));
+    assert_eq!(
+        error.to_string(),
+        "rehearsal.guilds lists 333333333333333333, which is not in commands.guilds"
+    );
+}
+
+#[test]
+fn a_rehearsal_server_with_global_scope_is_refused() {
+    let error = Config::from_toml(
+        r#"
+[commands]
+scope = "global"
+
+[rehearsal]
+guilds = [222222222222222222]
+"#,
+    )
+    .unwrap_err();
+    assert!(matches!(error, ConfigError::RehearsalWithGlobal));
+    assert_eq!(
+        error.to_string(),
+        "commands.scope is \"global\", so rehearsal.guilds must be left out"
+    );
+}
+
+#[test]
+fn a_zero_rehearsal_server_is_refused() {
+    let error = Config::from_toml(
+        r#"
+[commands]
+scope = "guilds"
+guilds = [111111111111111111]
+
+[rehearsal]
+guilds = [0]
+"#,
+    )
+    .unwrap_err();
+    assert!(matches!(error, ConfigError::ZeroRehearsalGuild));
+    assert_eq!(
+        error.to_string(),
+        "rehearsal.guilds contains 0, which is not a Discord server ID"
+    );
+}
+
+#[test]
+fn an_empty_rehearsal_list_is_no_rehearsal_server() {
+    let with_section = Config::from_toml(
+        r#"
+[commands]
+scope = "guilds"
+guilds = [111111111111111111]
+
+[rehearsal]
+guilds = []
+"#,
+    )
+    .unwrap();
+    let without_section = Config::from_toml(
+        r#"
+[commands]
+scope = "guilds"
+guilds = [111111111111111111]
+"#,
+    )
+    .unwrap();
+    assert!(with_section.rehearsal.is_empty());
+    assert_eq!(with_section, without_section);
+}
+
+#[test]
+fn the_example_rehearsal_section_parses_when_uncommented() {
+    let text = include_str!("../../../barnacle.example.toml")
+        .replace(
+            "guilds = []\n\n# A server",
+            "guilds = [111111111111111111]\n\n# A server",
+        )
+        .replace("# [rehearsal]", "[rehearsal]")
+        .replace("# guilds = []", "guilds = []");
+    let config = Config::from_toml(&text).unwrap();
+    assert!(config.rehearsal.is_empty());
+    assert_eq!(
+        config.commands,
+        CommandScope::Guilds {
+            guilds: vec![111111111111111111],
+        }
     );
 }

@@ -8,6 +8,7 @@ pub struct Config {
     pub curation: PathBuf,
     pub database: PathBuf,
     pub commands: CommandScope,
+    pub rehearsal: Vec<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +29,12 @@ pub enum ConfigError {
     ZeroGuild,
     #[error("commands.scope is \"global\", so commands.guilds must be left out")]
     GuildsWithGlobal,
+    #[error("rehearsal.guilds contains 0, which is not a Discord server ID")]
+    ZeroRehearsalGuild,
+    #[error("commands.scope is \"global\", so rehearsal.guilds must be left out")]
+    RehearsalWithGlobal,
+    #[error("rehearsal.guilds lists {guild}, which is not in commands.guilds")]
+    RehearsalNotRegistered { guild: u64 },
 }
 
 #[derive(Deserialize)]
@@ -40,6 +47,7 @@ struct ConfigFile {
     #[serde(default = "default_database")]
     database: PathBuf,
     commands: CommandsFile,
+    rehearsal: Option<RehearsalFile>,
 }
 
 #[derive(Deserialize)]
@@ -47,6 +55,12 @@ struct ConfigFile {
 struct CommandsFile {
     scope: ScopeName,
     guilds: Option<Vec<u64>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RehearsalFile {
+    guilds: Vec<u64>,
 }
 
 #[derive(Deserialize)]
@@ -74,16 +88,37 @@ impl Config {
             }
             (ScopeName::Guilds, Some(guilds)) => CommandScope::Guilds { guilds },
         };
+        let rehearsal = rehearsal(&commands, file.rehearsal)?;
         Ok(Self {
             data_dir: file.data_dir,
             curation: file.curation,
             database: file.database,
             commands,
+            rehearsal,
         })
     }
 
     pub fn catalogs(&self) -> PathBuf {
         self.data_dir.join("catalog")
+    }
+}
+
+fn rehearsal(
+    commands: &CommandScope,
+    section: Option<RehearsalFile>,
+) -> Result<Vec<u64>, ConfigError> {
+    match (commands, section) {
+        (_, None) => Ok(Vec::new()),
+        (CommandScope::Global, Some(_)) => Err(ConfigError::RehearsalWithGlobal),
+        (CommandScope::Guilds { .. }, Some(RehearsalFile { guilds })) if guilds.contains(&0) => {
+            Err(ConfigError::ZeroRehearsalGuild)
+        }
+        (CommandScope::Guilds { guilds: registered }, Some(RehearsalFile { guilds })) => {
+            match guilds.iter().find(|guild| !registered.contains(guild)) {
+                Some(guild) => Err(ConfigError::RehearsalNotRegistered { guild: *guild }),
+                None => Ok(guilds),
+            }
+        }
     }
 }
 
