@@ -12,10 +12,13 @@ use super::Data;
 use super::Error;
 use super::announcer::cancel_row;
 use crate::attendance::ClearScope;
+use crate::attendance_store::Attendance;
 use crate::attendance_store::CreateOutcome;
 use crate::attendance_store::EditOutcome;
 use crate::attendance_store::EndOutcome;
 use crate::attendance_store::NewSeason;
+use crate::attendance_store::Post;
+use crate::attendance_store::PostState;
 use crate::attendance_store::Season;
 use crate::attendance_store::SeasonChange;
 use crate::ids::ChannelId;
@@ -37,6 +40,17 @@ use crate::wiring::SortChoice;
 
 const SILHOUETTE_FILE: &str = "silhouette.png";
 const UNKNOWN_MEMBER: isize = 10007;
+const MILLIS_PER_SECOND: u64 = 1000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, poise::ChoiceParameter)]
+enum Moment {
+    #[name = "post"]
+    Post,
+    #[name = "close"]
+    Close,
+    #[name = "remove"]
+    Remove,
+}
 
 pub fn all() -> Vec<poise::Command<Data, Error>> {
     vec![
@@ -104,6 +118,28 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
             ..cb()
         },
     ]
+}
+
+pub fn rehearsal() -> Vec<poise::Command<Data, Error>> {
+    vec![poise::Command {
+        description: Some("Drive a Clan Battle rehearsal in this server".into()),
+        subcommands: vec![
+            poise::Command {
+                description: Some(
+                    "Run the sign-up beat at the next post, close or remove moment".into(),
+                ),
+                ..rehearse_advance()
+            },
+            poise::Command {
+                description: Some(
+                    "Delete every Clan Battle season, post and answer in this server".into(),
+                ),
+                ..rehearse_reset()
+            },
+        ],
+        subcommand_required: true,
+        ..rehearse()
+    }]
 }
 
 fn place(ctx: Context<'_>) -> Option<Place> {
@@ -771,4 +807,111 @@ async fn season_end(
         EndOutcome::Ended { .. } => private(ctx, text::season_ended(number, cleared.touched)).await,
         EndOutcome::NotFound => private(ctx, text::season_not_found(number)).await,
     }
+}
+
+#[poise::command(
+    slash_command,
+    guild_only,
+    default_member_permissions = "MANAGE_GUILD",
+    required_permissions = "MANAGE_GUILD"
+)]
+async fn rehearse(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
+}
+
+fn rehearsing(ctx: Context<'_>, guild: GuildId) -> bool {
+    ctx.data().rehearsal.contains(&guild)
+}
+
+fn moments(season: &Season, posts: &[Post], moment: Moment) -> Vec<i64> {
+    match moment {
+        Moment::Post => season
+            .range
+            .nights()
+            .filter(|night| !posts.iter().any(|post| post.night == *night))
+            .map(Night::post_at_unix)
+            .collect(),
+        Moment::Close => posts
+            .iter()
+            .filter(|post| post.state == PostState::Open)
+            .map(|post| post.night.start_unix())
+            .collect(),
+        Moment::Remove => posts
+            .iter()
+            .filter(|post| post.state != PostState::Removed)
+            .map(|post| post.night.remove_at_unix())
+            .collect(),
+    }
+}
+
+async fn pending_moment(
+    store: &Attendance,
+    guild: GuildId,
+    moment: Moment,
+) -> Result<Option<i64>, Error> {
+    let seasons = store.seasons_in(guild).await?;
+    let mut pending = Vec::new();
+    for season in &seasons {
+        let posts = store.posts(season.id).await?;
+        pending.extend(moments(season, &posts, moment));
+    }
+    Ok(pending.into_iter().min())
+}
+
+#[poise::command(slash_command, rename = "advance")]
+async fn rehearse_advance(
+    ctx: Context<'_>,
+    #[description = "Which moment of a night to run: post, close or remove"] to: Moment,
+) -> Result<(), Error> {
+    let Some(place) = place(ctx) else {
+        return Ok(());
+    };
+    if !rehearsing(ctx, place.guild) {
+        return private(ctx, text::REHEARSAL_ONLY).await;
+    }
+    let signups = &ctx.data().signups;
+    let Some(moment) = pending_moment(signups.store(), place.guild, to).await? else {
+        return private(ctx, text::NOTHING_TO_ADVANCE).await;
+    };
+    let Some(moment_ms) = u64::try_from(moment)
+        .ok()
+        .and_then(|seconds| seconds.checked_mul(MILLIS_PER_SECOND))
+    else {
+        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+    };
+    ctx.defer_ephemeral().await?;
+    let report = signups.tick_in(place.guild, moment, moment_ms).await;
+    if report.failures > 0 {
+        tracing::warn!(
+            guild = place.guild.get(),
+            failures = report.failures,
+            "a rehearsal advance had steps fail"
+        );
+    }
+    private(ctx, text::advanced(moment, &report)).await
+}
+
+#[poise::command(slash_command, rename = "reset")]
+async fn rehearse_reset(ctx: Context<'_>) -> Result<(), Error> {
+    let Some(place) = place(ctx) else {
+        return Ok(());
+    };
+    if !rehearsing(ctx, place.guild) {
+        return private(ctx, text::REHEARSAL_ONLY).await;
+    }
+    ctx.defer_ephemeral().await?;
+    let purged = ctx
+        .data()
+        .signups
+        .purge(place.guild, super::now_unix())
+        .await;
+    if purged.failures > 0 {
+        tracing::warn!(
+            guild = place.guild.get(),
+            failures = purged.failures,
+            "a rehearsal reset left sign-up posts behind, so nothing was deleted"
+        );
+        return private(ctx, text::RESET_BLOCKED).await;
+    }
+    private(ctx, text::reset_done(&purged)).await
 }

@@ -13,8 +13,10 @@ use jiff::civil::Date;
 
 use crate::attendance::Cell;
 use crate::attendance::HourTally;
+use crate::attendance::PurgeReport;
 use crate::attendance::RosterRow;
 use crate::attendance::SignupView;
+use crate::attendance::TickReport;
 use crate::attendance_store::Season;
 use crate::ids::RoleId;
 use crate::schedule::Hour;
@@ -66,8 +68,13 @@ pub const CLEAR_FAILED_MOVE: &str = "Some sign-up posts could not be removed fro
 pub const CLEAR_FAILED_END: &str = "Some sign-up posts could not be removed, so the season is still running. Check that the bot can manage messages in its channel, then run this again.";
 pub const REFRESH_FAILED: &str =
     " Its sign-up post could not be updated; run this again once the bot can edit it.";
+pub const REHEARSAL_ONLY: &str = "This server is not set up for rehearsals.";
+pub const NOTHING_TO_ADVANCE: &str = "Nothing is waiting for that step.";
+pub const RESET_BLOCKED: &str = "Some sign-up posts could not be removed, so nothing was deleted. Check that the bot can manage messages here, then run this again.";
 
 const NOTHING_AHEAD: &str = "Nothing further will post.";
+const NOTHING_HAPPENED: &str = "Nothing happened.";
+const NOTHING_TO_CLEAR: &str = "Nothing was there to clear.";
 const NAME_LIMIT: usize = 32;
 const SEASON_LIST_TAIL: usize = 32;
 const CELL_WIDTH: usize = 5;
@@ -444,6 +451,41 @@ pub fn season_ended(number: u32, cleared: usize) -> String {
     format!("Season {number} has ended. {kept}")
 }
 
+pub fn advanced(moment_unix: i64, report: &TickReport) -> String {
+    let steps = sentences(&[
+        went_up(report.posted.len()),
+        adopted(report.adopted.len()),
+        closed(report.closed.len()),
+        removed(report.removed.len()),
+        failed(report.failures),
+    ]);
+    sentences(&[
+        format!("Ran the beat at {}.", full_time(moment_unix)),
+        if steps.is_empty() {
+            NOTHING_HAPPENED.to_owned()
+        } else {
+            steps
+        },
+    ])
+}
+
+pub fn reset_done(purge: &PurgeReport) -> String {
+    let counts: Vec<String> = [
+        (purge.seasons, seasons(purge.seasons)),
+        (purge.messages, signup_posts(purge.messages)),
+        (purge.answers, answers(purge.answers)),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(_, part)| part)
+    .collect();
+    sentences(&[if counts.is_empty() {
+        NOTHING_TO_CLEAR.to_owned()
+    } else {
+        format!("Cleared {}.", joined(&counts))
+    }])
+}
+
 pub fn pings_line(ping: Option<RoleId>) -> String {
     match ping {
         Some(role) => format!(" Pings <@&{role}>."),
@@ -481,10 +523,74 @@ fn cleared_from_the_old_channel(cleared: usize) -> String {
     }
 }
 
+fn went_up(count: usize) -> String {
+    match count {
+        0 => String::new(),
+        count => format!("{} went up.", signup_posts(count)),
+    }
+}
+
+fn adopted(count: usize) -> String {
+    match count {
+        0 => String::new(),
+        count => format!("{} {} adopted.", signup_posts(count), was_verb(count)),
+    }
+}
+
+fn closed(count: usize) -> String {
+    match count {
+        0 => String::new(),
+        count => format!("{} closed.", signup_posts(count)),
+    }
+}
+
+fn removed(count: usize) -> String {
+    match count {
+        0 => String::new(),
+        count => format!("{} {} removed.", signup_posts(count), was_verb(count)),
+    }
+}
+
+fn failed(count: usize) -> String {
+    match count {
+        0 => String::new(),
+        count => format!("{} failed.", steps(count)),
+    }
+}
+
+fn joined(parts: &[String]) -> String {
+    match parts.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, head)) => format!("{} and {last}", head.join(", ")),
+        None => String::new(),
+    }
+}
+
 fn signup_posts(count: usize) -> String {
     match count {
         1 => "1 sign-up post".to_owned(),
         count => format!("{count} sign-up posts"),
+    }
+}
+
+fn seasons(count: usize) -> String {
+    match count {
+        1 => "1 season".to_owned(),
+        count => format!("{count} seasons"),
+    }
+}
+
+fn answers(count: usize) -> String {
+    match count {
+        1 => "1 answer".to_owned(),
+        count => format!("{count} answers"),
+    }
+}
+
+fn steps(count: usize) -> String {
+    match count {
+        1 => "1 step".to_owned(),
+        count => format!("{count} steps"),
     }
 }
 
@@ -494,6 +600,10 @@ fn cleared_verb(count: usize) -> &'static str {
     } else {
         "were cleared"
     }
+}
+
+fn was_verb(count: usize) -> &'static str {
+    if count == 1 { "was" } else { "were" }
 }
 
 fn sentences(parts: &[String]) -> String {

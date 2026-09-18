@@ -17,6 +17,7 @@ use tokio::sync::Semaphore;
 use crate::attendance::Signups;
 use crate::attendance_store::Attendance;
 use crate::config::CommandScope;
+use crate::ids::GuildId;
 use crate::lookup::Directory;
 use crate::solves::Solves;
 use crate::startup::Loaded;
@@ -40,6 +41,7 @@ pub struct Data {
     pub directory: Directory,
     pub member_lookups: Arc<Semaphore>,
     pub signups: Arc<Signups<DiscordBoard>>,
+    pub rehearsal: Vec<GuildId>,
 }
 
 fn now_unix() -> i64 {
@@ -76,6 +78,7 @@ impl From<serenity::Error> for RunError {
 pub async fn run(
     token: String,
     scope: CommandScope,
+    rehearsal: Vec<u64>,
     loaded: Loaded,
     solves: Solves,
     attendance: Attendance,
@@ -83,9 +86,10 @@ pub async fn run(
     let intents = serenity::GatewayIntents::GUILDS
         | serenity::GatewayIntents::GUILD_MESSAGES
         | serenity::GatewayIntents::MESSAGE_CONTENT;
+    let rehearsal_guilds: Vec<GuildId> = rehearsal.iter().copied().map(GuildId::new).collect();
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: commands::all(),
+            commands: command_list(!rehearsal.is_empty()),
             event_handler: |framework, event| Box::pin(events::handle(framework, event)),
             on_error: |error| Box::pin(events::on_error(error)),
             ..Default::default()
@@ -96,7 +100,7 @@ pub async fn run(
                 let rng: StdRng = rand::make_rng();
                 let table = Table::new(loaded.book, solves, announcer, Timing::STANDARD, rng);
                 let board = DiscordBoard::new(Arc::clone(&ctx.http), ready.user.id);
-                let signups = Signups::new(board, attendance);
+                let signups = Signups::rehearsing(board, attendance, rehearsal_guilds.clone());
                 let ticker = Arc::clone(&signups);
                 tokio::spawn(async move {
                     let mut beat = tokio::time::interval(TICK);
@@ -133,6 +137,7 @@ pub async fn run(
                     directory: loaded.directory,
                     member_lookups: Arc::new(Semaphore::new(MEMBER_LOOKUPS_AT_ONCE)),
                     signups,
+                    rehearsal: rehearsal_guilds,
                 })
             })
         })
@@ -142,28 +147,42 @@ pub async fn run(
         .await?;
     let application = client.http.get_current_application_info().await?;
     client.http.set_application_id(application.id);
-    register(&client.http, &commands::all(), &scope)
+    register(&client.http, &scope, &rehearsal)
         .await
         .map_err(RunError::Registration)?;
     client.start().await?;
     Ok(())
 }
 
+fn command_list(rehearsing: bool) -> Vec<poise::Command<Data, Error>> {
+    let extra = if rehearsing {
+        commands::rehearsal()
+    } else {
+        Vec::new()
+    };
+    commands::all().into_iter().chain(extra).collect()
+}
+
 async fn register(
     http: &Arc<serenity::Http>,
-    commands: &[poise::Command<Data, Error>],
     scope: &CommandScope,
+    rehearsal: &[u64],
 ) -> Result<(), serenity::Error> {
     match scope {
         CommandScope::Global => {
-            poise::builtins::register_globally(http, commands).await?;
+            poise::builtins::register_globally(http, &command_list(false)).await?;
             tracing::info!("commands registered globally");
         }
         CommandScope::Guilds { guilds } => {
             for guild in guilds {
-                poise::builtins::register_in_guild(http, commands, serenity::GuildId::new(*guild))
-                    .await?;
-                tracing::info!(guild, "commands registered in server");
+                let rehearsing = rehearsal.contains(guild);
+                poise::builtins::register_in_guild(
+                    http,
+                    &command_list(rehearsing),
+                    serenity::GuildId::new(*guild),
+                )
+                .await?;
+                tracing::info!(guild, rehearsing, "commands registered in server");
             }
         }
     }

@@ -4,8 +4,11 @@ use std::time::Duration;
 
 use barnacle_bot::attendance::Cell;
 use barnacle_bot::attendance::HourTally;
+use barnacle_bot::attendance::PostTag;
+use barnacle_bot::attendance::PurgeReport;
 use barnacle_bot::attendance::RosterRow;
 use barnacle_bot::attendance::SignupView;
+use barnacle_bot::attendance::TickReport;
 use barnacle_bot::attendance_store::Season;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
@@ -585,4 +588,109 @@ fn a_season_line_names_its_ping_role() {
         "<#123> Season 35: Komodo Dragon, 2026-09-16 to 2026-11-05. 23 nights ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>). Pings <@&456>."
     );
     assert!(!text::season_line(&komodo, 23, Some(1_790_811_000)).contains("Pings"));
+}
+
+fn tags(count: usize) -> Vec<PostTag> {
+    (0..count)
+        .map(|position| PostTag {
+            season: 1,
+            night: Night::parse(["2026-09-23", "2026-09-24", "2026-09-26"][position]).unwrap(),
+        })
+        .collect()
+}
+
+#[test]
+fn an_advance_reports_what_the_beat_did() {
+    let posted = TickReport {
+        posted: tags(1),
+        ..TickReport::default()
+    };
+    assert_eq!(
+        text::advanced(1_790_811_000, &posted),
+        "Ran the beat at <t:1790811000:F>. 1 sign-up post went up."
+    );
+    let closed = TickReport {
+        closed: tags(1),
+        ..TickReport::default()
+    };
+    assert_eq!(
+        text::advanced(1_790_897_400, &closed),
+        "Ran the beat at <t:1790897400:F>. 1 sign-up post closed."
+    );
+    let removed = TickReport {
+        removed: tags(2),
+        ..TickReport::default()
+    };
+    assert_eq!(
+        text::advanced(1_790_913_600, &removed),
+        "Ran the beat at <t:1790913600:F>. 2 sign-up posts were removed."
+    );
+    assert_eq!(
+        text::advanced(1_790_811_000, &TickReport::default()),
+        "Ran the beat at <t:1790811000:F>. Nothing happened."
+    );
+    let everything = TickReport {
+        posted: tags(1),
+        adopted: tags(2),
+        closed: tags(3),
+        removed: tags(1),
+        failures: 2,
+    };
+    assert_eq!(
+        text::advanced(1_790_811_000, &everything),
+        "Ran the beat at <t:1790811000:F>. 1 sign-up post went up. 2 sign-up posts were adopted. 3 sign-up posts closed. 1 sign-up post was removed. 2 steps failed."
+    );
+    let one_failure = TickReport {
+        failures: 1,
+        ..TickReport::default()
+    };
+    assert_eq!(
+        text::advanced(1_790_811_000, &one_failure),
+        "Ran the beat at <t:1790811000:F>. 1 step failed."
+    );
+    assert!(!text::advanced(1_790_811_000, &one_failure).contains("Nothing happened"));
+}
+
+#[test]
+fn a_reset_reports_what_it_cleared() {
+    assert_eq!(
+        text::reset_done(&PurgeReport {
+            seasons: 1,
+            messages: 2,
+            answers: 8,
+            failures: 0
+        }),
+        "Cleared 1 season, 2 sign-up posts and 8 answers."
+    );
+    assert_eq!(
+        text::reset_done(&PurgeReport {
+            seasons: 1,
+            messages: 1,
+            answers: 0,
+            failures: 0
+        }),
+        "Cleared 1 season and 1 sign-up post."
+    );
+    assert_eq!(
+        text::reset_done(&PurgeReport {
+            seasons: 2,
+            messages: 0,
+            answers: 1,
+            failures: 0
+        }),
+        "Cleared 2 seasons and 1 answer."
+    );
+    assert_eq!(
+        text::reset_done(&PurgeReport {
+            seasons: 1,
+            messages: 0,
+            answers: 0,
+            failures: 0
+        }),
+        "Cleared 1 season."
+    );
+    assert_eq!(
+        text::reset_done(&PurgeReport::default()),
+        "Nothing was there to clear."
+    );
 }
