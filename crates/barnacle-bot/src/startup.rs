@@ -44,8 +44,10 @@ pub enum StartupError {
         #[source]
         source: ConfigError,
     },
-    #[error("DISCORD_TOKEN is not set")]
+    #[error("DISCORD_TOKEN is not set; put it in .env, or export it before starting")]
     MissingToken,
+    #[error(".env could not be read; compare it with env.example")]
+    Env(#[source] dotenvy::Error),
     #[error("no catalog is selected in {path}; run `barnacle-data use <catalog>`")]
     NoCurrentCatalog { path: PathBuf },
     #[error("the current catalog could not be loaded")]
@@ -128,6 +130,14 @@ pub fn read_config(path: &Path) -> Result<Config, StartupError> {
         path: path.to_owned(),
         source,
     })
+}
+
+pub fn load_env() -> Result<(), StartupError> {
+    match dotenvy::dotenv() {
+        Ok(_) => Ok(()),
+        Err(error) if error.not_found() => Ok(()),
+        Err(error) => Err(StartupError::Env(error)),
+    }
 }
 
 pub fn read_token(value: Option<String>) -> Result<String, StartupError> {

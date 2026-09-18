@@ -70,10 +70,18 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 
    It adds a column and a table without rebuilding anything, and carries the same run-once guard as the file before it.
 
-10. Start the bot. Reading the token with `read` keeps it out of your shell history:
+10. Put the bot's token where the bot can find it. Copy `env.example` to `.env` and fill in the one value:
 
     ```bash
-    read -rs DISCORD_TOKEN && export DISCORD_TOKEN && cargo run --release -p barnacle-bot
+    cp env.example .env && chmod 600 .env
+    ```
+
+    `.env` is ignored by git. A `DISCORD_TOKEN` already exported in your shell wins over the file, so you can override it for one run without editing anything.
+
+11. Start the bot:
+
+    ```bash
+    cargo run --release -p barnacle-bot
     ```
 
 Before it connects, the bot checks the catalog, the curation file, the silhouettes and the database, and names anything that is missing.

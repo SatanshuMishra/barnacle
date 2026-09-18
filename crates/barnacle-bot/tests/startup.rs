@@ -128,6 +128,27 @@ fn a_missing_or_blank_token_is_refused() {
         startup::read_token(Some(" secret-token\n".to_owned())).unwrap(),
         "secret-token"
     );
+    assert!(
+        startup::read_token(None)
+            .unwrap_err()
+            .to_string()
+            .contains(".env")
+    );
+}
+
+#[test]
+fn the_example_environment_file_names_only_the_token() {
+    let text = include_str!("../../../env.example");
+    let names: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.split('=').next().unwrap_or_default())
+        .collect();
+    assert_eq!(names, vec!["DISCORD_TOKEN"]);
+    assert!(
+        text.lines()
+            .all(|line| line.ends_with('=') || line.is_empty())
+    );
 }
 
 #[test]
