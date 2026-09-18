@@ -599,56 +599,104 @@ fn tags(count: usize) -> Vec<PostTag> {
         .collect()
 }
 
+fn rehearsal(number: u32, codename: Option<&str>) -> Season {
+    Season {
+        range: Range::every_day(
+            parse_day("2026-09-19").unwrap(),
+            parse_day("2026-09-21").unwrap(),
+        )
+        .unwrap(),
+        ..season(number, codename, "2026-09-19", "2026-09-21")
+    }
+}
+
 #[test]
-fn an_advance_reports_what_the_beat_did() {
+fn a_rehearsal_start_names_the_season_and_the_next_post() {
+    assert_eq!(
+        text::rehearsal_started(
+            &rehearsal(35, Some("Komodo Dragon")),
+            3,
+            Some(1_790_811_000)
+        ),
+        "Rehearsing season 35: Komodo Dragon. 3 CB nights, 3 still ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>). Manage it with number 35."
+    );
+    assert_eq!(
+        text::rehearsal_started(&rehearsal(99, None), 3, None),
+        "Rehearsing season 99. 3 CB nights, 3 still ahead. Next sign-up post: within a minute. Manage it with number 99."
+    );
+    let single = Season {
+        range: Range::every_day(
+            parse_day("2026-09-19").unwrap(),
+            parse_day("2026-09-19").unwrap(),
+        )
+        .unwrap(),
+        ..rehearsal(99, None)
+    };
+    assert_eq!(
+        text::rehearsal_started(&single, 1, Some(1_790_811_000)),
+        "Rehearsing season 99. 1 CB night, 1 still ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>). Manage it with number 99."
+    );
+    assert_eq!(
+        text::rehearsal_started(&rehearsal(35, Some("*Komodo*")), 3, None),
+        "Rehearsing season 35: \\*Komodo\\*. 3 CB nights, 3 still ahead. Next sign-up post: within a minute. Manage it with number 35."
+    );
+}
+
+#[test]
+fn a_step_reports_what_the_beat_did() {
     let posted = TickReport {
         posted: tags(1),
         ..TickReport::default()
     };
     assert_eq!(
-        text::advanced(1_790_811_000, &posted),
-        "Ran the beat at <t:1790811000:F>. 1 sign-up post went up."
+        text::stepped(1_790_811_000, &posted),
+        "Moved the rehearsal clock to <t:1790811000:F>. 1 sign-up post went up."
     );
-    let closed = TickReport {
+    let closed_and_posted = TickReport {
+        posted: tags(1),
         closed: tags(1),
         ..TickReport::default()
     };
     assert_eq!(
-        text::advanced(1_790_897_400, &closed),
-        "Ran the beat at <t:1790897400:F>. 1 sign-up post closed."
+        text::stepped(1_790_897_400, &closed_and_posted),
+        "Moved the rehearsal clock to <t:1790897400:F>. 1 sign-up post closed. 1 sign-up post went up."
     );
     let removed = TickReport {
-        removed: tags(2),
+        removed: tags(1),
         ..TickReport::default()
     };
     assert_eq!(
-        text::advanced(1_790_913_600, &removed),
-        "Ran the beat at <t:1790913600:F>. 2 sign-up posts were removed."
+        text::stepped(1_790_913_600, &removed),
+        "Moved the rehearsal clock to <t:1790913600:F>. 1 sign-up post was removed."
     );
     assert_eq!(
-        text::advanced(1_790_811_000, &TickReport::default()),
-        "Ran the beat at <t:1790811000:F>. Nothing happened."
+        text::stepped(1_790_811_000, &TickReport::default()),
+        "Moved the rehearsal clock to <t:1790811000:F>. Nothing happened."
     );
     let everything = TickReport {
         posted: tags(1),
         adopted: tags(2),
         closed: tags(3),
-        removed: tags(1),
+        removed: tags(2),
         failures: 2,
     };
     assert_eq!(
-        text::advanced(1_790_811_000, &everything),
-        "Ran the beat at <t:1790811000:F>. 1 sign-up post went up. 2 sign-up posts were adopted. 3 sign-up posts closed. 1 sign-up post was removed. 2 steps failed."
+        text::stepped(1_790_811_000, &everything),
+        "Moved the rehearsal clock to <t:1790811000:F>. 2 sign-up posts were removed. 3 sign-up posts closed. 1 sign-up post went up. 2 sign-up posts were adopted. 2 steps failed."
     );
     let one_failure = TickReport {
         failures: 1,
         ..TickReport::default()
     };
     assert_eq!(
-        text::advanced(1_790_811_000, &one_failure),
-        "Ran the beat at <t:1790811000:F>. 1 step failed."
+        text::stepped(1_790_811_000, &one_failure),
+        "Moved the rehearsal clock to <t:1790811000:F>. 1 step failed."
     );
-    assert!(!text::advanced(1_790_811_000, &one_failure).contains("Nothing happened"));
+    assert!(!text::stepped(1_790_811_000, &one_failure).contains("Nothing happened"));
+    assert_eq!(
+        text::NOTHING_PENDING,
+        "Nothing is waiting to happen in this rehearsal."
+    );
 }
 
 #[test]

@@ -5,6 +5,8 @@ use barnacle_guess::Draw;
 use barnacle_guess::Snowflake;
 use barnacle_guess::Timing;
 use barnacle_guess::UserId;
+use jiff::ToSpan;
+use jiff::civil::Date;
 use poise::serenity_prelude as serenity;
 
 use super::Context;
@@ -12,13 +14,13 @@ use super::Data;
 use super::Error;
 use super::announcer::cancel_row;
 use crate::attendance::ClearScope;
+use crate::attendance::next_moment;
 use crate::attendance_store::Attendance;
 use crate::attendance_store::CreateOutcome;
 use crate::attendance_store::EditOutcome;
 use crate::attendance_store::EndOutcome;
 use crate::attendance_store::NewSeason;
 use crate::attendance_store::Post;
-use crate::attendance_store::PostState;
 use crate::attendance_store::Season;
 use crate::attendance_store::SeasonChange;
 use crate::ids::ChannelId;
@@ -27,6 +29,7 @@ use crate::ids::Place;
 use crate::ids::RoleId;
 use crate::info;
 use crate::schedule;
+use crate::schedule::Days;
 use crate::schedule::Night;
 use crate::schedule::Range;
 use crate::schedule::parse_day;
@@ -41,16 +44,7 @@ use crate::wiring::SortChoice;
 const SILHOUETTE_FILE: &str = "silhouette.png";
 const UNKNOWN_MEMBER: isize = 10007;
 const MILLIS_PER_SECOND: u64 = 1000;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, poise::ChoiceParameter)]
-enum Moment {
-    #[name = "post"]
-    Post,
-    #[name = "close"]
-    Close,
-    #[name = "remove"]
-    Remove,
-}
+const REHEARSAL_NIGHTS: u32 = 3;
 
 pub fn all() -> Vec<poise::Command<Data, Error>> {
     vec![
@@ -126,9 +120,15 @@ pub fn rehearsal() -> Vec<poise::Command<Data, Error>> {
         subcommands: vec![
             poise::Command {
                 description: Some(
-                    "Run the sign-up beat at the next post, close or remove moment".into(),
+                    "Set up a rehearsal season of nightly sign-ups, starting tomorrow".into(),
                 ),
-                ..rehearse_advance()
+                ..rehearse_start()
+            },
+            poise::Command {
+                description: Some(
+                    "Move this server's clock to the next sign-up step and run it".into(),
+                ),
+                ..rehearse_next()
             },
             poise::Command {
                 description: Some(
@@ -561,6 +561,7 @@ async fn season_start(
         number,
         codename,
         range,
+        days: Days::ClanBattle,
         created_by: UserId::new(ctx.author().id.get()),
         created_at_ms,
         ping_role: ping_role.map(|role| RoleId::new(role.get())),
@@ -823,45 +824,34 @@ fn rehearsing(ctx: Context<'_>, guild: GuildId) -> bool {
     ctx.data().rehearsal.contains(&guild)
 }
 
-fn moments(season: &Season, posts: &[Post], moment: Moment) -> Vec<i64> {
-    match moment {
-        Moment::Post => season
-            .range
-            .nights()
-            .filter(|night| !posts.iter().any(|post| post.night == *night))
-            .map(Night::post_at_unix)
-            .collect(),
-        Moment::Close => posts
-            .iter()
-            .filter(|post| post.state == PostState::Open)
-            .map(|post| post.night.start_unix())
-            .collect(),
-        Moment::Remove => posts
-            .iter()
-            .filter(|post| post.state != PostState::Removed)
-            .map(|post| post.night.remove_at_unix())
-            .collect(),
-    }
+fn rehearsal_range(today: Date, nights: u32) -> Option<Range> {
+    let first = today.checked_add(1.day()).ok()?;
+    let last = today.checked_add(i64::from(nights).days()).ok()?;
+    Range::every_day(first, last)
 }
 
-async fn pending_moment(
-    store: &Attendance,
-    guild: GuildId,
-    moment: Moment,
-) -> Result<Option<i64>, Error> {
-    let seasons = store.seasons_in(guild).await?;
-    let mut pending = Vec::new();
-    for season in &seasons {
-        let posts = store.posts(season.id).await?;
-        pending.extend(moments(season, &posts, moment));
+async fn posts_of(store: &Attendance, seasons: &[Season]) -> Result<Vec<(i64, Vec<Post>)>, Error> {
+    let mut posts = Vec::with_capacity(seasons.len());
+    for season in seasons {
+        posts.push((season.id, store.posts(season.id).await?));
     }
-    Ok(pending.into_iter().min())
+    Ok(posts)
 }
 
-#[poise::command(slash_command, rename = "advance")]
-async fn rehearse_advance(
+#[poise::command(slash_command, rename = "start")]
+async fn rehearse_start(
     ctx: Context<'_>,
-    #[description = "Which moment of a night to run: post, close or remove"] to: Moment,
+    #[description = "Which CB season this is, for example 99"]
+    #[min = 1]
+    number: u32,
+    #[description = "The season's codename, for example Komodo Dragon"]
+    #[max_length = 100]
+    codename: Option<String>,
+    #[description = "Role to ping when a sign-up is posted"] ping_role: Option<serenity::RoleId>,
+    #[description = "How many nights to rehearse, one per day from tomorrow (default 3)"]
+    #[min = 1]
+    #[max = 7]
+    nights: Option<u32>,
 ) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -869,9 +859,65 @@ async fn rehearse_advance(
     if !rehearsing(ctx, place.guild) {
         return private(ctx, text::REHEARSAL_ONLY).await;
     }
+    if channel_kind(ctx) != Some(serenity::ChannelType::Text) {
+        return private(ctx, text::RUN_IN_TEXT_CHANNEL).await;
+    }
+    let missing = wiring::missing_signup_permissions(channel_access(ctx));
+    if !missing.is_empty() {
+        return private(ctx, text::missing_permissions(&missing)).await;
+    }
+    let now_unix = super::now_unix();
+    let Some(today) = schedule::today(now_unix) else {
+        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+    };
+    let Some(range) = rehearsal_range(today, nights.unwrap_or(REHEARSAL_NIGHTS)) else {
+        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+    };
+    let nights_left = range.nights_left(now_unix);
+    let Some(created_at_ms) = super::now_ms() else {
+        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+    };
+    let new = NewSeason {
+        guild: place.guild,
+        channel: place.channel,
+        number,
+        codename,
+        range,
+        days: Days::Every,
+        created_by: UserId::new(ctx.author().id.get()),
+        created_at_ms,
+        ping_role: ping_role.map(|role| RoleId::new(role.get())),
+    };
+    match ctx.data().signups.store().create_season(&new).await? {
+        CreateOutcome::Created(season) => {
+            let started =
+                text::rehearsal_started(&season, nights_left, next_post_at(range, now_unix));
+            private(ctx, started).await
+        }
+        CreateOutcome::NumberTaken => private(ctx, text::season_number_taken(number)).await,
+        CreateOutcome::Overlaps(other) => private(ctx, text::season_overlaps(&other)).await,
+    }
+}
+
+#[poise::command(slash_command, rename = "next")]
+async fn rehearse_next(ctx: Context<'_>) -> Result<(), Error> {
+    let Some(place) = place(ctx) else {
+        return Ok(());
+    };
+    if !rehearsing(ctx, place.guild) {
+        return private(ctx, text::REHEARSAL_ONLY).await;
+    }
     let signups = &ctx.data().signups;
-    let Some(moment) = pending_moment(signups.store(), place.guild, to).await? else {
-        return private(ctx, text::NOTHING_TO_ADVANCE).await;
+    let store = signups.store();
+    let now_unix = super::now_unix();
+    let offset = store.rehearsal_clock(place.guild).await?;
+    let Some(rehearsal_now) = now_unix.checked_add(offset) else {
+        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+    };
+    let seasons = store.seasons_in(place.guild).await?;
+    let posts = posts_of(store, &seasons).await?;
+    let Some(moment) = next_moment(&seasons, &posts, rehearsal_now) else {
+        return private(ctx, text::NOTHING_PENDING).await;
     };
     let Some(moment_ms) = u64::try_from(moment)
         .ok()
@@ -879,16 +925,20 @@ async fn rehearse_advance(
     else {
         return private(ctx, text::SOMETHING_WENT_WRONG).await;
     };
+    let Some(shifted) = moment.checked_sub(now_unix) else {
+        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+    };
     ctx.defer_ephemeral().await?;
+    store.set_rehearsal_clock(place.guild, shifted).await?;
     let report = signups.tick_in(place.guild, moment, moment_ms).await;
     if report.failures > 0 {
         tracing::warn!(
             guild = place.guild.get(),
             failures = report.failures,
-            "a rehearsal advance had steps fail"
+            "a rehearsal step had beat steps fail"
         );
     }
-    private(ctx, text::advanced(moment, &report)).await
+    private(ctx, text::stepped(moment, &report)).await
 }
 
 #[poise::command(slash_command, rename = "reset")]

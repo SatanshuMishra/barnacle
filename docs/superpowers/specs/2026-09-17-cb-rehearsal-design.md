@@ -1,3 +1,5 @@
+Superseded in whole by docs/superpowers/specs/2026-09-18-cb-harness-design.md. Nothing below is current.
+
 # Clan Battle rehearsals
 
 ## 1. The problem
