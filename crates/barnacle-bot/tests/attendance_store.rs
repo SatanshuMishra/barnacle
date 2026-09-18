@@ -37,6 +37,9 @@ const RESERVES: RoleId = RoleId::new(4343);
 const CREATED_AT: u64 = 1_700_000_000_000;
 const ENDED_AT: u64 = 1_700_000_900_000;
 
+const POSTS_OF_SEASON: &str = "SELECT COUNT(*) FROM cb_posts WHERE season_id = ?";
+const MARKS_OF_SEASON: &str = "SELECT COUNT(*) FROM cb_marks WHERE season_id = ?";
+
 async fn attendance() -> Attendance {
     Attendance::with_pool(attendance_pool().await)
         .await
@@ -784,5 +787,112 @@ async fn move_season_only_moves_a_live_season_of_its_own_guild() {
             .move_season(GUILD, season.id, elsewhere)
             .await
             .unwrap()
+    );
+}
+
+async fn marked_season(store: &Attendance, new: &NewSeason) -> Season {
+    let season = created(store, new).await;
+    let first = season.range.nights().next().unwrap();
+    store
+        .record_post(season.id, first, Snowflake::new(7), CREATED_AT)
+        .await
+        .unwrap();
+    store
+        .mark(season.id, first, AKI, &[hour(1)], true, 1_000)
+        .await
+        .unwrap();
+    season
+}
+
+async fn counted(pool: &SqlitePool, query: &'static str, season: i64) -> i64 {
+    sqlx::query_scalar(query)
+        .bind(season)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn purge_season_deletes_its_marks_posts_and_season() {
+    let pool = attendance_pool().await;
+    let (store, season) = posted_season(pool.clone()).await;
+    let first = night("2026-09-16");
+    let second = night("2026-09-17");
+    store
+        .record_post(season.id, second, Snowflake::new(8), CREATED_AT)
+        .await
+        .unwrap();
+    store
+        .mark(season.id, first, AKI, &[hour(1), hour(2)], true, 1_000)
+        .await
+        .unwrap();
+    store
+        .mark(season.id, second, BOREALIS, &[hour(3)], false, 2_000)
+        .await
+        .unwrap();
+    store.end_season(GUILD, 35, ENDED_AT).await.unwrap();
+    assert_eq!(store.purge_season(GUILD, season.id).await.unwrap(), 3);
+    assert_eq!(store.season(season.id).await.unwrap(), None);
+    assert_eq!(counted(&pool, POSTS_OF_SEASON, season.id).await, 0);
+    assert_eq!(counted(&pool, MARKS_OF_SEASON, season.id).await, 0);
+    assert!(store.seasons_in_any_state(GUILD).await.unwrap().is_empty());
+    assert_eq!(store.purge_season(GUILD, season.id).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn purge_season_leaves_another_guilds_season_alone() {
+    let pool = attendance_pool().await;
+    let store = Attendance::with_pool(pool.clone()).await.unwrap();
+    let ours = marked_season(&store, &proposal(35, "2026-09-16", "2026-11-05")).await;
+    let theirs = NewSeason {
+        guild: OTHER_GUILD,
+        ..proposal(35, "2026-09-16", "2026-11-05")
+    };
+    let theirs = marked_season(&store, &theirs).await;
+    assert_eq!(store.purge_season(OTHER_GUILD, ours.id).await.unwrap(), 0);
+    assert_eq!(store.season(ours.id).await.unwrap(), Some(ours.clone()));
+    assert_eq!(counted(&pool, POSTS_OF_SEASON, ours.id).await, 1);
+    assert_eq!(counted(&pool, MARKS_OF_SEASON, ours.id).await, 1);
+    assert_eq!(store.purge_season(GUILD, ours.id).await.unwrap(), 1);
+    assert_eq!(store.season(ours.id).await.unwrap(), None);
+    assert_eq!(store.season(theirs.id).await.unwrap(), Some(theirs.clone()));
+    assert_eq!(counted(&pool, POSTS_OF_SEASON, theirs.id).await, 1);
+    assert_eq!(counted(&pool, MARKS_OF_SEASON, theirs.id).await, 1);
+    assert_eq!(
+        store.seasons_in_any_state(OTHER_GUILD).await.unwrap(),
+        vec![theirs]
+    );
+}
+
+#[tokio::test]
+async fn seasons_in_any_state_lists_an_ended_season() {
+    let store = attendance().await;
+    let season_34 = created(&store, &proposal(34, "2026-06-10", "2026-08-02")).await;
+    store
+        .record_post(
+            season_34.id,
+            night("2026-06-10"),
+            Snowflake::new(7),
+            CREATED_AT,
+        )
+        .await
+        .unwrap();
+    let season = season_35(&store).await;
+    store.end_season(GUILD, 34, ENDED_AT).await.unwrap();
+    let ended = Season {
+        ended_at_ms: Some(ENDED_AT),
+        ..season_34
+    };
+    assert_eq!(store.seasons_in(GUILD).await.unwrap(), vec![season.clone()]);
+    assert_eq!(
+        store.seasons_in_any_state(GUILD).await.unwrap(),
+        vec![ended, season]
+    );
+    assert!(
+        store
+            .seasons_in_any_state(OTHER_GUILD)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }
