@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -11,6 +12,7 @@ use tokio::sync::Mutex;
 use crate::attendance_store::Attendance;
 use crate::attendance_store::AttendanceError;
 use crate::attendance_store::Mark;
+use crate::attendance_store::Post;
 use crate::attendance_store::PostState;
 use crate::attendance_store::Season;
 use crate::ids::ChannelId;
@@ -149,6 +151,18 @@ pub struct TickReport {
     pub failures: usize,
 }
 
+impl TickReport {
+    fn joined(self, other: Self) -> Self {
+        Self {
+            posted: [self.posted, other.posted].concat(),
+            adopted: [self.adopted, other.adopted].concat(),
+            closed: [self.closed, other.closed].concat(),
+            removed: [self.removed, other.removed].concat(),
+            failures: self.failures + other.failures,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PurgeReport {
     pub seasons: usize,
@@ -158,6 +172,8 @@ pub struct PurgeReport {
 }
 
 pub const ROSTER_LIMIT: usize = 60;
+
+const MILLIS_PER_SECOND: i64 = 1_000;
 
 #[derive(Default)]
 struct Slot {
@@ -171,6 +187,7 @@ pub struct Signups<B: Board> {
     store: Attendance,
     rehearsal: Vec<GuildId>,
     slots: std::sync::Mutex<HashMap<Snowflake, Arc<Slot>>>,
+    beats: Mutex<()>,
 }
 
 impl<B: Board> Signups<B> {
@@ -184,6 +201,7 @@ impl<B: Board> Signups<B> {
             store,
             rehearsal,
             slots: std::sync::Mutex::new(HashMap::new()),
+            beats: Mutex::new(()),
         })
     }
 
@@ -198,11 +216,35 @@ impl<B: Board> Signups<B> {
                 ..TickReport::default()
             };
         };
-        let seasons = seasons
-            .into_iter()
-            .filter(|season| !self.rehearsal.contains(&season.guild))
-            .collect();
-        self.beat(seasons, now_unix, now_ms).await
+        let mut offsets: HashMap<GuildId, Option<i64>> = HashMap::new();
+        for guild in seasons.iter().map(|season| season.guild) {
+            if offsets.contains_key(&guild) {
+                continue;
+            }
+            let offset = if self.rehearsal.contains(&guild) {
+                self.store.rehearsal_clock(guild).await.ok()
+            } else {
+                Some(0)
+            };
+            offsets.insert(guild, offset);
+        }
+        let mut report = TickReport::default();
+        let mut groups: BTreeMap<i64, Vec<Season>> = BTreeMap::new();
+        for season in seasons {
+            match offsets.get(&season.guild).copied().flatten() {
+                Some(offset) => groups.entry(offset).or_default().push(season),
+                None => report.failures += 1,
+            }
+        }
+        for (offset, seasons) in groups {
+            let Some((instant, instant_ms)) = shifted(now_unix, now_ms, offset) else {
+                report.failures += 1;
+                continue;
+            };
+            let beaten = self.beat(seasons, instant, instant_ms).await;
+            report = report.joined(beaten);
+        }
+        report
     }
 
     pub async fn tick_in(
@@ -263,10 +305,29 @@ impl<B: Board> Signups<B> {
                 Err(_) => report.failures += 1,
             }
         }
+        if report.failures == 0 && self.store.clear_rehearsal_clock(guild).await.is_err() {
+            report.failures += 1;
+        }
         report
     }
 
+    pub async fn rehearsal_instant(
+        &self,
+        guild: GuildId,
+        now_unix: i64,
+        now_ms: u64,
+    ) -> (i64, u64) {
+        if !self.rehearsal.contains(&guild) {
+            return (now_unix, now_ms);
+        }
+        let Ok(offset) = self.store.rehearsal_clock(guild).await else {
+            return (now_unix, now_ms);
+        };
+        shifted(now_unix, now_ms, offset).unwrap_or((now_unix, now_ms))
+    }
+
     async fn beat(&self, seasons: Vec<Season>, now_unix: i64, now_ms: u64) -> TickReport {
+        let _beating = self.beats.lock().await;
         let mut report = TickReport::default();
         for season in &seasons {
             let Ok(posts) = self.store.posts(season.id).await else {
@@ -455,6 +516,7 @@ impl<B: Board> Signups<B> {
         {
             return ClickOutcome::UnknownSeason;
         }
+        let (now_unix, now_ms) = self.rehearsal_instant(season.guild, now_unix, now_ms).await;
         if click.night.start_unix() <= now_unix {
             return ClickOutcome::Closed {
                 start_unix: click.night.start_unix(),
@@ -548,6 +610,52 @@ impl<B: Board> Signups<B> {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         slots.remove(&message);
     }
+}
+
+pub fn next_moment(seasons: &[Season], posts: &[(i64, Vec<Post>)], now_unix: i64) -> Option<i64> {
+    seasons
+        .iter()
+        .flat_map(|season| {
+            let posted = posts
+                .iter()
+                .find(|(id, _)| *id == season.id)
+                .map_or(&[][..], |(_, posts)| posts.as_slice());
+            moments(season, posted, now_unix)
+        })
+        .filter(|moment| *moment > now_unix)
+        .min()
+}
+
+fn moments<'a>(
+    season: &'a Season,
+    posts: &'a [Post],
+    now_unix: i64,
+) -> impl Iterator<Item = i64> + 'a {
+    let removals = posts
+        .iter()
+        .filter(|post| post.state != PostState::Removed)
+        .map(|post| post.night.remove_at_unix());
+    let closes = posts
+        .iter()
+        .filter(|post| post.state == PostState::Open)
+        .map(|post| post.night.start_unix());
+    let postings = season
+        .range
+        .nights()
+        .filter(move |night| night.start_unix() > now_unix)
+        .filter(|night| {
+            !posts
+                .iter()
+                .any(|post| post.night == *night && post.state != PostState::Removed)
+        })
+        .map(Night::post_at_unix);
+    removals.chain(closes).chain(postings)
+}
+
+fn shifted(now_unix: i64, now_ms: u64, offset: i64) -> Option<(i64, u64)> {
+    let instant = now_unix.checked_add(offset)?;
+    let instant_ms = now_ms.checked_add_signed(offset.checked_mul(MILLIS_PER_SECOND)?)?;
+    Some((instant, instant_ms))
 }
 
 fn build_view(season: &Season, night: Night, now_unix: i64, marks: &[Mark]) -> SignupView {

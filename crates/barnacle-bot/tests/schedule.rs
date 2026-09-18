@@ -1,3 +1,4 @@
+use barnacle_bot::schedule::Days;
 use barnacle_bot::schedule::Hour;
 use barnacle_bot::schedule::Night;
 use barnacle_bot::schedule::Range;
@@ -44,9 +45,9 @@ fn night_moments_match_the_spec() {
 
 #[test]
 fn only_cb_weekdays_are_nights() {
-    assert_eq!(Night::parse("2026-09-14"), None);
-    assert_eq!(Night::parse("2026-09-15"), None);
-    assert_eq!(Night::parse("2026-09-18"), None);
+    assert_eq!(Night::new(day("2026-09-14")), None);
+    assert_eq!(Night::new(day("2026-09-15")), None);
+    assert_eq!(Night::new(day("2026-09-18")), None);
     assert!(Night::parse("2026-09-16").is_some());
     assert!(Night::parse("2026-09-17").is_some());
     assert!(Night::parse("2026-09-19").is_some());
@@ -156,4 +157,96 @@ fn a_range_more_than_six_months_from_today_is_not_near() {
     )
     .unwrap();
     assert!(!behind.near(today));
+}
+
+#[test]
+fn a_night_can_fall_on_any_day_when_the_range_says_so() {
+    let week = Range::every_day(day("2026-09-14"), day("2026-09-20")).unwrap();
+    assert_eq!(week.days(), Days::Every);
+    let labels: Vec<String> = week.nights().map(Night::label).collect();
+    assert_eq!(
+        labels,
+        [
+            "2026-09-14",
+            "2026-09-15",
+            "2026-09-16",
+            "2026-09-17",
+            "2026-09-18",
+            "2026-09-19",
+            "2026-09-20",
+        ]
+    );
+    assert_eq!(week.night_count(), 7);
+    let friday = Night::on(day("2026-09-18")).unwrap();
+    assert_eq!(friday.start_unix(), 1_789_774_200);
+    assert_eq!(friday.end_unix(), friday.start_unix() + 4 * 3600);
+    assert_eq!(friday.post_at_unix(), night("2026-09-17").start_unix());
+    assert_eq!(friday.remove_at_unix(), friday.end_unix() + 30 * 60);
+    assert!(week.holds(friday));
+    assert_eq!(
+        week.next_night(night("2026-09-17").start_unix())
+            .map(Night::label)
+            .as_deref(),
+        Some("2026-09-18")
+    );
+    assert_eq!(
+        week.due_night(night("2026-09-17").start_unix())
+            .map(Night::label)
+            .as_deref(),
+        Some("2026-09-18")
+    );
+    assert_eq!(week.nights_left(night("2026-09-17").start_unix()), 3);
+    assert_eq!(
+        week.last_moment_unix(),
+        Some(Night::on(day("2026-09-20")).unwrap().remove_at_unix())
+    );
+    assert_eq!(Range::every_day(day("2026-09-20"), day("2026-09-14")), None);
+}
+
+#[test]
+fn a_clan_battle_range_still_holds_only_clan_battle_nights() {
+    let week = Range::new(day("2026-09-14"), day("2026-09-20")).unwrap();
+    assert_eq!(week.days(), Days::ClanBattle);
+    let labels: Vec<String> = week.nights().map(Night::label).collect();
+    assert_eq!(
+        labels,
+        ["2026-09-16", "2026-09-17", "2026-09-19", "2026-09-20"]
+    );
+    assert_eq!(week.night_count(), 4);
+    let friday = Night::on(day("2026-09-18")).unwrap();
+    assert!(!week.holds(friday));
+    assert!(week.holds(night("2026-09-17")));
+    assert!(week.holds(night("2026-09-20")));
+    assert!(!week.holds(night("2026-09-23")));
+    assert_eq!(
+        week.next_night(night("2026-09-17").start_unix())
+            .map(Night::label)
+            .as_deref(),
+        Some("2026-09-19")
+    );
+    assert_eq!(week.due_night(night("2026-09-17").start_unix()), None);
+    assert!(season_35().holds(night("2026-09-16")));
+    assert_eq!(season_35().nights_left(0), 30);
+    assert_eq!(
+        Range::every_day(day("2026-09-16"), day("2026-11-05"))
+            .unwrap()
+            .nights_left(0),
+        51
+    );
+}
+
+#[test]
+fn a_night_label_round_trips_on_a_day_that_is_not_a_cb_day() {
+    let friday = Night::on(day("2026-09-18")).unwrap();
+    assert_eq!(friday.label(), "2026-09-18");
+    assert_eq!(Night::parse(&friday.label()), Some(friday));
+    assert_eq!(Night::new(day("2026-09-18")), None);
+    let monday = Night::on(day("2026-09-14")).unwrap();
+    assert_eq!(Night::parse(&monday.label()), Some(monday));
+    assert_eq!(monday.start_unix(), 1_789_428_600);
+    let thursday = Night::on(day("2026-09-17")).unwrap();
+    assert_eq!(Night::new(day("2026-09-17")), Some(thursday));
+    assert_eq!(Night::parse("2026-09-17"), Some(thursday));
+    assert_eq!(Night::parse("2026-9-18"), None);
+    assert_eq!(Night::parse("2026-09-31"), None);
 }

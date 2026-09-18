@@ -62,11 +62,19 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 
    This file runs once: a second run aborts on its own guard before touching anything. Run it with the `sqlite3` command as shown, because that guard relies on the command stopping at the first error.
 
-9. Start the bot. Reading the token with `read` keeps it out of your shell history:
+9. Add the Clan Battle rehearsal harness once, with the bot stopped and the database backed up as above:
 
    ```bash
-   read -rs DISCORD_TOKEN && export DISCORD_TOKEN && cargo run --release -p barnacle-bot
+   sqlite3 data/barnacle.sqlite3 < migrations/0004_cb_rehearsal_harness.sql
    ```
+
+   It adds a column and a table without rebuilding anything, and carries the same run-once guard as the file before it.
+
+10. Start the bot. Reading the token with `read` keeps it out of your shell history:
+
+    ```bash
+    read -rs DISCORD_TOKEN && export DISCORD_TOKEN && cargo run --release -p barnacle-bot
+    ```
 
 Before it connects, the bot checks the catalog, the curation file, the silhouettes and the database, and names anything that is missing.
 
@@ -83,6 +91,7 @@ For Clan Battle sign-ups, the same database also stores each player's Discord us
 - To delete one player's Clan Battle answers, stop the bot and run `sqlite3 data/barnacle.sqlite3 "DELETE FROM cb_marks WHERE user_id = <user ID>;"`.
 - `migrations/0002_cb_attendance.down.sql` removes every season, post and answer. Back the file up before running it.
 - `migrations/0003_cb_season_controls.down.sql` also loses every ping role and every ended marker. It refuses to run once two seasons in the same server share a number, which is what happens as soon as a number is reused after a season ended; resolve those rows first. Back the file up before running it.
+- `migrations/0004_cb_rehearsal_harness.down.sql` drops the rehearsal clock table and the column that marks a season as nightly. Run it only after every rehearsal season has been reset, because a nightly season read back without that column would be treated as an ordinary one.
 
 ## Clan Battle sign-ups
 
@@ -108,16 +117,19 @@ Every step above is driven by the clock, so a change to the sign-up flow cannot 
 guilds = [222222222222222222]
 ```
 
-A server listed there has to be in `commands.guilds` as well, which means `commands.scope` has to be `"guilds"`. In a rehearsal server the bot's timer does nothing: a season there advances only when you advance it by hand, so the same run produces the same sequence every time.
+A server listed there has to be in `commands.guilds` as well, which means `commands.scope` has to be `"guilds"`.
 
-Two commands exist only in a server the section names. The bot registers a command list per server every time it starts, so a server the section does not name is sent a list without them and they do not appear in its command list. Both also refuse to run in a server the section does not name, so the guard does not depend on the registration being right.
+A rehearsal season is an ordinary season whose nights fall on every calendar day rather than only on CB days. Nothing else differs: each night still starts at 23:30 UTC, its post still goes up 24 hours ahead, still closes when the night starts and is still deleted 30 minutes after it ends, and the same timer that serves a real server performs every one of those steps. What sets a rehearsal server apart is a clock offset. The timer beats that server at the real time plus its offset, and `/rehearse next` moves the offset forward to the next instant at which the timer has something to do. Because every rehearsal night is followed by another the next day, each `next` after the first shows one night closing and the following night's post going up in the same beat, which is the sequence a real server only produces on a Wednesday or a Saturday.
+
+Three commands exist only in a server the section names. The bot registers a command list per server every time it starts, so a server the section does not name is sent a list without them and they do not appear in its command list. All three also refuse to run in a server the section does not name, so the guard does not depend on the registration being right.
 
 Taking a server out of `[rehearsal]` while leaving it in `commands.guilds` removes the commands on the next start. Removing it from `commands.guilds` as well does not: the bot never writes to a server it is not told about, so that server keeps the list it was last given until you clear its commands by hand. Take it out of `[rehearsal]`, start the bot once, and only then remove it from `commands.guilds`.
 
-- `/rehearse advance to:post`, `to:close` or `to:remove` runs the real sign-up step at the moment the server's own data is waiting for: the next night with no post, the earliest open post, or the earliest post still on screen. It runs exactly what the timer would run at that moment, so advancing to a later step also performs every earlier step that moment implies.
-- `/rehearse reset` deletes every Clan Battle season, sign-up post and answer in that server, including seasons that have already ended. If any post cannot be removed from Discord, no season and no answer is deleted, and the reply says how many posts had already been cleared before it stopped. The silhouette game's rounds and solves are left alone.
+- `/rehearse start` sets up a rehearsal season that posts in this channel. It takes the season number, an optional codename and ping role, and how many nights to run: three by default, seven at most. The nights start tomorrow, so the first post goes up a genuine 24 hours before its night rather than retroactively. Everything else is what `/cb season start` checks: a text channel, the bot's permissions there, the six-month window on the dates, and the number and overlap rules. Starting a rehearsal also resets that server's clock, so a fresh rehearsal always begins from the real time.
+- `/rehearse next` moves the server's clock to the next moment at which the timer would post, close or remove a sign-up, runs that beat, and says what it did. Once the last night's post has been removed it replies that nothing is waiting.
+- `/rehearse reset` deletes every Clan Battle season, sign-up post and answer in that server, including seasons that have already ended, and clears the server's clock offset. If any post cannot be removed from Discord, no season and no answer is deleted, and the reply says how many posts had already been cleared before it stopped. The silhouette game's rounds and solves are left alone.
 
-A full rehearsal is `/cb season start` with a range covering the next CB nights, then `advance to:post`, some clicks, `/cb season edit`, `/cb season move` in another channel, `advance to:close`, `advance to:remove`, `/cb season end`, and finally `/rehearse reset`. Do not list a real clan server here: a reset deletes its seasons without asking which of them mattered.
+A full rehearsal is `/rehearse start number:99`, then `/rehearse next` to watch the first post appear with its ping, some clicks, `/cb season edit`, `/cb season move` in another channel, `/rehearse next` to watch the first night close and the second night's post appear together, `/rehearse next` to watch the first post deleted, `/rehearse next` twice more to walk the second night through the same two steps, and finally `/rehearse reset`. Do not list a real clan server here: a reset deletes its seasons without asking which of them mattered.
 
 ## License
 

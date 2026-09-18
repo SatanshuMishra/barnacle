@@ -101,6 +101,19 @@ pub async fn run(
                 let table = Table::new(loaded.book, solves, announcer, Timing::STANDARD, rng);
                 let board = DiscordBoard::new(Arc::clone(&ctx.http), ready.user.id);
                 let signups = Signups::rehearsing(board, attendance, rehearsal_guilds.clone());
+                match signups
+                    .store()
+                    .clear_rehearsal_clocks_except(&rehearsal_guilds)
+                    .await
+                {
+                    Ok(0) => {}
+                    Ok(cleared) => {
+                        tracing::info!(cleared, "rehearsal clocks cleared for unlisted servers");
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "stale rehearsal clocks could not be cleared");
+                    }
+                }
                 let ticker = Arc::clone(&signups);
                 tokio::spawn(async move {
                     let mut beat = tokio::time::interval(TICK);

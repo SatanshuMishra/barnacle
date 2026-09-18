@@ -50,10 +50,7 @@ pub struct Night {
 }
 
 impl Night {
-    pub fn new(date: Date) -> Option<Self> {
-        if !CB_WEEKDAYS.contains(&date.weekday()) {
-            return None;
-        }
+    pub fn on(date: Date) -> Option<Self> {
         let start_unix = Offset::UTC
             .to_timestamp(date.to_datetime(time(START_HOUR, START_MINUTE, 0, 0)))
             .ok()?
@@ -61,8 +58,15 @@ impl Night {
         Some(Self { date, start_unix })
     }
 
+    pub fn new(date: Date) -> Option<Self> {
+        if !Days::ClanBattle.admits(date) {
+            return None;
+        }
+        Self::on(date)
+    }
+
     pub fn parse(text: &str) -> Option<Self> {
-        Self::new(parse_day(text)?)
+        Self::on(parse_day(text)?)
     }
 
     pub fn date(self) -> Date {
@@ -99,17 +103,46 @@ impl Night {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Days {
+    ClanBattle,
+    Every,
+}
+
+impl Days {
+    fn admits(self, date: Date) -> bool {
+        match self {
+            Days::ClanBattle => CB_WEEKDAYS.contains(&date.weekday()),
+            Days::Every => true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Range {
     first_day: Date,
     last_day: Date,
+    days: Days,
 }
 
 impl Range {
     pub fn new(first_day: Date, last_day: Date) -> Option<Self> {
+        Self::with_days(first_day, last_day, Days::ClanBattle)
+    }
+
+    pub fn every_day(first_day: Date, last_day: Date) -> Option<Self> {
+        Self::with_days(first_day, last_day, Days::Every)
+    }
+
+    fn with_days(first_day: Date, last_day: Date, days: Days) -> Option<Self> {
         (last_day >= first_day).then_some(Self {
             first_day,
             last_day,
+            days,
         })
+    }
+
+    pub fn days(self) -> Days {
+        self.days
     }
 
     pub fn near(self, today: Date) -> bool {
@@ -134,7 +167,8 @@ impl Range {
         self.first_day
             .series(1.day())
             .take_while(move |date| *date <= self.last_day)
-            .filter_map(Night::new)
+            .filter(move |date| self.days.admits(*date))
+            .filter_map(Night::on)
     }
 
     pub fn night_count(self) -> usize {
@@ -148,7 +182,9 @@ impl Range {
     }
 
     pub fn holds(self, night: Night) -> bool {
-        self.first_day <= night.date() && night.date() <= self.last_day
+        self.first_day <= night.date()
+            && night.date() <= self.last_day
+            && self.days.admits(night.date())
     }
 
     pub fn next_night(self, now_unix: i64) -> Option<Night> {

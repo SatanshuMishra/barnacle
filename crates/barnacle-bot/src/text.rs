@@ -69,7 +69,7 @@ pub const CLEAR_FAILED_END: &str = "Some sign-up posts could not be removed, so 
 pub const REFRESH_FAILED: &str =
     " Its sign-up post could not be updated; run this again once the bot can edit it.";
 pub const REHEARSAL_ONLY: &str = "This server is not set up for rehearsals.";
-pub const NOTHING_TO_ADVANCE: &str = "Nothing is waiting for that step.";
+pub const NOTHING_PENDING: &str = "Nothing is waiting to happen in this rehearsal.";
 const RESET_BLOCKED_HEAD: &str =
     "Some sign-up posts could not be removed, so no season or answer was deleted.";
 const RESET_BLOCKED_TAIL: &str =
@@ -405,6 +405,18 @@ pub fn season_already_here(number: u32) -> String {
     format!("Season {number} already posts in this channel.")
 }
 
+pub fn rehearsal_started(season: &Season, nights_left: usize, post_at_unix: Option<i64>) -> String {
+    sentences(&[
+        format!(
+            "Rehearsing season {}.",
+            season_label(season.number, season.codename.as_deref())
+        ),
+        still_ahead(season, nights_left),
+        next_post(nights_left, post_at_unix),
+        manage_with(season),
+    ])
+}
+
 pub fn season_edited(
     season: &Season,
     nights_left: usize,
@@ -416,13 +428,10 @@ pub fn season_edited(
             "{} updated.",
             season_name(season.number, season.codename.as_deref())
         ),
-        format!(
-            "{}, {nights_left} still ahead.",
-            nights(season.range.night_count())
-        ),
+        still_ahead(season, nights_left),
         next_post(nights_left, post_at_unix),
         cleared_outside_the_range(cleared),
-        format!("Manage it with number {}.", season.number),
+        manage_with(season),
     ])
 }
 
@@ -454,16 +463,16 @@ pub fn season_ended(number: u32, cleared: usize) -> String {
     format!("Season {number} has ended. {kept}")
 }
 
-pub fn advanced(moment_unix: i64, report: &TickReport) -> String {
+pub fn stepped(moment_unix: i64, report: &TickReport) -> String {
     let steps = sentences(&[
+        removed(report.removed.len()),
+        closed(report.closed.len()),
         went_up(report.posted.len()),
         adopted(report.adopted.len()),
-        closed(report.closed.len()),
-        removed(report.removed.len()),
         failed(report.failures),
     ]);
     sentences(&[
-        format!("Ran the beat at {}.", full_time(moment_unix)),
+        format!("Moved the rehearsal clock to {}.", full_time(moment_unix)),
         if steps.is_empty() {
             NOTHING_HAPPENED.to_owned()
         } else {
@@ -513,6 +522,17 @@ pub fn pings_line(ping: Option<RoleId>) -> String {
         Some(role) => format!(" Pings <@&{role}>."),
         None => String::new(),
     }
+}
+
+fn still_ahead(season: &Season, nights_left: usize) -> String {
+    format!(
+        "{}, {nights_left} still ahead.",
+        nights(season.range.night_count())
+    )
+}
+
+fn manage_with(season: &Season) -> String {
+    format!("Manage it with number {}.", season.number)
 }
 
 fn next_post(nights_left: usize, post_at_unix: Option<i64>) -> String {
@@ -650,9 +670,13 @@ fn sentence(text: &str) -> String {
 }
 
 fn season_name(number: u32, codename: Option<&str>) -> String {
+    format!("Season {}", season_label(number, codename))
+}
+
+fn season_label(number: u32, codename: Option<&str>) -> String {
     match codename {
-        Some(codename) => format!("Season {number}: {}", escape(codename)),
-        None => format!("Season {number}"),
+        Some(codename) => format!("{number}: {}", escape(codename)),
+        None => number.to_string(),
     }
 }
 
