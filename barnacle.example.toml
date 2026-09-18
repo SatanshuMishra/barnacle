@@ -5,3 +5,7 @@ database = "data/barnacle.sqlite3"
 [commands]
 scope = "guilds"
 guilds = []
+
+# A server listed under [rehearsal] is wiped by /rehearse reset.
+# [rehearsal]
+# guilds = []
