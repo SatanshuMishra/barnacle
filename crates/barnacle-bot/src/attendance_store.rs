@@ -75,6 +75,7 @@ const EXPECTED_COLUMNS: [TableSpec; 3] = [
 const SEASON_BY_ID: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE id = ?";
 const SEASON_LIVE_BY_NUMBER: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? AND number = ? AND ended_at_ms IS NULL";
 const SEASONS_IN_GUILD: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? AND ended_at_ms IS NULL ORDER BY first_day";
+const SEASONS_IN_GUILD_ANY_STATE: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? ORDER BY first_day";
 const SEASONS_LIVE: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE ended_at_ms IS NULL AND (last_day >= ? OR EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed')) ORDER BY first_day";
 const SEASON_OVERLAPPING: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? AND ended_at_ms IS NULL AND first_day <= ? AND last_day >= ? ORDER BY first_day LIMIT 1";
 const SEASON_OVERLAPPING_OTHER: &str = "SELECT id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id, ended_at_ms FROM cb_seasons WHERE guild_id = ? AND ended_at_ms IS NULL AND id <> ? AND first_day <= ? AND last_day >= ? ORDER BY first_day LIMIT 1";
@@ -374,6 +375,17 @@ impl Attendance {
         rows.into_iter().map(to_season).collect()
     }
 
+    pub async fn seasons_in_any_state(
+        &self,
+        guild: GuildId,
+    ) -> Result<Vec<Season>, AttendanceError> {
+        let rows: Vec<SeasonRow> = sqlx::query_as(SEASONS_IN_GUILD_ANY_STATE)
+            .bind(to_integer(guild.get().into())?)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter().map(to_season).collect()
+    }
+
     pub async fn live_seasons(&self, now_unix: i64) -> Result<Vec<Season>, AttendanceError> {
         let rows: Vec<LiveSeasonRow> = sqlx::query_as(SEASONS_LIVE)
             .bind(lookback_day(now_unix))
@@ -556,6 +568,36 @@ impl Attendance {
         };
         transaction.commit().await?;
         Ok(outcome)
+    }
+
+    pub async fn purge_season(&self, guild: GuildId, id: i64) -> Result<u64, AttendanceError> {
+        let guild_id = to_integer(guild.get().into())?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let held: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM cb_seasons WHERE id = ? AND guild_id = ?")
+                .bind(id)
+                .bind(guild_id)
+                .fetch_optional(&mut *transaction)
+                .await?;
+        if held.is_none() {
+            return Ok(0);
+        }
+        let marks = sqlx::query("DELETE FROM cb_marks WHERE season_id = ?")
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected();
+        sqlx::query("DELETE FROM cb_posts WHERE season_id = ?")
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("DELETE FROM cb_seasons WHERE id = ? AND guild_id = ?")
+            .bind(id)
+            .bind(guild_id)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(marks)
     }
 
     pub async fn post(&self, season: i64, night: Night) -> Result<Option<Post>, AttendanceError> {
