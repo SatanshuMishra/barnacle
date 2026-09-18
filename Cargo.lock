@@ -130,6 +130,7 @@ dependencies = [
  "barnacle-catalog",
  "barnacle-guess",
  "clap",
+ "dotenvy",
  "jiff",
  "poise",
  "rand 0.10.2",

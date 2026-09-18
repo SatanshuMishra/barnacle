@@ -9,6 +9,7 @@ license.workspace = true
 barnacle-catalog.workspace = true
 barnacle-guess.workspace = true
 clap.workspace = true
+dotenvy.workspace = true
 jiff.workspace = true
 poise.workspace = true
 rand.workspace = true
