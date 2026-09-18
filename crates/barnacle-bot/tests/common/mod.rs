@@ -23,6 +23,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 pub const MIGRATION: &str = include_str!("../../../../migrations/0001_guess_solves.sql");
 pub const CB_MIGRATION: &str = include_str!("../../../../migrations/0002_cb_attendance.sql");
 pub const CB_CONTROLS: &str = include_str!("../../../../migrations/0003_cb_season_controls.sql");
+pub const CB_HARNESS: &str = include_str!("../../../../migrations/0004_cb_rehearsal_harness.sql");
 const CLI_DIRECTIVE: &str = ".bail on\n";
 pub const BUILD: u32 = 13187581;
 
@@ -113,6 +114,10 @@ pub async fn attendance_pool() -> SqlitePool {
     let pool = memory_pool().await;
     sqlx::raw_sql(CB_MIGRATION).execute(&pool).await.unwrap();
     sqlx::raw_sql(CB_CONTROLS.trim_start_matches(CLI_DIRECTIVE))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(CB_HARNESS.trim_start_matches(CLI_DIRECTIVE))
         .execute(&pool)
         .await
         .unwrap();

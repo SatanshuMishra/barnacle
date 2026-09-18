@@ -466,6 +466,16 @@ async fn a_click_from_another_guild_is_refused() {
             .await,
         ClickOutcome::UnknownSeason
     );
+    let not_a_cb_day = Click {
+        night: night("2026-09-25"),
+        ..press(&season, message, AKI, Target::All)
+    };
+    assert_eq!(
+        signups
+            .click(not_a_cb_day, FIRST_POST_AT, millis(FIRST_POST_AT))
+            .await,
+        ClickOutcome::UnknownSeason
+    );
     assert!(
         store
             .roster(season.id, first_night())

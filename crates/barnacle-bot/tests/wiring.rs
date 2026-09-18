@@ -176,7 +176,6 @@ fn a_malformed_signup_id_is_rejected() {
         "barnacle-cb:003:2026-09-23:all:in",
         "barnacle-cb:three:2026-09-23:all:in",
         "barnacle-cb:3::all:in",
-        "barnacle-cb:3:2026-09-25:all:in",
         "barnacle-cb:3:2026-9-23:all:in",
         "barnacle-cb:3:2026-09-31:all:in",
         "barnacle-cancel:3:2026-09-23:all:in",
@@ -187,6 +186,7 @@ fn a_malformed_signup_id_is_rejected() {
         wiring::round_number("barnacle-cb:3:2026-09-23:all:in"),
         None
     );
+    assert!(wiring::signup_click("barnacle-cb:3:2026-09-25:all:in").is_some());
 }
 
 #[test]
