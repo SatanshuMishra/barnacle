@@ -151,6 +151,12 @@ need is the only reason the runtime is not distroless.
 `--package barnacle-bot` skips `wowsunpack`, `wows-data-mgr`, `pickled` and
 `image` entirely.
 
+`tini` runs as pid 1 and forwards `SIGTERM` to the bot, which installs no signal
+handler of its own. Measured without it, `docker stop` waited out the full grace
+period and exited 137; with it, the container exits 143 immediately. The kernel
+does not apply default signal dispositions to pid 1, so an unhandled `SIGTERM`
+there is simply ignored.
+
 The container runs as uid 10001. A named volume inherits the image's ownership of
 `/var/lib/barnacle` on first use; a bind mount does not, which the deployment
 note records.

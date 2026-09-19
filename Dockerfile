@@ -25,7 +25,7 @@ LABEL org.opencontainers.image.description="Barnacle, a Discord bot for World of
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends sqlite3 \
+ && apt-get install -y --no-install-recommends sqlite3 tini \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 --home-dir /var/lib/barnacle --shell /usr/sbin/nologin barnacle \
  && mkdir -p /var/lib/barnacle /etc/barnacle \
@@ -46,4 +46,4 @@ RUN chmod 0755 /usr/local/bin/barnacle-entrypoint \
 
 USER barnacle
 WORKDIR /var/lib/barnacle
-ENTRYPOINT ["/usr/local/bin/barnacle-entrypoint"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/barnacle-entrypoint"]

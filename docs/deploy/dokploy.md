@@ -152,3 +152,8 @@ ownership of `/var/lib/barnacle` on first use, while a host directory does not â
 
 Logs carry ANSI escape codes. `tracing-subscriber`'s formatter does not detect a
 non-terminal, and the bot does not disable colour.
+
+The bot installs no signal handler, so `tini` runs as pid 1 and forwards
+`SIGTERM` to it. Without that the kernel would drop `SIGTERM` on pid 1, and every
+redeploy would wait out Swarm's stop grace period before a `SIGKILL`. The database
+survives either way, since SQLite is crash-safe, but the stall is real.
