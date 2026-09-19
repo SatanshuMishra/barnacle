@@ -139,6 +139,14 @@ Taking a server out of `[rehearsal]` while leaving it in `commands.guilds` remov
 
 A full rehearsal is `/rehearse start number:99`, then `/rehearse next` to watch the first post appear with its ping, some clicks, `/cb season edit`, `/cb season move` in another channel, `/rehearse next` to watch the first night close and the second night's post appear together, `/rehearse next` to watch the first post deleted, `/rehearse next` twice more to walk the second night through the same two steps, and finally `/rehearse reset`. Do not list a real clan server here: a reset deletes its seasons without asking which of them mattered.
 
+## Deploying to a server
+
+The sections above cover running Barnacle on your own machine. To run it as a
+container on a server, see [docs/deploy/dokploy.md](docs/deploy/dokploy.md). The
+image carries the bot, the catalog and the migrations, applies pending migrations
+on start, and reads its config from environment variables, so no `barnacle.toml`
+is needed there.
+
 ## License
 
 Apache-2.0. See `LICENSE`.
