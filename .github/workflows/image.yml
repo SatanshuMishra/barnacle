@@ -9,9 +9,6 @@ permissions:
   contents: read
   packages: write
 
-env:
-  IMAGE: ghcr.io/${{ github.repository }}
-
 jobs:
   image:
     runs-on: ubuntu-latest
@@ -23,6 +20,13 @@ jobs:
           name="$(tr -d '[:space:]' < catalog.version)"
           test -n "$name"
           echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - id: image
+        run: |
+          name="ghcr.io/$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+        env:
+          REPOSITORY: ${{ github.repository }}
 
       - run: |
           gh release download "catalog-${{ steps.catalog.outputs.name }}" \
@@ -57,7 +61,7 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ env.IMAGE }}:main
-            ${{ env.IMAGE }}:${{ github.sha }}
-            ${{ env.IMAGE }}:catalog-${{ steps.catalog.outputs.name }}
+            ${{ steps.image.outputs.name }}:main
+            ${{ steps.image.outputs.name }}:${{ github.sha }}
+            ${{ steps.image.outputs.name }}:catalog-${{ steps.catalog.outputs.name }}
           cache-from: type=gha
