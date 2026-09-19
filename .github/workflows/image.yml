@@ -1,0 +1,63 @@
+name: image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: catalog
+        run: |
+          name="$(tr -d '[:space:]' < catalog.version)"
+          test -n "$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - run: |
+          gh release download "catalog-${{ steps.catalog.outputs.name }}" \
+            --pattern '*.tar.gz' \
+            --output catalog.tar.gz \
+            --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: barnacle:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - run: ./.github/scripts/smoke.sh barnacle:smoke
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:main
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:catalog-${{ steps.catalog.outputs.name }}
+          cache-from: type=gha
