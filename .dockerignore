@@ -1,0 +1,10 @@
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!crates
+!migrations
+!curation
+!catalog.version
+!catalog.tar.gz
+!docker

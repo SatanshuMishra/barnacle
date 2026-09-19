@@ -1,0 +1,14 @@
+services:
+  barnacle:
+    image: ghcr.io/satanshumishra/barnacle:main
+    restart: unless-stopped
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?set DISCORD_TOKEN}
+      BARNACLE_COMMAND_SCOPE: ${BARNACLE_COMMAND_SCOPE:-guilds}
+      BARNACLE_GUILD_IDS: ${BARNACLE_GUILD_IDS:-}
+      BARNACLE_REHEARSAL_GUILD_IDS: ${BARNACLE_REHEARSAL_GUILD_IDS:-}
+    volumes:
+      - barnacle-data:/var/lib/barnacle
+
+volumes:
+  barnacle-data:
