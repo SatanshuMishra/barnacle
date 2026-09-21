@@ -15,6 +15,7 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqlitePoolOptions;
 
 const NAME: &str = "15.8.0_13187581_r4";
+const CLI_DIRECTIVE: &str = ".bail on\n";
 
 struct Layout {
     _dir: tempfile::TempDir,
@@ -241,6 +242,45 @@ async fn a_database_without_the_season_controls_names_the_third_migration() {
     assert!(matches!(error, StartupError::SeasonControls { .. }));
     assert!(error.to_string().contains(&format!(
         "sqlite3 {} < migrations/0003_cb_season_controls.sql",
+        layout.config.database.display()
+    )));
+}
+
+#[tokio::test]
+async fn a_database_without_the_voice_tables_names_the_fifth_migration() {
+    let layout = layout(
+        &yamato_catalog(),
+        &["PJSB018", "PJSB019"],
+        &curation_text(""),
+    );
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&layout.config.database)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    for migration in [
+        common::MIGRATION,
+        common::CB_MIGRATION,
+        common::CB_CONTROLS,
+        common::CB_HARNESS,
+    ] {
+        sqlx::raw_sql(migration.trim_start_matches(CLI_DIRECTIVE))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    pool.close().await;
+    let error = startup::open_stores(&layout.config.database)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, StartupError::VoiceRooms { .. }));
+    assert!(error.to_string().contains(&format!(
+        "sqlite3 {} < migrations/0005_voice_rooms.sql",
         layout.config.database.display()
     )));
 }

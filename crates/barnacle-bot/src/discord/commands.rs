@@ -13,6 +13,9 @@ use super::Context;
 use super::Data;
 use super::Error;
 use super::announcer::cancel_row;
+use super::rooms::MISSING_PERMISSIONS;
+use super::rooms::UNKNOWN_CHANNEL;
+use super::rooms::refused;
 use crate::attendance::ClearScope;
 use crate::attendance::next_moment;
 use crate::attendance_store::Attendance;
@@ -35,6 +38,12 @@ use crate::schedule::parse_day;
 use crate::solves::Standing;
 use crate::table::StartOutcome;
 use crate::text;
+use crate::voice::HUB_NAME_LIMIT;
+use crate::voice::NameProblem;
+use crate::voice::ROOM_NAME_LIMIT;
+use crate::voice::clean_name;
+use crate::voice_store::Hub;
+use crate::voice_text;
 use crate::wiring;
 use crate::wiring::ChannelAccess;
 use crate::wiring::LeaderboardRequest;
@@ -111,6 +120,36 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
             }],
             subcommand_required: true,
             ..cb()
+        },
+        poise::Command {
+            description: Some("Join to Create voice channels".into()),
+            subcommands: vec![poise::Command {
+                description: Some("Join to Create channels in this server".into()),
+                subcommands: vec![
+                    poise::Command {
+                        description: Some("Create a Join to Create voice channel".into()),
+                        ..hub_create()
+                    },
+                    poise::Command {
+                        description: Some(
+                            "Change a Join to Create channel's name, room names or category".into(),
+                        ),
+                        ..hub_edit()
+                    },
+                    poise::Command {
+                        description: Some("Delete a Join to Create channel".into()),
+                        ..hub_remove()
+                    },
+                    poise::Command {
+                        description: Some("List this server's Join to Create channels".into()),
+                        ..hub_list()
+                    },
+                ],
+                subcommand_required: true,
+                ..hub()
+            }],
+            subcommand_required: true,
+            ..voice()
         },
     ]
 }
@@ -976,4 +1015,232 @@ async fn rehearse_reset(ctx: Context<'_>) -> Result<(), Error> {
         return private(ctx, text::reset_blocked(&purged)).await;
     }
     private(ctx, text::reset_done(&purged)).await
+}
+
+#[poise::command(
+    slash_command,
+    guild_only,
+    default_member_permissions = "MANAGE_CHANNELS",
+    required_permissions = "MANAGE_CHANNELS"
+)]
+async fn voice(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
+}
+
+#[poise::command(slash_command)]
+async fn hub(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
+}
+
+fn name_problem(problem: NameProblem) -> String {
+    match problem {
+        NameProblem::Empty => voice_text::NAME_EMPTY.to_owned(),
+        NameProblem::TooLong { limit } => voice_text::name_too_long(limit),
+    }
+}
+
+fn cleaned(raw: Option<&str>, limit: usize) -> Result<Option<String>, String> {
+    raw.map(|raw| clean_name(raw, limit))
+        .transpose()
+        .map_err(name_problem)
+}
+
+async fn own_hub(ctx: Context<'_>, channel: &serenity::GuildChannel) -> Result<Option<Hub>, Error> {
+    let Some(guild) = ctx.guild_id() else {
+        return Ok(None);
+    };
+    let found = ctx
+        .data()
+        .voice
+        .store()
+        .hub(ChannelId::new(channel.id.get()))
+        .await?;
+    Ok(found.filter(|hub| hub.guild == GuildId::new(guild.get())))
+}
+
+enum Placement {
+    Into(serenity::ChannelId),
+    TopLevel,
+}
+
+#[poise::command(slash_command, rename = "create")]
+async fn hub_create(
+    ctx: Context<'_>,
+    #[description = "Rooms are named this plus a number: cb gives cb-1, cb-2"]
+    #[max_length = 90]
+    room_name: String,
+    #[description = "Name of the Join to Create channel; Join to Create if left empty"]
+    #[max_length = 100]
+    name: Option<String>,
+    #[description = "Category to put it in; none if left empty"]
+    #[channel_types("Category")]
+    category: Option<serenity::GuildChannel>,
+) -> Result<(), Error> {
+    let Some(guild) = ctx.guild_id() else {
+        return Ok(());
+    };
+    let room_name = match clean_name(&room_name, ROOM_NAME_LIMIT) {
+        Ok(room_name) => room_name,
+        Err(problem) => return private(ctx, name_problem(problem)).await,
+    };
+    let name = match clean_name(
+        name.as_deref().unwrap_or(voice_text::HUB_DEFAULT_NAME),
+        HUB_NAME_LIMIT,
+    ) {
+        Ok(name) => name,
+        Err(problem) => return private(ctx, name_problem(problem)).await,
+    };
+    let Some(created_at_ms) = super::now_ms() else {
+        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+    };
+    ctx.defer_ephemeral().await?;
+    let channel = serenity::CreateChannel::new(name).kind(serenity::ChannelType::Voice);
+    let channel = category
+        .iter()
+        .fold(channel, |channel, category| channel.category(category.id));
+    let created = match guild.create_channel(ctx.http(), channel).await {
+        Ok(created) => created,
+        Err(error) if refused(&error, MISSING_PERMISSIONS) => {
+            return private(ctx, voice_text::NEEDS_MANAGE_CHANNELS).await;
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let hub = Hub {
+        channel: ChannelId::new(created.id.get()),
+        guild: GuildId::new(guild.get()),
+        room_name,
+        created_by: UserId::new(ctx.author().id.get()),
+        created_at_ms,
+    };
+    if let Err(error) = ctx.data().voice.store().add_hub(&hub).await {
+        if let Err(cleanup) = created.id.delete(ctx.http()).await {
+            tracing::error!(%cleanup, "an unrecorded Join to Create channel could not be removed");
+        }
+        return Err(error.into());
+    }
+    private(ctx, voice_text::hub_created(hub.channel, &hub.room_name)).await
+}
+
+#[poise::command(slash_command, rename = "edit")]
+async fn hub_edit(
+    ctx: Context<'_>,
+    #[description = "The Join to Create channel to change"]
+    #[channel_types("Voice")]
+    hub: serenity::GuildChannel,
+    #[description = "New name for the Join to Create channel"]
+    #[max_length = 100]
+    name: Option<String>,
+    #[description = "New name for the rooms it opens from now on"]
+    #[max_length = 90]
+    room_name: Option<String>,
+    #[description = "Move it into this category"]
+    #[channel_types("Category")]
+    category: Option<serenity::GuildChannel>,
+    #[description = "Move it out of its category"] top_level: Option<bool>,
+) -> Result<(), Error> {
+    let Some(stored) = own_hub(ctx, &hub).await? else {
+        return private(ctx, voice_text::NOT_A_HUB).await;
+    };
+    if category.is_some() && top_level.is_some() {
+        return private(ctx, voice_text::CATEGORY_AND_TOP_LEVEL).await;
+    }
+    let name = match cleaned(name.as_deref(), HUB_NAME_LIMIT) {
+        Ok(name) => name.filter(|name| *name != hub.name),
+        Err(problem) => return private(ctx, problem).await,
+    };
+    let room_name = match cleaned(room_name.as_deref(), ROOM_NAME_LIMIT) {
+        Ok(room_name) => room_name.filter(|room_name| *room_name != stored.room_name),
+        Err(problem) => return private(ctx, problem).await,
+    };
+    let placement = match (category, top_level) {
+        (Some(category), _) if hub.parent_id != Some(category.id) => {
+            Some(Placement::Into(category.id))
+        }
+        (_, Some(true)) if hub.parent_id.is_some() => Some(Placement::TopLevel),
+        _ => None,
+    };
+    if name.is_none() && room_name.is_none() && placement.is_none() {
+        return private(ctx, voice_text::NOTHING_TO_CHANGE).await;
+    }
+    ctx.defer_ephemeral().await?;
+    if name.is_some() || placement.is_some() {
+        let edit = name
+            .iter()
+            .fold(serenity::EditChannel::new(), |edit, name| edit.name(name));
+        let edit = match placement {
+            Some(Placement::Into(category)) => edit.category(category),
+            Some(Placement::TopLevel) => edit.category(None::<serenity::ChannelId>),
+            None => edit,
+        };
+        match hub.id.edit(ctx.http(), edit).await {
+            Ok(_) => {}
+            Err(error) if refused(&error, MISSING_PERMISSIONS) => {
+                return private(ctx, voice_text::NEEDS_MANAGE_CHANNELS).await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    if let Some(room_name) = &room_name
+        && !ctx
+            .data()
+            .voice
+            .store()
+            .rename_rooms(stored.channel, room_name)
+            .await?
+    {
+        return private(ctx, voice_text::NOT_A_HUB).await;
+    }
+    let changes: Vec<String> = [
+        name.as_deref().map(voice_text::renamed),
+        room_name.as_deref().map(voice_text::rooms_renamed),
+        placement.map(|placement| match placement {
+            Placement::Into(category) => voice_text::moved_to(ChannelId::new(category.get())),
+            Placement::TopLevel => voice_text::MOVED_TO_TOP.to_owned(),
+        }),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    private(ctx, voice_text::hub_edited(stored.channel, &changes)).await
+}
+
+#[poise::command(slash_command, rename = "remove")]
+async fn hub_remove(
+    ctx: Context<'_>,
+    #[description = "The Join to Create channel to delete"]
+    #[channel_types("Voice")]
+    hub: serenity::GuildChannel,
+) -> Result<(), Error> {
+    let Some(stored) = own_hub(ctx, &hub).await? else {
+        return private(ctx, voice_text::NOT_A_HUB).await;
+    };
+    ctx.defer_ephemeral().await?;
+    match hub.id.delete(ctx.http()).await {
+        Ok(_) => {}
+        Err(error) if refused(&error, UNKNOWN_CHANNEL) => {}
+        Err(error) if refused(&error, MISSING_PERMISSIONS) => {
+            return private(ctx, voice_text::NEEDS_MANAGE_CHANNELS).await;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    ctx.data().voice.store().remove_hub(stored.channel).await?;
+    private(ctx, voice_text::hub_removed(&hub.name)).await
+}
+
+#[poise::command(slash_command, rename = "list")]
+async fn hub_list(ctx: Context<'_>) -> Result<(), Error> {
+    let Some(guild) = ctx.guild_id() else {
+        return Ok(());
+    };
+    let store = ctx.data().voice.store();
+    let hubs = store.hubs_in(GuildId::new(guild.get())).await?;
+    if hubs.is_empty() {
+        return private(ctx, voice_text::NO_HUBS).await;
+    }
+    let mut lines = Vec::with_capacity(hubs.len());
+    for hub in &hubs {
+        let open = store.open_rooms_of(hub.channel).await?;
+        lines.push(voice_text::hub_line(hub.channel, &hub.room_name, open));
+    }
+    private(ctx, voice_text::hub_list(&lines)).await
 }

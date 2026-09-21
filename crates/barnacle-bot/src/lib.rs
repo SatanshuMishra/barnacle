@@ -10,4 +10,7 @@ pub mod solves;
 pub mod startup;
 pub mod table;
 pub mod text;
+pub mod voice;
+pub mod voice_store;
+pub mod voice_text;
 pub mod wiring;

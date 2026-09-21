@@ -43,3 +43,17 @@ fn the_rehearsal_list_adds_nothing_but_the_rehearse_group() {
     }
     assert!(!plain.iter().any(|name| name == GROUP));
 }
+
+#[test]
+fn every_server_is_sent_the_voice_commands() {
+    assert!(
+        names(&command_list(false))
+            .iter()
+            .any(|name| name == "voice")
+    );
+    assert!(
+        names(&command_list(true))
+            .iter()
+            .any(|name| name == "voice")
+    );
+}

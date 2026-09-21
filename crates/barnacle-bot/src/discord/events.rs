@@ -5,6 +5,7 @@ use poise::serenity_prelude as serenity;
 
 use super::Data;
 use super::Error;
+use super::rooms;
 use crate::attendance::Click;
 use crate::attendance::ClickOutcome;
 use crate::ids::ChannelId;
@@ -12,6 +13,7 @@ use crate::ids::GuildId;
 use crate::ids::Place;
 use crate::table::CancelOutcome;
 use crate::text;
+use crate::voice::JoinOutcome;
 use crate::wiring;
 use crate::wiring::SignupClick;
 
@@ -91,7 +93,89 @@ pub async fn handle(
             }
             Ok(())
         }
+        serenity::FullEvent::VoiceStateUpdate { old, new } => {
+            voice_moved(data, framework.serenity_context, old.as_ref(), new).await;
+            Ok(())
+        }
+        serenity::FullEvent::ChannelDelete { channel, .. } => {
+            data.voice
+                .channel_deleted(ChannelId::new(channel.id.get()))
+                .await;
+            Ok(())
+        }
         _ => Ok(()),
+    }
+}
+
+async fn voice_moved(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    old: Option<&serenity::VoiceState>,
+    new: &serenity::VoiceState,
+) {
+    let Some(guild) = new.guild_id else {
+        return;
+    };
+    let guild = GuildId::new(guild.get());
+    let left = old
+        .and_then(|state| state.channel_id)
+        .map(|channel| ChannelId::new(channel.get()));
+    let joined = new.channel_id.map(|channel| ChannelId::new(channel.get()));
+    if left == joined {
+        return;
+    }
+    let Some(now_ms) = super::now_ms() else {
+        tracing::warn!("the clock reads before 1970, so a voice change was skipped");
+        return;
+    };
+    if let Some(left) = left {
+        let occupants = rooms::occupants(&serenity_context.cache, guild, left);
+        data.voice.left(left, occupants, now_ms).await;
+    }
+    let Some(joined) = joined else {
+        return;
+    };
+    let hub = match data.voice.store().hub(joined).await {
+        Ok(Some(hub)) => hub,
+        Ok(None) => {
+            data.voice.entered(joined).await;
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(%error, channel = joined.get(), "a joined voice channel could not be looked up");
+            return;
+        }
+    };
+    if new.member.as_ref().is_some_and(|member| member.user.bot) {
+        return;
+    }
+    let Some(layout) = rooms::hub_layout(&serenity_context.cache, hub.guild, hub.channel) else {
+        tracing::warn!(
+            hub = hub.channel.get(),
+            guild = hub.guild.get(),
+            "a Join to Create channel is not in the cache, so no room was opened"
+        );
+        return;
+    };
+    let user = UserId::new(new.user_id.get());
+    match data.voice.joined(&hub, user, &layout, now_ms).await {
+        JoinOutcome::Opened { room, number } => tracing::info!(
+            hub = hub.channel.get(),
+            guild = hub.guild.get(),
+            room = room.get(),
+            number,
+            "a Join to Create room opened"
+        ),
+        JoinOutcome::Abandoned => tracing::info!(
+            hub = hub.channel.get(),
+            guild = hub.guild.get(),
+            "a member could not be moved into their new room, so it was closed"
+        ),
+        JoinOutcome::Failed => tracing::warn!(
+            hub = hub.channel.get(),
+            guild = hub.guild.get(),
+            "a Join to Create room could not be opened"
+        ),
     }
 }
 
