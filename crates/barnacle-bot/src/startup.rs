@@ -27,6 +27,8 @@ use crate::config::ConfigError;
 use crate::lookup::Directory;
 use crate::solves::Solves;
 use crate::solves::SolvesError;
+use crate::voice_store::VoiceStore;
+use crate::voice_store::VoiceStoreError;
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -95,6 +97,14 @@ pub enum StartupError {
         #[source]
         source: AttendanceError,
     },
+    #[error(
+        "the voice room tables are missing from {path}; add them with `sqlite3 {path} < migrations/0005_voice_rooms.sql`"
+    )]
+    VoiceRooms {
+        path: PathBuf,
+        #[source]
+        source: VoiceStoreError,
+    },
 }
 
 fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
@@ -110,6 +120,7 @@ fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
 pub struct Stores {
     pub solves: Solves,
     pub attendance: Attendance,
+    pub voice: VoiceStore,
 }
 
 pub struct Loaded {
@@ -213,10 +224,20 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
         .await
         .map_err(|source| database(SolvesError::Database(source)))?;
     let solves = Solves::with_pool(pool.clone()).await.map_err(database)?;
-    let attendance = Attendance::with_pool(pool)
+    let attendance = Attendance::with_pool(pool.clone())
         .await
         .map_err(|source| attendance_error(path, source))?;
-    Ok(Stores { solves, attendance })
+    let voice = VoiceStore::with_pool(pool)
+        .await
+        .map_err(|source| StartupError::VoiceRooms {
+            path: path.to_owned(),
+            source,
+        })?;
+    Ok(Stores {
+        solves,
+        attendance,
+        voice,
+    })
 }
 
 async fn open_pool(path: &Path) -> Result<SqlitePool, sqlx::Error> {

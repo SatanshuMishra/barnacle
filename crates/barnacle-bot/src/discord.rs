@@ -2,6 +2,7 @@ mod announcer;
 mod board;
 mod commands;
 mod events;
+mod rooms;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,12 +23,16 @@ use crate::lookup::Directory;
 use crate::solves::Solves;
 use crate::startup::Loaded;
 use crate::table::Table;
+use crate::voice::VoiceRooms;
+use crate::voice_store::VoiceStore;
 
 pub use announcer::DiscordAnnouncer;
 pub use board::DiscordBoard;
+pub use rooms::DiscordRooms;
 
 const MEMBER_LOOKUPS_AT_ONCE: usize = 5;
 const TICK: Duration = Duration::from_secs(60);
+const ROOM_SWEEP: Duration = Duration::from_secs(30);
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Context<'a> = poise::Context<'a, Data, Error>;
@@ -42,6 +47,7 @@ pub struct Data {
     pub member_lookups: Arc<Semaphore>,
     pub signups: Arc<Signups<DiscordBoard>>,
     pub rehearsal: Vec<GuildId>,
+    pub voice: Arc<VoiceRooms<DiscordRooms>>,
 }
 
 fn now_unix() -> i64 {
@@ -82,10 +88,12 @@ pub async fn run(
     loaded: Loaded,
     solves: Solves,
     attendance: Attendance,
+    voice: VoiceStore,
 ) -> Result<(), RunError> {
     let intents = serenity::GatewayIntents::GUILDS
         | serenity::GatewayIntents::GUILD_MESSAGES
-        | serenity::GatewayIntents::MESSAGE_CONTENT;
+        | serenity::GatewayIntents::MESSAGE_CONTENT
+        | serenity::GatewayIntents::GUILD_VOICE_STATES;
     let rehearsal_guilds: Vec<GuildId> = rehearsal.iter().copied().map(GuildId::new).collect();
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
@@ -141,6 +149,44 @@ pub async fn run(
                         }
                     }
                 });
+                let voice = VoiceRooms::new(
+                    DiscordRooms::new(Arc::clone(&ctx.http), ready.user.id),
+                    voice,
+                );
+                let sweeper = Arc::clone(&voice);
+                let cache = Arc::clone(&ctx.cache);
+                tokio::spawn(async move {
+                    let mut beat = tokio::time::interval(ROOM_SWEEP);
+                    beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        beat.tick().await;
+                        let Some(now_ms) = now_ms() else {
+                            tracing::warn!(
+                                "the clock reads before 1970, so this sweep was skipped"
+                            );
+                            continue;
+                        };
+                        let sweeping = Arc::clone(&sweeper);
+                        let cache = Arc::clone(&cache);
+                        let sweep_result = tokio::spawn(async move {
+                            let occupancy =
+                                |guild, channel| rooms::occupancy(&cache, guild, channel);
+                            sweeping.sweep(&occupancy, now_ms).await
+                        })
+                        .await;
+                        match sweep_result {
+                            Ok(report) if report.failures > 0 => tracing::warn!(
+                                failures = report.failures,
+                                "a room sweep step failed and will be retried"
+                            ),
+                            Ok(_) => {}
+                            Err(error) => tracing::error!(
+                                %error,
+                                "a room sweep died; the next sweep will be attempted"
+                            ),
+                        }
+                    }
+                });
                 Ok::<Data, Error>(Data {
                     table,
                     root: loaded.root,
@@ -151,6 +197,7 @@ pub async fn run(
                     member_lookups: Arc::new(Semaphore::new(MEMBER_LOOKUPS_AT_ONCE)),
                     signups,
                     rehearsal: rehearsal_guilds,
+                    voice,
                 })
             })
         })

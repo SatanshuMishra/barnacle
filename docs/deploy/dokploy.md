@@ -66,7 +66,7 @@ merge.
 
 ## First start against an empty volume
 
-Nothing to do by hand. The entrypoint creates the database, applies all four
+Nothing to do by hand. The entrypoint creates the database, applies all five
 migrations in order and starts the bot. The logs read:
 
 ```text
@@ -75,6 +75,7 @@ barnacle: applying 0001_guess_solves
 barnacle: applying 0002_cb_attendance
 barnacle: applying 0003_cb_season_controls
 barnacle: applying 0004_cb_rehearsal_harness
+barnacle: applying 0005_voice_rooms
 ```
 
 On every later start the entrypoint reads the `schema_migrations` ledger, finds
