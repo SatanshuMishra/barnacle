@@ -2,6 +2,7 @@ mod common;
 
 use barnacle_catalog::Catalog;
 use barnacle_catalog::ModelError;
+use barnacle_catalog::Ship;
 use barnacle_catalog::ShipIndex;
 use barnacle_catalog::ShipName;
 use barnacle_catalog::Tier;
@@ -84,4 +85,55 @@ fn catalog_finds_ships_by_index() {
         Some(7)
     );
     assert!(found.get(&index("PBSC710")).is_none());
+}
+
+#[test]
+fn a_catalog_without_hull_models_still_loads() {
+    let json = r#"{
+  "provenance": {
+    "game_version": "15.8.0",
+    "build": 13187581,
+    "data_repo_commit": "0000000",
+    "wowsunpack": "0.45.0",
+    "wows_data_mgr": "0.21.0"
+  },
+  "ships": [
+    {
+      "id": 1,
+      "index": "PASB008",
+      "tier": 7,
+      "group": "upgradeable",
+      "class": "cruiser",
+      "nation": "USA",
+      "is_paper": false,
+      "name": { "short": "Colorado", "full": "Colorado" },
+      "silhouette": { "sha256": "aa11" }
+    }
+  ]
+}"#;
+    let loaded = Catalog::from_json(json).unwrap();
+    assert_eq!(loaded.ships[0].hull_model, None);
+    assert_eq!(
+        loaded,
+        catalog(
+            13187581,
+            vec![ship("PASB008", "Colorado", "upgradeable", 7, "aa11")]
+        )
+    );
+
+    let modelled = catalog(
+        13187581,
+        vec![Ship {
+            hull_model: Some(
+                "content/gameplay/usa/ship/battleship/ASB008_Colorado_1945/ASB008_Colorado_1945.model"
+                    .to_owned(),
+            ),
+            ..ship("PASB008", "Colorado", "upgradeable", 7, "aa11")
+        }],
+    );
+    let written = modelled.to_json().unwrap();
+    assert!(written.contains(
+        "\"hull_model\": \"content/gameplay/usa/ship/battleship/ASB008_Colorado_1945/ASB008_Colorado_1945.model\""
+    ));
+    assert_eq!(Catalog::from_json(&written).unwrap(), modelled);
 }

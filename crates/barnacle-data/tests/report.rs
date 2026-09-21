@@ -30,6 +30,7 @@ fn ship(index: &str, name: &str, group: &str, tier: u32, hash: &str) -> Ship {
         silhouette: Some(Silhouette {
             sha256: hash.to_owned(),
         }),
+        hull_model: None,
     }
 }
 
@@ -75,6 +76,11 @@ fn diff_report_shows_each_new_ship_and_what_curation_did() {
         "{report}"
     );
     assert!(
+        report
+            .contains("Removed (0)\nLeft the pool (0)\nJoined the pool (0)\nLookalike candidates"),
+        "{report}"
+    );
+    assert!(
         report.contains(
             "curation was reviewed through build 13015811, but the catalog is build 13187581"
         ),
@@ -101,7 +107,97 @@ fn a_first_diff_says_there_is_nothing_to_compare_with() {
         "{report}"
     );
     assert!(report.contains("New ship groups: special"), "{report}");
+    assert!(
+        report
+            .contains("Removed (0)\nLeft the pool (0)\nJoined the pool (0)\nLookalike candidates"),
+        "{report}"
+    );
     assert!(report.contains("Curation problems: none"), "{report}");
+}
+
+fn hulled(ship: Ship, model: &str) -> Ship {
+    Ship {
+        hull_model: Some(model.to_owned()),
+        ..ship
+    }
+}
+
+const AMAGI_HULL: &str =
+    "content/gameplay/japan/ship/battleship/JSB013_Amagi_1942/JSB013_Amagi_1942.model";
+
+fn hull_config() -> CurationConfig {
+    CurationConfig::from_toml(
+        "reviewed_through = 13187581\ngroups = [\"upgradeable\", \"special\"]",
+    )
+    .unwrap()
+}
+
+#[test]
+fn the_diff_lists_ships_that_left_or_joined_the_pool() {
+    let old = catalog(
+        "15.7.0",
+        13015811,
+        vec![
+            ship("PJSB013", "Amagi", "upgradeable", 8, "a013"),
+            ship("PJSB878", "Ignis Purgatio", "special", 8, "a878"),
+        ],
+    );
+    let new = catalog(
+        "15.8.0",
+        13187581,
+        vec![
+            hulled(
+                ship("PJSB013", "Amagi", "upgradeable", 8, "a013"),
+                AMAGI_HULL,
+            ),
+            hulled(
+                ship("PJSB878", "Ignis Purgatio", "special", 8, "a878"),
+                AMAGI_HULL,
+            ),
+        ],
+    );
+    let report = diff_report(Some(&old), &new, &hull_config());
+    assert!(
+        report.contains(
+            "Removed (0)\nLeft the pool (1)\n  PJSB878  Ignis Purgatio  tier 8  special  -> removed: same hull model as PJSB013\nJoined the pool (0)\nLookalike candidates"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn only_ships_in_both_catalogs_can_leave_or_join_the_pool() {
+    let old = catalog(
+        "15.7.0",
+        13015811,
+        vec![
+            hulled(
+                ship("PJSB013", "Amagi", "upgradeable", 8, "a013"),
+                AMAGI_HULL,
+            ),
+            hulled(
+                ship("PJSB878", "Ignis Purgatio", "special", 8, "a878"),
+                AMAGI_HULL,
+            ),
+            ship("PGSC519", "Ägir", "special", 9, "5fe2"),
+        ],
+    );
+    let new = catalog(
+        "15.8.0",
+        13187581,
+        vec![
+            ship("PJSB013", "Amagi", "upgradeable", 8, "a013"),
+            ship("PJSB878", "Ignis Purgatio", "special", 8, "a878"),
+            ship("PASB008", "Colorado", "upgradeable", 7, "a008"),
+        ],
+    );
+    let report = diff_report(Some(&old), &new, &hull_config());
+    assert!(
+        report.contains(
+            "Removed (1)\n  PGSC519\nLeft the pool (0)\nJoined the pool (1)\n  PJSB878  Ignis Purgatio  tier 8  special  -> in pool\nLookalike candidates"
+        ),
+        "{report}"
+    );
 }
 
 #[test]

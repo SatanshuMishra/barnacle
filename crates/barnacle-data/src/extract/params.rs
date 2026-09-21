@@ -25,6 +25,7 @@ pub struct TypedShip {
     pub group: ShipGroup,
     pub class: ShipClass,
     pub nation: Nation,
+    pub hull_model: Option<String>,
 }
 
 pub fn typed_ships(game_params: Vec<u8>) -> Result<Vec<TypedShip>, ParamsError> {
@@ -39,6 +40,7 @@ pub fn typed_ships(game_params: Vec<u8>) -> Result<Vec<TypedShip>, ParamsError> 
                 group: ShipGroup::new(vehicle.group()),
                 class: ship_class(param.species()),
                 nation: Nation::new(param.nation()),
+                hull_model: vehicle.model_path().map(str::to_owned),
             })
         })
         .collect()

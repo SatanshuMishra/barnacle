@@ -3,18 +3,30 @@ mod common;
 use barnacle_catalog::Ship;
 use barnacle_catalog::curation::CurationConfig;
 use barnacle_catalog::curation::ExcludeReason;
+use barnacle_catalog::curation::Problem;
 use barnacle_catalog::curation::Removal;
 use barnacle_catalog::curation::curate;
+use barnacle_catalog::curation::validate;
 use common::catalog;
 use common::index;
 use common::ship;
 
 const GROUPS: &str = r#"
-groups = ["start", "special", "specialUnsellable", "ultimate", "upgradeable", "upgradeableExclusive", "upgradeableUltimate", "superShip"]
+groups = ["start", "special", "premium", "specialUnsellable", "ultimate", "upgradeable", "upgradeableExclusive", "upgradeableUltimate", "superShip"]
 "#;
+
+const AMAGI_HULL: &str =
+    "content/gameplay/japan/ship/battleship/JSB013_Amagi_1942/JSB013_Amagi_1942.model";
 
 fn config(tables: &str) -> CurationConfig {
     CurationConfig::from_toml(&format!("{GROUPS}\n{tables}")).unwrap()
+}
+
+fn hulled(ship: Ship, model: &str) -> Ship {
+    Ship {
+        hull_model: Some(model.to_owned()),
+        ..ship
+    }
 }
 
 #[test]
@@ -38,7 +50,7 @@ names = ["kreml"]
 "#,
     );
     assert_eq!(parsed.reviewed_through, None);
-    assert_eq!(parsed.groups.len(), 8);
+    assert_eq!(parsed.groups.len(), 9);
     assert_eq!(parsed.exclude[0].reason, ExcludeReason::CarbonCopy);
     assert_eq!(parsed.exclude[0].base, Some(index("PJSC038")));
     assert_eq!(parsed.keep[0].index, index("PGSD720"));
@@ -270,6 +282,13 @@ fn removals_explain_themselves() {
         .to_string(),
         "excluded by curation: bad silhouette"
     );
+    assert_eq!(
+        Removal::SharedHull {
+            base: index("PJSB013")
+        }
+        .to_string(),
+        "same hull model as PJSB013"
+    );
 }
 
 #[test]
@@ -404,5 +423,203 @@ fn copies_explain_their_chain() {
         }
         .to_string(),
         "same silhouette as PASD019, which is excluded for bad silhouette art"
+    );
+}
+
+#[test]
+fn ships_sharing_a_hull_model_count_as_copies_of_one_base() {
+    let ships = catalog(
+        1,
+        vec![
+            hulled(
+                ship("PJSB013", "Amagi", "upgradeable", 8, "a013"),
+                AMAGI_HULL,
+            ),
+            hulled(
+                ship("PJSB878", "Ignis Purgatio", "special", 8, "a878"),
+                AMAGI_HULL,
+            ),
+            hulled(
+                ship("PJSB888", "Ragnarok", "special", 8, "a888"),
+                AMAGI_HULL,
+            ),
+        ],
+    );
+    let curated = curate(&ships, &config(""));
+    assert_eq!(
+        curated.pool.iter().map(|i| i.as_str()).collect::<Vec<_>>(),
+        ["PJSB013"]
+    );
+    for copy in ["PJSB878", "PJSB888"] {
+        assert_eq!(
+            curated.removed[&index(copy)],
+            Removal::SharedHull {
+                base: index("PJSB013")
+            }
+        );
+    }
+    assert_eq!(
+        curated.variants_of(&index("PJSB013")),
+        vec![&index("PJSB878"), &index("PJSB888")]
+    );
+}
+
+#[test]
+fn a_kept_ship_survives_a_shared_hull() {
+    let hull = "content/gameplay/poland/ship/destroyer/WSD207_Grom/WSD207_Grom.model";
+    let ships = catalog(
+        1,
+        vec![
+            hulled(ship("PWSD207", "Grom", "upgradeable", 7, "d207"), hull),
+            hulled(ship("PWSD907", "Scarlet Storm", "special", 7, "d907"), hull),
+        ],
+    );
+    let config = config("[[keep]]\nindex = \"PWSD907\"");
+    let curated = curate(&ships, &config);
+    assert!(curated.removed.is_empty());
+    assert!(curated.pool.contains(&index("PWSD207")));
+    assert!(curated.pool.contains(&index("PWSD907")));
+    assert!(
+        !validate(&ships, &config, &curated)
+            .iter()
+            .any(|problem| matches!(problem, Problem::KeepHasNoEffect { .. }))
+    );
+}
+
+#[test]
+fn a_premium_ship_is_preferred_as_base_over_a_later_special_copy() {
+    let hull = "content/gameplay/italy/ship/battleship/ISB509_Marco_Polo/ISB509_Marco_Polo.model";
+    let ships = catalog(
+        1,
+        vec![
+            hulled(ship("PISB509", "Marco Polo", "premium", 9, "b509"), hull),
+            hulled(ship("PISB709", "Pilus Prior", "special", 9, "b709"), hull),
+        ],
+    );
+    let curated = curate(&ships, &config(""));
+    assert!(curated.pool.contains(&index("PISB509")));
+    assert_eq!(
+        curated.removed[&index("PISB709")],
+        Removal::SharedHull {
+            base: index("PISB509")
+        }
+    );
+}
+
+#[test]
+fn ships_without_a_hull_model_are_never_grouped() {
+    let ships = catalog(
+        1,
+        vec![
+            ship("PJSB013", "Amagi", "upgradeable", 8, "a013"),
+            ship("PJSB878", "Ignis Purgatio", "special", 8, "a878"),
+        ],
+    );
+    let curated = curate(&ships, &config(""));
+    assert!(curated.removed.is_empty());
+    assert_eq!(curated.pool.len(), 2);
+}
+
+#[test]
+fn a_manually_excluded_ship_is_never_a_hull_base() {
+    let ships = catalog(
+        1,
+        vec![
+            hulled(
+                ship("PJSB013", "Amagi", "upgradeable", 8, "a013"),
+                AMAGI_HULL,
+            ),
+            hulled(
+                ship("PJSB878", "Ignis Purgatio", "special", 8, "a878"),
+                AMAGI_HULL,
+            ),
+        ],
+    );
+    let curated = curate(
+        &ships,
+        &config("[[exclude]]\nindex = \"PJSB013\"\nreason = \"carbon_copy\""),
+    );
+    assert_eq!(
+        curated.pool.iter().map(|i| i.as_str()).collect::<Vec<_>>(),
+        ["PJSB878"]
+    );
+    assert_eq!(
+        curated.removed[&index("PJSB013")],
+        Removal::Manual {
+            reason: ExcludeReason::CarbonCopy,
+            base: None
+        }
+    );
+}
+
+#[test]
+fn a_manual_exclusion_replaces_a_shared_hull() {
+    let ships = catalog(
+        1,
+        vec![
+            hulled(
+                ship("PJSB013", "Amagi", "upgradeable", 8, "a013"),
+                AMAGI_HULL,
+            ),
+            hulled(
+                ship("PJSB888", "Ragnarok", "special", 8, "a888"),
+                AMAGI_HULL,
+            ),
+        ],
+    );
+    let curated = curate(
+        &ships,
+        &config("[[exclude]]\nindex = \"PJSB888\"\nreason = \"carbon_copy\"\nbase = \"PJSB013\""),
+    );
+    assert_eq!(
+        curated.removed[&index("PJSB888")],
+        Removal::Manual {
+            reason: ExcludeReason::CarbonCopy,
+            base: Some(index("PJSB013"))
+        }
+    );
+}
+
+#[test]
+fn a_copy_of_a_shared_hull_copy_points_at_the_hull_base() {
+    let ships = catalog(
+        1,
+        vec![
+            hulled(
+                ship("PJSB013", "Amagi", "upgradeable", 8, "a013"),
+                AMAGI_HULL,
+            ),
+            hulled(
+                ship("PJSB878", "Ignis Purgatio", "special", 8, "a878"),
+                AMAGI_HULL,
+            ),
+            ship("PJSB898", "Ignis Purgatio Golden", "special", 8, "a898"),
+        ],
+    );
+    let curated = curate(&ships, &config(""));
+    assert_eq!(
+        curated.removed[&index("PJSB898")],
+        Removal::CopyOf {
+            via: index("PJSB878"),
+            base: index("PJSB013")
+        }
+    );
+}
+
+#[test]
+fn a_premium_ship_ranks_with_special_ships_as_a_silhouette_base() {
+    let ships = catalog(
+        1,
+        vec![
+            ship("PZSB529", "Sun Yat-Sen", "premium", 9, "c529"),
+            ship("PZSB909", "Xuan Ming", "special", 9, "c529"),
+        ],
+    );
+    let curated = curate(&ships, &config(""));
+    assert_eq!(
+        curated.removed[&index("PZSB909")],
+        Removal::IdenticalSilhouette {
+            base: index("PZSB529")
+        }
     );
 }

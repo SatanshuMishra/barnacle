@@ -67,7 +67,10 @@ ships = {
     game_params({"": "not a dictionary", **ships})
 )
 
-colorado = parsable("PASB008", "PASB008_Colorado", 7, False)
+colorado = {
+    **parsable("PASB008", "PASB008_Colorado", 7, False),
+    "A_Hull": {"model": "content/gameplay/usa/ship/battleship/ASB008_Colorado_1945/ASB008_Colorado_1945.model"},
+}
 vermont = parsable("PASB110", "PASB110_Vermont", 10, True)
 torpedo = ships["PAPT001_Torpedo"]
 

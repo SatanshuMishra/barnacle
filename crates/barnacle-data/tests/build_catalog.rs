@@ -159,3 +159,20 @@ fn a_ship_index_listed_twice_fails() {
         })
     ));
 }
+
+#[test]
+fn hull_models_are_read_from_the_hull_component() {
+    let (_output, result) = build("catalog_ok.data", &["PASB008"], "mini_en.mo");
+    let catalog = result.unwrap();
+    assert_eq!(
+        catalog
+            .get(&index("PASB008"))
+            .unwrap()
+            .hull_model
+            .as_deref(),
+        Some(
+            "content/gameplay/usa/ship/battleship/ASB008_Colorado_1945/ASB008_Colorado_1945.model"
+        )
+    );
+    assert_eq!(catalog.get(&index("PASB110")).unwrap().hull_model, None);
+}
