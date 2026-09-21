@@ -471,12 +471,32 @@ async fn end_season_keeps_the_marks() {
     );
     assert_eq!(
         store.roster(season.id, first).await.unwrap(),
-        vec![Mark {
-            user: AKI,
-            hour: hour(1),
-            attending: true,
-            answered_at_ms: 1_000,
-        }]
+        vec![
+            Mark {
+                user: AKI,
+                hour: hour(1),
+                attending: true,
+                answered_at_ms: 1_000,
+            },
+            Mark {
+                user: AKI,
+                hour: hour(2),
+                attending: false,
+                answered_at_ms: 1_000,
+            },
+            Mark {
+                user: AKI,
+                hour: hour(3),
+                attending: false,
+                answered_at_ms: 1_000,
+            },
+            Mark {
+                user: AKI,
+                hour: hour(4),
+                attending: false,
+                answered_at_ms: 1_000,
+            },
+        ]
     );
     assert_eq!(store.posts(season.id).await.unwrap().len(), 1);
 }
@@ -531,18 +551,91 @@ async fn marks_upsert_and_keep_the_first_answer_time() {
         .unwrap();
     assert_eq!(
         store.roster(season.id, night).await.unwrap(),
-        vec![Mark {
-            user: AKI,
-            hour: hour(1),
-            attending: false,
-            answered_at_ms: 1_000,
-        }]
+        vec![
+            Mark {
+                user: AKI,
+                hour: hour(1),
+                attending: false,
+                answered_at_ms: 1_000,
+            },
+            Mark {
+                user: AKI,
+                hour: hour(2),
+                attending: false,
+                answered_at_ms: 1_000,
+            },
+            Mark {
+                user: AKI,
+                hour: hour(3),
+                attending: false,
+                answered_at_ms: 1_000,
+            },
+            Mark {
+                user: AKI,
+                hour: hour(4),
+                attending: false,
+                answered_at_ms: 1_000,
+            },
+        ]
     );
-    let changed: i64 = sqlx::query_scalar("SELECT changed_at_ms FROM cb_marks")
-        .fetch_one(&pool)
+    let changed: Vec<(i64, i64)> =
+        sqlx::query_as("SELECT hour, changed_at_ms FROM cb_marks ORDER BY hour")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        changed,
+        vec![(1, 5_000), (2, 1_000), (3, 1_000), (4, 1_000)]
+    );
+}
+
+#[tokio::test]
+async fn a_single_hour_mark_fills_the_other_hours_with_nope() {
+    let pool = attendance_pool().await;
+    let (store, season) = posted_season(pool.clone()).await;
+    let night = night("2026-09-16");
+    store
+        .mark(season.id, night, AKI, &[hour(1)], true, 1_000)
         .await
         .unwrap();
-    assert_eq!(changed, 5_000);
+    let answered = |attending: [bool; 4]| {
+        Hour::ALL
+            .iter()
+            .zip(attending)
+            .map(|(hour, attending)| Mark {
+                user: AKI,
+                hour: *hour,
+                attending,
+                answered_at_ms: 1_000,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        store.roster(season.id, night).await.unwrap(),
+        answered([true, false, false, false])
+    );
+    store
+        .mark(season.id, night, AKI, &[hour(2)], true, 5_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.roster(season.id, night).await.unwrap(),
+        answered([true, true, false, false])
+    );
+    let changed: Vec<(i64, i64, i64)> =
+        sqlx::query_as("SELECT hour, answered_at_ms, changed_at_ms FROM cb_marks ORDER BY hour")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        changed,
+        vec![
+            (1, 1_000, 1_000),
+            (2, 1_000, 5_000),
+            (3, 1_000, 1_000),
+            (4, 1_000, 1_000),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -578,11 +671,12 @@ async fn roster_is_ordered_by_first_answer() {
         vec![
             (BOREALIS, 1, true, 2_000),
             (BOREALIS, 2, true, 2_000),
+            (BOREALIS, 3, false, 2_000),
+            (BOREALIS, 4, false, 2_000),
             (AKI, 1, false, 3_000),
             (AKI, 2, false, 3_000),
             (AKI, 3, false, 3_000),
             (AKI, 4, false, 3_000),
-            (BOREALIS, 3, false, 9_000),
         ]
     );
 }
@@ -844,7 +938,7 @@ async fn purge_season_deletes_its_marks_posts_and_season() {
             .purge_season(GUILD, season.id, season.number)
             .await
             .unwrap(),
-        Some(3)
+        Some(8)
     );
     assert_eq!(store.season(season.id).await.unwrap(), None);
     assert_eq!(counted(&pool, POSTS_OF_SEASON, season.id).await, 0);
@@ -878,18 +972,18 @@ async fn purge_season_leaves_another_guilds_season_alone() {
     );
     assert_eq!(store.season(ours.id).await.unwrap(), Some(ours.clone()));
     assert_eq!(counted(&pool, POSTS_OF_SEASON, ours.id).await, 1);
-    assert_eq!(counted(&pool, MARKS_OF_SEASON, ours.id).await, 1);
+    assert_eq!(counted(&pool, MARKS_OF_SEASON, ours.id).await, 4);
     assert_eq!(
         store
             .purge_season(GUILD, ours.id, ours.number)
             .await
             .unwrap(),
-        Some(1)
+        Some(4)
     );
     assert_eq!(store.season(ours.id).await.unwrap(), None);
     assert_eq!(store.season(theirs.id).await.unwrap(), Some(theirs.clone()));
     assert_eq!(counted(&pool, POSTS_OF_SEASON, theirs.id).await, 1);
-    assert_eq!(counted(&pool, MARKS_OF_SEASON, theirs.id).await, 1);
+    assert_eq!(counted(&pool, MARKS_OF_SEASON, theirs.id).await, 4);
     assert_eq!(
         store.seasons_in_any_state(OTHER_GUILD).await.unwrap(),
         vec![theirs]

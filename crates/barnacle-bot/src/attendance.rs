@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -59,7 +60,6 @@ pub struct PostTag {
 pub enum Cell {
     In,
     Out,
-    None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -675,17 +675,19 @@ fn build_view(season: &Season, night: Night, now_unix: i64, marks: &[Mark]) -> S
 }
 
 fn tally(hour: Hour, marks: &[Mark]) -> HourTally {
-    let count = |attending: bool| {
-        let total = marks
-            .iter()
-            .filter(|mark| mark.hour == hour && mark.attending == attending)
-            .count();
-        u32::try_from(total).unwrap_or(u32::MAX)
-    };
+    let players = marks
+        .iter()
+        .map(|mark| mark.user)
+        .collect::<HashSet<_>>()
+        .len();
+    let attending = marks
+        .iter()
+        .filter(|mark| mark.hour == hour && mark.attending)
+        .count();
     HourTally {
         hour,
-        attending: count(true),
-        nope: count(false),
+        attending: u32::try_from(attending).unwrap_or(u32::MAX),
+        nope: u32::try_from(players.saturating_sub(attending)).unwrap_or(u32::MAX),
     }
 }
 
@@ -696,7 +698,7 @@ fn roster_rows(marks: &[Mark]) -> Vec<RosterRow> {
         let index = *seen.entry(mark.user).or_insert_with(|| {
             rows.push(RosterRow {
                 user: mark.user,
-                cells: [Cell::None; 4],
+                cells: [Cell::Out; 4],
             });
             rows.len() - 1
         });

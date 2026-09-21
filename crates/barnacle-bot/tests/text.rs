@@ -307,7 +307,7 @@ fn roster() -> Vec<RosterRow> {
     vec![
         RosterRow {
             user: UserId::new(11),
-            cells: [Cell::In, Cell::In, Cell::In, Cell::None],
+            cells: [Cell::In, Cell::In, Cell::In, Cell::Out],
         },
         RosterRow {
             user: UserId::new(22),
@@ -367,7 +367,7 @@ fn roster_rows_are_aligned_and_mention_the_player() {
             "**Hour 4** · <t:1790217000:t> – <t:1790220600:t> · 3 in · 3 out",
             "",
             "`1    2    3    4    `",
-            "`in   in   in   -    ` <@11>",
+            "`in   in   in   out  ` <@11>",
             "`in   in   out  out  ` <@22>",
         ]
         .join("\n")
@@ -486,7 +486,7 @@ fn a_full_roster_fits_discords_description_limit() {
     let crowd: Vec<RosterRow> = (0..barnacle_bot::attendance::ROSTER_LIMIT)
         .map(|number| RosterRow {
             user: UserId::new(u64::MAX - u64::try_from(number).unwrap()),
-            cells: [Cell::Out, Cell::In, Cell::None, Cell::Out],
+            cells: [Cell::Out, Cell::In, Cell::Out, Cell::Out],
         })
         .collect();
     let description = text::signup_description(&signup_view(true, crowd, 9_999));

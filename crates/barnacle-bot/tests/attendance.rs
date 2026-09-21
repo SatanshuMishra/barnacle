@@ -539,7 +539,7 @@ async fn twenty_clicks_during_one_slow_edit_make_at_most_three_edits() {
             })
         })
         .collect();
-    while store.roster(season.id, first_night()).await.unwrap().len() < 21 {
+    while store.roster(season.id, first_night()).await.unwrap().len() < 21 * Hour::ALL.len() {
         tokio::task::yield_now().await;
     }
     board.open_edits();
@@ -585,19 +585,102 @@ async fn the_last_edit_shows_the_last_mark() {
     assert_eq!(drawn.rows[0].user, AKI);
     assert_eq!(
         drawn.rows[0].cells,
-        [Cell::In, Cell::None, Cell::None, Cell::None]
+        [Cell::In, Cell::Out, Cell::Out, Cell::Out]
     );
     assert_eq!(drawn.rows[1].user, BOREALIS);
-    assert_eq!(
-        drawn.rows[1].cells,
-        [Cell::None, Cell::Out, Cell::None, Cell::None]
-    );
+    assert_eq!(drawn.rows[1].cells, [Cell::Out; 4]);
     assert_eq!(drawn.hours.map(|tally| tally.attending), [1, 0, 0, 0]);
-    assert_eq!(drawn.hours.map(|tally| tally.nope), [0, 1, 0, 0]);
+    assert_eq!(drawn.hours.map(|tally| tally.nope), [1, 2, 2, 2]);
     assert_eq!(drawn.season, season.id);
     assert_eq!(drawn.number, 35);
     assert_eq!(drawn.codename.as_deref(), Some("Komodo Dragon"));
     assert_eq!(SECOND_START, second_night().start_unix());
+}
+
+#[tokio::test]
+async fn a_single_hour_answer_marks_every_other_hour_nope() {
+    let board = FakeBoard::new();
+    let (signups, season, store) = ready(board.clone()).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let message = message_for(&store, &season, first_night()).await;
+    let outcome = signups
+        .click(
+            press(&season, message, AKI, Target::One(Hour::new(2).unwrap())),
+            FIRST_POST_AT,
+            millis(FIRST_POST_AT),
+        )
+        .await;
+    assert_eq!(outcome, ClickOutcome::Recorded);
+    let drawn = board.edits().pop().unwrap();
+    assert_eq!(drawn.rows.len(), 1);
+    assert_eq!(drawn.rows[0].user, AKI);
+    assert_eq!(
+        drawn.rows[0].cells,
+        [Cell::Out, Cell::In, Cell::Out, Cell::Out]
+    );
+    assert_eq!(drawn.hours.map(|tally| tally.attending), [0, 1, 0, 0]);
+    assert_eq!(drawn.hours.map(|tally| tally.nope), [1, 0, 1, 1]);
+}
+
+#[tokio::test]
+async fn a_later_single_hour_answer_keeps_the_earlier_answers() {
+    let board = FakeBoard::new();
+    let (signups, season, store) = ready(board.clone()).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let message = message_for(&store, &season, first_night()).await;
+    for (hour, offset) in [(1, 0), (3, 1)] {
+        let outcome = signups
+            .click(
+                press(&season, message, AKI, Target::One(Hour::new(hour).unwrap())),
+                FIRST_POST_AT + offset,
+                millis(FIRST_POST_AT + offset),
+            )
+            .await;
+        assert_eq!(outcome, ClickOutcome::Recorded);
+    }
+    let drawn = board.edits().pop().unwrap();
+    assert_eq!(drawn.rows.len(), 1);
+    assert_eq!(
+        drawn.rows[0].cells,
+        [Cell::In, Cell::Out, Cell::In, Cell::Out]
+    );
+    assert_eq!(drawn.hours.map(|tally| tally.attending), [1, 0, 1, 0]);
+    assert_eq!(drawn.hours.map(|tally| tally.nope), [0, 1, 0, 1]);
+}
+
+#[tokio::test]
+async fn a_partial_answer_saved_before_the_change_shows_nope() {
+    let board = FakeBoard::new();
+    let pool = attendance_pool().await;
+    let store = Attendance::with_pool(pool.clone()).await.unwrap();
+    let season = created(&store, &proposal()).await;
+    let signups = Signups::new(board, store.clone());
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    sqlx::query("INSERT INTO cb_marks (season_id, night, user_id, hour, attending, answered_at_ms, changed_at_ms) VALUES (?, ?, ?, 2, 1, ?, ?)")
+        .bind(season.id)
+        .bind(first_night().label())
+        .bind(i64::try_from(AKI.get()).unwrap())
+        .bind(i64::try_from(millis(FIRST_POST_AT)).unwrap())
+        .bind(i64::try_from(millis(FIRST_POST_AT)).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.roster(season.id, first_night()).await.unwrap().len(),
+        1
+    );
+    let view = signups
+        .view(&season, first_night(), FIRST_POST_AT)
+        .await
+        .unwrap();
+    assert_eq!(view.rows.len(), 1);
+    assert_eq!(view.rows[0].user, AKI);
+    assert_eq!(
+        view.rows[0].cells,
+        [Cell::Out, Cell::In, Cell::Out, Cell::Out]
+    );
+    assert_eq!(view.hours.map(|tally| tally.attending), [0, 1, 0, 0]);
+    assert_eq!(view.hours.map(|tally| tally.nope), [1, 0, 1, 1]);
 }
 
 #[tokio::test]
@@ -1188,7 +1271,7 @@ async fn a_purge_deletes_every_message_row_and_answer() {
         PurgeReport {
             seasons: 1,
             messages: 2,
-            answers: 5,
+            answers: 8,
             failures: 0
         }
     );
