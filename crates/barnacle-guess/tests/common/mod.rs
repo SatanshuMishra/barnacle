@@ -53,6 +53,7 @@ pub fn ship(value: &str, name: &str, tier_value: u32, silhouette: &str) -> Ship 
         silhouette: Some(Silhouette {
             sha256: silhouette.to_owned(),
         }),
+        hull_model: None,
     }
 }
 

@@ -27,6 +27,9 @@ pub enum Removal {
     VariantSuffix {
         base: ShipIndex,
     },
+    SharedHull {
+        base: ShipIndex,
+    },
     CopyOf {
         via: ShipIndex,
         base: ShipIndex,
@@ -42,6 +45,7 @@ impl Removal {
         match self {
             Self::IdenticalSilhouette { base }
             | Self::VariantSuffix { base }
+            | Self::SharedHull { base }
             | Self::CopyOf { base, .. } => Some(base),
             Self::Manual { base, .. } => base.as_ref(),
             Self::GroupNotAllowed
@@ -66,6 +70,7 @@ impl fmt::Display for Removal {
             ),
             Self::CollaborationPrefix => f.write_str("collaboration reskin"),
             Self::VariantSuffix { base } => write!(f, "variant of {base}"),
+            Self::SharedHull { base } => write!(f, "same hull model as {base}"),
             Self::CopyOf { via, base } => {
                 write!(f, "copy of {via}, which is a copy of {base}")
             }
@@ -138,7 +143,7 @@ impl<'a> Candidate<'a> {
         let group = match self.ship.group.as_str() {
             "upgradeable" => 0,
             "start" => 1,
-            "special" => 2,
+            "special" | "premium" => 2,
             _ => 3,
         };
         (marked, group, self.index())
@@ -307,6 +312,37 @@ fn variant_suffixes(
         .collect()
 }
 
+fn shared_hulls(
+    candidates: &[Candidate<'_>],
+    kept: &BTreeSet<&ShipIndex>,
+    excluded: &BTreeSet<&ShipIndex>,
+) -> BTreeMap<ShipIndex, Removal> {
+    group_by(candidates, |candidate| candidate.ship.hull_model.as_deref())
+        .into_iter()
+        .filter(|(model, members)| model.is_some() && members.len() > 1)
+        .flat_map(|(_, members)| {
+            let base = best_base(
+                members
+                    .iter()
+                    .copied()
+                    .filter(|member| !excluded.contains(member.index())),
+            );
+            members
+                .into_iter()
+                .filter_map(|member| {
+                    let base = base?;
+                    (member.index() != base && !kept.contains(member.index())).then(|| {
+                        (
+                            member.index().clone(),
+                            Removal::SharedHull { base: base.clone() },
+                        )
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 fn manual_exclusions(
     catalog: &Catalog,
     config: &CurationConfig,
@@ -360,6 +396,8 @@ pub fn curate(catalog: &Catalog, config: &CurationConfig) -> Curated {
     let collaboration = collaboration_prefixes(&after_identical, &kept);
     let after_collaboration = without(&after_identical, &collaboration);
     let suffixes = variant_suffixes(&after_collaboration, &kept, &excluded);
+    let after_suffixes = without(&after_collaboration, &suffixes);
+    let hulls = shared_hulls(&after_suffixes, &kept, &excluded);
     let manual = manual_exclusions(catalog, config, &basic);
 
     let removed: BTreeMap<ShipIndex, Removal> = basic
@@ -368,6 +406,7 @@ pub fn curate(catalog: &Catalog, config: &CurationConfig) -> Curated {
         .chain(identical)
         .chain(collaboration)
         .chain(suffixes)
+        .chain(hulls)
         .chain(manual)
         .collect();
     let pool: BTreeSet<ShipIndex> = candidates

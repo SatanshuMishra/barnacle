@@ -117,6 +117,7 @@ pub fn build_catalog(inputs: BuildInputs<'_>) -> Result<Catalog, ExtractError> {
                 nation: typed.nation,
                 is_paper,
                 silhouette,
+                hull_model: typed.hull_model,
             })
         })
         .collect::<Result<Vec<Ship>, ExtractError>>()?;

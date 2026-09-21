@@ -57,6 +57,22 @@ fn builds_and_curates_a_real_catalog() {
     assert!(colorado.silhouette.is_some());
     assert!(output.path().join("silhouettes/PASB008.png").is_file());
     assert!(catalog.get(&index("PASB110")).unwrap().is_paper);
+    let amagi_hull = catalog
+        .get(&index("PJSB013"))
+        .unwrap()
+        .hull_model
+        .as_deref();
+    assert_eq!(
+        amagi_hull,
+        Some("content/gameplay/japan/ship/battleship/JSB013_Amagi_1942/JSB013_Amagi_1942.model")
+    );
+    for copy in ["PJSB878", "PJSB888"] {
+        assert_eq!(
+            catalog.get(&index(copy)).unwrap().hull_model.as_deref(),
+            amagi_hull,
+            "{copy} should share the hull model of PJSB013"
+        );
+    }
 
     let config = CurationConfig::from_toml(
         r#"groups = ["start", "special", "specialUnsellable", "ultimate", "upgradeable", "upgradeableExclusive", "upgradeableUltimate", "superShip"]"#,
@@ -78,6 +94,12 @@ fn builds_and_curates_a_real_catalog() {
     assert_eq!(
         curated.removed[&index("PJSC708")],
         Removal::CollaborationPrefix
+    );
+    assert_eq!(
+        curated.removed[&index("PJSB878")],
+        Removal::SharedHull {
+            base: index("PJSB013")
+        }
     );
     for kept in [
         "PASB008", "PASD709", "PBSC101", "PGSB105", "PGSB503", "PBSC507", "PBSC528",

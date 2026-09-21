@@ -181,6 +181,8 @@ pub struct Ship {
     pub is_paper: bool,
     pub name: Option<ShipName>,
     pub silhouette: Option<Silhouette>,
+    #[serde(default)]
+    pub hull_model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use barnacle_catalog::Catalog;
 use barnacle_catalog::ShipIndex;
 use barnacle_catalog::curation::Curated;
@@ -46,6 +48,16 @@ fn name_of(catalog: &Catalog, index: &ShipIndex) -> String {
 pub fn diff_report(old: Option<&Catalog>, new: &Catalog, config: &CurationConfig) -> String {
     let changes = diff(old, new);
     let curated = curate(new, config);
+    let old_pool: BTreeSet<ShipIndex> = old.map(|old| curate(old, config).pool).unwrap_or_default();
+    let left: Vec<&ShipIndex> = old_pool
+        .difference(&curated.pool)
+        .filter(|index| new.get(index).is_some())
+        .collect();
+    let joined: Vec<&ShipIndex> = curated
+        .pool
+        .difference(&old_pool)
+        .filter(|index| old.is_some_and(|old| old.get(index).is_some()))
+        .collect();
     let problems = validate(new, config, &curated);
     let candidates = year_refit_candidates(new, config, &curated);
     let compared = old
@@ -84,6 +96,10 @@ pub fn diff_report(old: Option<&Catalog>, new: &Catalog, config: &CurationConfig
     );
     let removed = std::iter::once(format!("Removed ({})", changes.removed.len()))
         .chain(changes.removed.iter().map(|index| format!("  {index}")));
+    let left_pool = std::iter::once(format!("Left the pool ({})", left.len()))
+        .chain(left.iter().map(|index| ship_line(new, &curated, index)));
+    let joined_pool = std::iter::once(format!("Joined the pool ({})", joined.len()))
+        .chain(joined.iter().map(|index| ship_line(new, &curated, index)));
     let lookalikes = std::iter::once(format!("Lookalike candidates ({})", candidates.len())).chain(
         candidates.iter().map(|pair| {
             format!(
@@ -106,6 +122,8 @@ pub fn diff_report(old: Option<&Catalog>, new: &Catalog, config: &CurationConfig
         .chain(regrouped)
         .chain(added)
         .chain(removed)
+        .chain(left_pool)
+        .chain(joined_pool)
         .chain(lookalikes)
         .chain(problem_lines)
         .collect::<Vec<_>>()
