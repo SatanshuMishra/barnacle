@@ -10,3 +10,6 @@ groups = [
     "upgradeableUltimate",
     "superShip",
 ]
+
+[[keep]]
+index = "PWSD907"
