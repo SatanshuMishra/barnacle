@@ -718,7 +718,6 @@ fn cell_text(cell: Cell) -> &'static str {
     match cell {
         Cell::In => "in",
         Cell::Out => "out",
-        Cell::None => "-",
     }
 }
 

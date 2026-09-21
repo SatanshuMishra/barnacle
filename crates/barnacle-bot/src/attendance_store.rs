@@ -763,6 +763,19 @@ impl Attendance {
             .execute(&mut *transaction)
             .await?;
         }
+        for hour in Hour::ALL.iter().filter(|hour| !hours.contains(hour)) {
+            sqlx::query(
+                "INSERT INTO cb_marks (season_id, night, user_id, hour, attending, answered_at_ms, changed_at_ms) VALUES (?, ?, ?, ?, 0, ?, ?) ON CONFLICT (season_id, night, user_id, hour) DO NOTHING",
+            )
+            .bind(season)
+            .bind(&label)
+            .bind(user)
+            .bind(i64::from(hour.get()))
+            .bind(at)
+            .bind(at)
+            .execute(&mut *transaction)
+            .await?;
+        }
         transaction.commit().await?;
         Ok(())
     }
