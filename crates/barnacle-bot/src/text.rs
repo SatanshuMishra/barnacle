@@ -13,16 +13,20 @@ use jiff::civil::Date;
 
 use crate::attendance::Cell;
 use crate::attendance::HourTally;
+use crate::attendance::PostsReport;
 use crate::attendance::PurgeReport;
 use crate::attendance::RosterRow;
 use crate::attendance::SignupView;
 use crate::attendance::TickReport;
 use crate::attendance_store::Season;
+use crate::failure::join_names;
+use crate::ids::ChannelId;
 use crate::ids::RoleId;
 use crate::schedule::Hour;
 use crate::schedule::Night;
 use crate::solves::Ranking;
 use crate::solves::Standing;
+use crate::voice_text;
 
 pub const EMBED_COLOUR: u32 = 0x2E6F6B;
 pub const ROUND_TITLE: &str = "Name that ship";
@@ -30,12 +34,10 @@ pub const ROUND_DESCRIPTION: &str = "First correct answer in chat wins.";
 pub const TIERS_FIELD: &str = "Tiers";
 pub const PAPER_EXCLUDED: &str = "Paper ships excluded";
 pub const CANCEL_LABEL: &str = "Cancel";
-pub const ALREADY_RUNNING: &str = "This channel already has a round running.";
 pub const CANCEL_REFUSED: &str =
     "Only the player who started this round, or someone who can manage messages, can end it.";
 pub const ROUND_OVER: &str = "That round has already ended.";
 pub const SOMETHING_WENT_WRONG: &str = "Something went wrong. Nothing was changed.";
-pub const NO_SHIP_MATCHES: &str = "No ship matches that.";
 pub const ROUNDS_WON: &str = "Rounds won here";
 pub const BEST_TIME: &str = "Best time here";
 pub const NO_WINS_HERE: &str = "No rounds won here yet.";
@@ -54,22 +56,15 @@ pub const NO_ANSWERS_YET: &str = "No one has answered yet.";
 pub const SIGNUPS_CLOSE_AT_START: &str = "Sign-ups close when the night starts.";
 pub const SIGNUPS_CLOSED: &str = "Sign-ups closed";
 pub const SEASON_GONE: &str = "This season no longer exists.";
-pub const RUN_IN_TEXT_CHANNEL: &str = "Run this in a text channel.";
-pub const DATE_FORMAT: &str = "Dates look like 2026-09-16.";
-pub const LAST_DAY_BEFORE_FIRST: &str = "The last day is before the first day.";
-pub const NO_NIGHTS_LEFT: &str = "That range has no CB nights left.";
-pub const RANGE_TOO_FAR: &str = "A season has to sit within six months either side of today.";
 pub const NO_SEASON_HERE: &str = "No CB season is set up here.";
 pub const ROSTER_HEADER: &str = "1    2    3    4    ";
-pub const NOTHING_TO_CHANGE: &str = "Name at least one thing to change.";
-pub const CODENAME_BOTH_WAYS: &str = "Pass a codename or clear it, not both.";
-pub const PING_BOTH_WAYS: &str = "Pass a ping role or clear it, not both.";
 pub const CLEAR_FAILED_MOVE: &str = "Some sign-up posts could not be removed from the old channel, so nothing moved. Check that the bot can manage messages there, then run this again.";
 pub const CLEAR_FAILED_END: &str = "Some sign-up posts could not be removed, so the season is still running. Check that the bot can manage messages in its channel, then run this again.";
-pub const REFRESH_FAILED: &str =
-    " Its sign-up post could not be updated; run this again once the bot can edit it.";
-pub const REHEARSAL_ONLY: &str = "This server is not set up for rehearsals.";
-pub const NOTHING_PENDING: &str = "Nothing is waiting to happen in this rehearsal.";
+pub const FAILURES_LOGGED: &str = "Barnacle's log records the reason for each.";
+const CLEAR_FAILED_EDIT: &str =
+    "Some sign-up posts outside the new dates could not be cleared; run this again to retry.";
+const REFRESH_FAILED: &str =
+    "Its sign-up post could not be updated; run this again once Barnacle can edit it.";
 const RESET_BLOCKED_HEAD: &str =
     "Some sign-up posts could not be removed, so no season or answer was deleted.";
 const RESET_BLOCKED_TAIL: &str =
@@ -185,24 +180,186 @@ pub fn cancelled(by: UserId, reveal: &Reveal) -> String {
     )
 }
 
-pub fn empty_pool(options: &RoundOptions) -> String {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    WrongChannelType,
+    MissingBotPermissions {
+        names: Vec<&'static str>,
+        channel: Option<ChannelId>,
+    },
+    DateFormat,
+    LastDayBeforeFirst,
+    DatesTooFar,
+    NoNightsLeft,
+    SeasonNumberTaken(u32),
+    SeasonOverlaps(Season),
+    SeasonNotFound(u32),
+    SeasonAlreadyHere(u32),
+    NothingToChange,
+    CodenameBothWays,
+    PingBothWays,
+    RehearsalOnly,
+    NothingPending,
+    RoundAlreadyRunning,
+    EmptyPool(RoundOptions),
+    NoShipMatches,
+    NameEmpty,
+    NameTooLong {
+        limit: usize,
+    },
+    NotAHub,
+    CategoryAndTopLevel,
+    HubNothingToChange,
+}
+
+impl Refusal {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Refusal::WrongChannelType => "wrong_channel_type",
+            Refusal::MissingBotPermissions { .. } => "missing_bot_permissions",
+            Refusal::DateFormat => "date_format",
+            Refusal::LastDayBeforeFirst => "last_day_before_first",
+            Refusal::DatesTooFar => "dates_too_far",
+            Refusal::NoNightsLeft => "no_nights_left",
+            Refusal::SeasonNumberTaken(_) => "season_number_taken",
+            Refusal::SeasonOverlaps(_) => "season_overlaps",
+            Refusal::SeasonNotFound(_) => "season_not_found",
+            Refusal::SeasonAlreadyHere(_) => "season_already_here",
+            Refusal::NothingToChange => "nothing_to_change",
+            Refusal::CodenameBothWays => "codename_both_ways",
+            Refusal::PingBothWays => "ping_both_ways",
+            Refusal::RehearsalOnly => "rehearsal_only",
+            Refusal::NothingPending => "nothing_pending",
+            Refusal::RoundAlreadyRunning => "round_already_running",
+            Refusal::EmptyPool(_) => "empty_pool",
+            Refusal::NoShipMatches => "no_ship_matches",
+            Refusal::NameEmpty => "name_empty",
+            Refusal::NameTooLong { .. } => "name_too_long",
+            Refusal::NotAHub => "not_a_hub",
+            Refusal::CategoryAndTopLevel => "category_and_top_level",
+            Refusal::HubNothingToChange => "hub_nothing_to_change",
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            Refusal::WrongChannelType => {
+                "Sign-up posts go in a text channel. Run this in a text channel.".to_owned()
+            }
+            Refusal::MissingBotPermissions { names, channel } => {
+                missing_bot_permissions(names, *channel)
+            }
+            Refusal::DateFormat => {
+                "Dates look like 2026-09-16. Run the command again with the dates written that way."
+                    .to_owned()
+            }
+            Refusal::LastDayBeforeFirst => {
+                "The last day is before the first day. Give a last day on or after the first day."
+                    .to_owned()
+            }
+            Refusal::DatesTooFar => {
+                "A season has to sit within six months either side of today. Pick dates closer to today."
+                    .to_owned()
+            }
+            Refusal::NoNightsLeft => {
+                "That range has no CB nights left. Pick dates with a CB night still ahead."
+                    .to_owned()
+            }
+            Refusal::SeasonNumberTaken(number) => format!(
+                "Season {number} already exists. Use another number, or end that season first with /cb season end."
+            ),
+            Refusal::SeasonOverlaps(other) => format!(
+                "That range overlaps Season {} ({} to {}). Pick dates outside it, or change that season's dates with /cb season edit.",
+                other.number,
+                other.range.first_day(),
+                other.range.last_day()
+            ),
+            Refusal::SeasonNotFound(number) => format!(
+                "No Season {number} is set up here. /cb season show lists the seasons that are."
+            ),
+            Refusal::SeasonAlreadyHere(number) => format!(
+                "Season {number} already posts in this channel. To move it, run this in the channel it should post in."
+            ),
+            Refusal::NothingToChange => {
+                "Nothing to change. Give a new_number, first_day, last_day, codename or ping_role, or use clear_codename or clear_ping_role."
+                    .to_owned()
+            }
+            Refusal::CodenameBothWays => "Pass a codename or clear it, not both.".to_owned(),
+            Refusal::PingBothWays => "Pass a ping role or clear it, not both.".to_owned(),
+            Refusal::RehearsalOnly => {
+                "This server is not set up for rehearsals. Whoever runs Barnacle can list it under [rehearsal] in barnacle.toml, then restart Barnacle."
+                    .to_owned()
+            }
+            Refusal::NothingPending => {
+                "Nothing is waiting to happen in this rehearsal. /rehearse start sets up another rehearsal season."
+                    .to_owned()
+            }
+            Refusal::RoundAlreadyRunning => {
+                "This channel already has a round running. Name the ship or wait for the round to end, then start another."
+                    .to_owned()
+            }
+            Refusal::EmptyPool(options) => empty_pool(options),
+            Refusal::NoShipMatches => {
+                "No ship matches that. Pick one of the names suggested as you type.".to_owned()
+            }
+            Refusal::NameEmpty => {
+                "A name needs at least one character that is not a space. Run the command again with a name."
+                    .to_owned()
+            }
+            Refusal::NameTooLong { limit } => {
+                format!("{} Give a shorter one.", voice_text::name_too_long(*limit))
+            }
+            Refusal::NotAHub => {
+                "That channel is not a Join to Create channel in this server. `/voice hub list` shows the ones that are."
+                    .to_owned()
+            }
+            Refusal::CategoryAndTopLevel => {
+                "Pick a category or top_level, not both.".to_owned()
+            }
+            Refusal::HubNothingToChange => {
+                "Nothing to change. Give a new name, room_name, category or top_level.".to_owned()
+            }
+        }
+    }
+}
+
+fn missing_bot_permissions(names: &[&str], channel: Option<ChannelId>) -> String {
+    let (place, whose) = match channel {
+        Some(channel) => (format!("<#{}>", channel.get()), "that"),
+        None => ("this channel".to_owned(), "this"),
+    };
+    format!(
+        "Barnacle needs {} in {place}. A server admin can grant {} to Barnacle's role or in {whose} channel's permissions, then run the command again.",
+        join_names(names),
+        them(names.len())
+    )
+}
+
+fn empty_pool(options: &RoundOptions) -> String {
     let tiers = if options.spans_several_tiers() {
         format!("tiers {}", tier_range(options))
     } else {
         format!("tier {}", tier_range(options))
     };
     if options.historical() {
-        format!("No ships fit {tiers} with paper ships excluded.")
+        format!(
+            "No ships fit {tiers} with paper ships excluded. Try a wider range with min_tier and max_tier, or leave historical off."
+        )
     } else {
-        format!("No ships fit {tiers}.")
+        format!("No ships fit {tiers}. Try a wider range with min_tier and max_tier.")
     }
 }
 
-pub fn missing_permissions(names: &[&str]) -> String {
-    format!(
-        "I need these permissions in this channel to run a round: {}.",
-        names.join(", ")
-    )
+fn them(count: usize) -> &'static str {
+    if count == 1 { "it" } else { "them" }
+}
+
+pub fn failures_noted(reply: &str, failures: usize) -> String {
+    if failures == 0 {
+        reply.to_owned()
+    } else {
+        format!("{reply} {FAILURES_LOGGED}")
+    }
 }
 
 pub fn best_time(best: Option<Duration>) -> String {
@@ -376,33 +533,12 @@ fn nights(count: usize) -> String {
     }
 }
 
-pub fn season_number_taken(number: u32) -> String {
-    format!("Season {number} already exists. End it first with /cb season end.")
-}
-
-pub fn season_overlaps(other: &Season) -> String {
-    format!(
-        "That range overlaps Season {} ({} to {}).",
-        other.number,
-        other.range.first_day(),
-        other.range.last_day()
-    )
-}
-
 pub fn season_removed(number: u32) -> String {
     format!("Season {number} was removed. Nothing had been posted.")
 }
 
 pub fn season_shortened(number: u32, last_day: Date) -> String {
     format!("Season {number} ends after {last_day}. No more sign-up posts.")
-}
-
-pub fn season_not_found(number: u32) -> String {
-    format!("No Season {number} is set up here.")
-}
-
-pub fn season_already_here(number: u32) -> String {
-    format!("Season {number} already posts in this channel.")
 }
 
 pub fn rehearsal_started(season: &Season, nights_left: usize, post_at_unix: Option<i64>) -> String {
@@ -433,6 +569,23 @@ pub fn season_edited(
         cleared_outside_the_range(cleared),
         manage_with(season),
     ])
+}
+
+pub fn season_edit_reached(edited: &str, cleared: &PostsReport, refreshed: &PostsReport) -> String {
+    let reply = sentences(&[
+        edited.to_owned(),
+        if cleared.failures == 0 {
+            String::new()
+        } else {
+            CLEAR_FAILED_EDIT.to_owned()
+        },
+        if refreshed.failures == 0 {
+            String::new()
+        } else {
+            REFRESH_FAILED.to_owned()
+        },
+    ]);
+    failures_noted(&reply, cleared.failures + refreshed.failures)
 }
 
 pub fn season_moved(

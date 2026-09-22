@@ -1,10 +1,12 @@
 mod common;
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use barnacle_bot::attendance::Cell;
 use barnacle_bot::attendance::HourTally;
 use barnacle_bot::attendance::PostTag;
+use barnacle_bot::attendance::PostsReport;
 use barnacle_bot::attendance::PurgeReport;
 use barnacle_bot::attendance::RosterRow;
 use barnacle_bot::attendance::SignupView;
@@ -20,6 +22,7 @@ use barnacle_bot::schedule::parse_day;
 use barnacle_bot::solves::Ranking;
 use barnacle_bot::solves::Standing;
 use barnacle_bot::text;
+use barnacle_bot::text::Refusal;
 use barnacle_catalog::Nation;
 use barnacle_catalog::ShipClass;
 use barnacle_guess::Hint;
@@ -179,18 +182,18 @@ fn ship_names_cannot_inject_formatting() {
 }
 
 #[test]
-fn an_empty_pool_names_the_options() {
+fn an_empty_pool_names_the_options_and_how_to_widen_them() {
     assert_eq!(
-        text::empty_pool(&RoundOptions::new(Some(tier(6)), Some(tier(8)), None)),
-        "No ships fit tiers VI-VIII."
+        Refusal::EmptyPool(RoundOptions::new(Some(tier(6)), Some(tier(8)), None)).message(),
+        "No ships fit tiers VI-VIII. Try a wider range with min_tier and max_tier."
     );
     assert_eq!(
-        text::empty_pool(&RoundOptions::new(Some(tier(6)), Some(tier(8)), Some(true))),
-        "No ships fit tiers VI-VIII with paper ships excluded."
+        Refusal::EmptyPool(RoundOptions::new(Some(tier(6)), Some(tier(8)), Some(true))).message(),
+        "No ships fit tiers VI-VIII with paper ships excluded. Try a wider range with min_tier and max_tier, or leave historical off."
     );
     assert_eq!(
-        text::empty_pool(&RoundOptions::new(Some(tier(2)), Some(tier(2)), None)),
-        "No ships fit tier II."
+        Refusal::EmptyPool(RoundOptions::new(Some(tier(2)), Some(tier(2)), None)).message(),
+        "No ships fit tier II. Try a wider range with min_tier and max_tier."
     );
 }
 
@@ -224,11 +227,208 @@ fn about_names_the_data_and_carries_the_wargaming_notice() {
     assert!(about.ends_with(text::WARGAMING_NOTICE));
 }
 
+fn every_refusal() -> Vec<Refusal> {
+    vec![
+        Refusal::WrongChannelType,
+        Refusal::MissingBotPermissions {
+            names: vec!["Embed Links"],
+            channel: None,
+        },
+        Refusal::DateFormat,
+        Refusal::LastDayBeforeFirst,
+        Refusal::DatesTooFar,
+        Refusal::NoNightsLeft,
+        Refusal::SeasonNumberTaken(35),
+        Refusal::SeasonOverlaps(season(34, None, "2026-06-10", "2026-08-02")),
+        Refusal::SeasonNotFound(35),
+        Refusal::SeasonAlreadyHere(35),
+        Refusal::NothingToChange,
+        Refusal::CodenameBothWays,
+        Refusal::PingBothWays,
+        Refusal::RehearsalOnly,
+        Refusal::NothingPending,
+        Refusal::RoundAlreadyRunning,
+        Refusal::EmptyPool(RoundOptions::default()),
+        Refusal::NoShipMatches,
+        Refusal::NameEmpty,
+        Refusal::NameTooLong { limit: 90 },
+        Refusal::NotAHub,
+        Refusal::CategoryAndTopLevel,
+        Refusal::HubNothingToChange,
+    ]
+}
+
+fn variant(refusal: &Refusal) -> usize {
+    match refusal {
+        Refusal::WrongChannelType => 0,
+        Refusal::MissingBotPermissions { .. } => 1,
+        Refusal::DateFormat => 2,
+        Refusal::LastDayBeforeFirst => 3,
+        Refusal::DatesTooFar => 4,
+        Refusal::NoNightsLeft => 5,
+        Refusal::SeasonNumberTaken(_) => 6,
+        Refusal::SeasonOverlaps(_) => 7,
+        Refusal::SeasonNotFound(_) => 8,
+        Refusal::SeasonAlreadyHere(_) => 9,
+        Refusal::NothingToChange => 10,
+        Refusal::CodenameBothWays => 11,
+        Refusal::PingBothWays => 12,
+        Refusal::RehearsalOnly => 13,
+        Refusal::NothingPending => 14,
+        Refusal::RoundAlreadyRunning => 15,
+        Refusal::EmptyPool(_) => 16,
+        Refusal::NoShipMatches => 17,
+        Refusal::NameEmpty => 18,
+        Refusal::NameTooLong { .. } => 19,
+        Refusal::NotAHub => 20,
+        Refusal::CategoryAndTopLevel => 21,
+        Refusal::HubNothingToChange => 22,
+    }
+}
+
+const REFUSAL_VARIANTS: usize = 23;
+
 #[test]
-fn missing_permissions_are_listed_in_one_sentence() {
+fn every_refusal_code_is_unique_and_snake_case() {
+    let refusals = every_refusal();
     assert_eq!(
-        text::missing_permissions(&["Attach Files", "Read Message History"]),
-        "I need these permissions in this channel to run a round: Attach Files, Read Message History."
+        refusals.iter().map(variant).collect::<BTreeSet<usize>>(),
+        (0..REFUSAL_VARIANTS).collect::<BTreeSet<usize>>(),
+        "every_refusal must build each variant once"
+    );
+    let codes: Vec<&str> = refusals.iter().map(Refusal::code).collect();
+    assert_eq!(
+        codes.iter().collect::<BTreeSet<_>>().len(),
+        codes.len(),
+        "{codes:?}"
+    );
+    for code in &codes {
+        assert!(
+            !code.is_empty()
+                && code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+                && !code.starts_with('_')
+                && !code.ends_with('_')
+                && !code.contains("__"),
+            "{code} is not snake_case"
+        );
+    }
+    assert_eq!(
+        Refusal::MissingBotPermissions {
+            names: vec!["Embed Links"],
+            channel: None
+        }
+        .code(),
+        "missing_bot_permissions"
+    );
+    assert_eq!(Refusal::DateFormat.code(), "date_format");
+    assert_eq!(Refusal::SeasonNotFound(35).code(), "season_not_found");
+}
+
+#[test]
+fn missing_bot_permissions_are_named_with_who_can_grant_them() {
+    assert_eq!(
+        Refusal::MissingBotPermissions {
+            names: vec!["Embed Links"],
+            channel: None
+        }
+        .message(),
+        "Barnacle needs Embed Links in this channel. A server admin can grant it to Barnacle's role or in this channel's permissions, then run the command again."
+    );
+    assert_eq!(
+        Refusal::MissingBotPermissions {
+            names: vec!["View Channel", "Send Messages", "Embed Links"],
+            channel: None
+        }
+        .message(),
+        "Barnacle needs View Channel, Send Messages and Embed Links in this channel. A server admin can grant them to Barnacle's role or in this channel's permissions, then run the command again."
+    );
+    assert_eq!(
+        Refusal::MissingBotPermissions {
+            names: vec!["Send Messages", "Read Message History"],
+            channel: Some(ChannelId::new(123))
+        }
+        .message(),
+        "Barnacle needs Send Messages and Read Message History in <#123>. A server admin can grant them to Barnacle's role or in that channel's permissions, then run the command again."
+    );
+}
+
+#[test]
+fn every_refusal_says_what_to_do_next() {
+    assert_eq!(
+        Refusal::WrongChannelType.message(),
+        "Sign-up posts go in a text channel. Run this in a text channel."
+    );
+    assert_eq!(
+        Refusal::DateFormat.message(),
+        "Dates look like 2026-09-16. Run the command again with the dates written that way."
+    );
+    assert_eq!(
+        Refusal::LastDayBeforeFirst.message(),
+        "The last day is before the first day. Give a last day on or after the first day."
+    );
+    assert_eq!(
+        Refusal::DatesTooFar.message(),
+        "A season has to sit within six months either side of today. Pick dates closer to today."
+    );
+    assert_eq!(
+        Refusal::NoNightsLeft.message(),
+        "That range has no CB nights left. Pick dates with a CB night still ahead."
+    );
+    assert_eq!(
+        Refusal::NothingToChange.message(),
+        "Nothing to change. Give a new_number, first_day, last_day, codename or ping_role, or use clear_codename or clear_ping_role."
+    );
+    assert_eq!(
+        Refusal::CodenameBothWays.message(),
+        "Pass a codename or clear it, not both."
+    );
+    assert_eq!(
+        Refusal::PingBothWays.message(),
+        "Pass a ping role or clear it, not both."
+    );
+    assert_eq!(
+        Refusal::RehearsalOnly.message(),
+        "This server is not set up for rehearsals. Whoever runs Barnacle can list it under [rehearsal] in barnacle.toml, then restart Barnacle."
+    );
+    assert_eq!(
+        Refusal::NothingPending.message(),
+        "Nothing is waiting to happen in this rehearsal. /rehearse start sets up another rehearsal season."
+    );
+    assert_eq!(
+        Refusal::RoundAlreadyRunning.message(),
+        "This channel already has a round running. Name the ship or wait for the round to end, then start another."
+    );
+    assert_eq!(
+        Refusal::NoShipMatches.message(),
+        "No ship matches that. Pick one of the names suggested as you type."
+    );
+    assert_eq!(
+        Refusal::NameEmpty.message(),
+        "A name needs at least one character that is not a space. Run the command again with a name."
+    );
+    assert_eq!(
+        Refusal::NameTooLong { limit: 90 }.message(),
+        "That name is too long; the limit is 90 characters. Give a shorter one."
+    );
+    assert_eq!(
+        Refusal::NotAHub.message(),
+        "That channel is not a Join to Create channel in this server. `/voice hub list` shows the ones that are."
+    );
+    assert_eq!(
+        Refusal::CategoryAndTopLevel.message(),
+        "Pick a category or top_level, not both."
+    );
+    assert_eq!(
+        Refusal::HubNothingToChange.message(),
+        "Nothing to change. Give a new name, room_name, category or top_level."
+    );
+    assert!(
+        every_refusal()
+            .iter()
+            .all(|refusal| !refusal.message().contains("Reference")),
+        "a refusal of bad input carries no reference"
     );
 }
 
@@ -450,12 +650,12 @@ fn a_started_season_names_its_nights_and_its_first_post() {
 #[test]
 fn season_replies_name_the_season_and_its_dates() {
     assert_eq!(
-        text::season_number_taken(35),
-        "Season 35 already exists. End it first with /cb season end."
+        Refusal::SeasonNumberTaken(35).message(),
+        "Season 35 already exists. Use another number, or end that season first with /cb season end."
     );
     assert_eq!(
-        text::season_overlaps(&season(34, None, "2026-06-10", "2026-08-02")),
-        "That range overlaps Season 34 (2026-06-10 to 2026-08-02)."
+        Refusal::SeasonOverlaps(season(34, None, "2026-06-10", "2026-08-02")).message(),
+        "That range overlaps Season 34 (2026-06-10 to 2026-08-02). Pick dates outside it, or change that season's dates with /cb season edit."
     );
     assert_eq!(
         text::season_removed(35),
@@ -465,7 +665,10 @@ fn season_replies_name_the_season_and_its_dates() {
         text::season_shortened(35, parse_day("2026-10-01").unwrap()),
         "Season 35 ends after 2026-10-01. No more sign-up posts."
     );
-    assert_eq!(text::season_not_found(35), "No Season 35 is set up here.");
+    assert_eq!(
+        Refusal::SeasonNotFound(35).message(),
+        "No Season 35 is set up here. /cb season show lists the seasons that are."
+    );
 }
 
 #[test]
@@ -557,8 +760,8 @@ fn a_moved_season_names_the_new_channel_and_the_next_post() {
         "Season 35: Komodo Dragon now posts in this channel. 1 sign-up post was cleared from the old channel. Nothing further will post."
     );
     assert_eq!(
-        text::season_already_here(35),
-        "Season 35 already posts in this channel."
+        Refusal::SeasonAlreadyHere(35).message(),
+        "Season 35 already posts in this channel. To move it, run this in the channel it should post in."
     );
 }
 
@@ -693,10 +896,6 @@ fn a_step_reports_what_the_beat_did() {
         "Moved the rehearsal clock to <t:1790811000:F>. 1 step failed."
     );
     assert!(!text::stepped(1_790_811_000, &one_failure).contains("Nothing happened"));
-    assert_eq!(
-        text::NOTHING_PENDING,
-        "Nothing is waiting to happen in this rehearsal."
-    );
 }
 
 #[test]
@@ -771,5 +970,64 @@ fn a_blocked_reset_says_what_it_had_already_cleared() {
             failures: 2
         }),
         "Some sign-up posts could not be removed, so no season or answer was deleted. 8 sign-up posts were already cleared. Check that the bot can manage messages here, then run this again."
+    );
+}
+
+fn posts(touched: usize, failures: usize) -> PostsReport {
+    PostsReport { touched, failures }
+}
+
+#[test]
+fn a_bulk_step_with_failures_points_to_the_log() {
+    assert_eq!(
+        text::failures_noted(text::CLEAR_FAILED_MOVE, 2),
+        "Some sign-up posts could not be removed from the old channel, so nothing moved. Check that the bot can manage messages there, then run this again. Barnacle's log records the reason for each."
+    );
+    assert_eq!(
+        text::failures_noted(text::CLEAR_FAILED_END, 1),
+        "Some sign-up posts could not be removed, so the season is still running. Check that the bot can manage messages in its channel, then run this again. Barnacle's log records the reason for each."
+    );
+    let stepped = text::stepped(
+        1_790_811_000,
+        &TickReport {
+            posted: tags(1),
+            failures: 2,
+            ..TickReport::default()
+        },
+    );
+    assert_eq!(
+        text::failures_noted(&stepped, 2),
+        "Moved the rehearsal clock to <t:1790811000:F>. 1 sign-up post went up. 2 steps failed. Barnacle's log records the reason for each."
+    );
+    let blocked = text::reset_blocked(&PurgeReport {
+        seasons: 0,
+        messages: 8,
+        answers: 0,
+        failures: 2,
+    });
+    assert!(text::failures_noted(&blocked, 2).starts_with(&blocked));
+    assert!(text::failures_noted(&blocked, 2).ends_with(" 8 sign-up posts were already cleared. Check that the bot can manage messages here, then run this again. Barnacle's log records the reason for each."));
+    assert_eq!(text::failures_noted(&stepped, 0), stepped);
+}
+
+#[test]
+fn a_season_edit_that_could_not_reach_every_post_says_so_and_keeps_its_counts() {
+    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-10-21");
+    let edited = text::season_edited(&komodo, 18, None, 2);
+    assert_eq!(
+        text::season_edit_reached(&edited, &posts(2, 0), &posts(1, 0)),
+        edited
+    );
+    assert_eq!(
+        text::season_edit_reached(&edited, &posts(2, 0), &posts(0, 1)),
+        "Season 35: Komodo Dragon updated. 21 CB nights, 18 still ahead. Next sign-up post: within a minute. 2 sign-up posts outside the new dates were cleared. Manage it with number 35. Its sign-up post could not be updated; run this again once Barnacle can edit it. Barnacle's log records the reason for each."
+    );
+    assert_eq!(
+        text::season_edit_reached(&edited, &posts(2, 1), &posts(1, 0)),
+        "Season 35: Komodo Dragon updated. 21 CB nights, 18 still ahead. Next sign-up post: within a minute. 2 sign-up posts outside the new dates were cleared. Manage it with number 35. Some sign-up posts outside the new dates could not be cleared; run this again to retry. Barnacle's log records the reason for each."
+    );
+    assert!(
+        text::season_edit_reached(&edited, &posts(2, 1), &posts(0, 1))
+            .ends_with("could not be cleared; run this again to retry. Its sign-up post could not be updated; run this again once Barnacle can edit it. Barnacle's log records the reason for each.")
     );
 }

@@ -1,15 +1,10 @@
+use crate::failure::join_names;
 use crate::ids::ChannelId;
 
 pub const HUB_DEFAULT_NAME: &str = "Join to Create";
-pub const NAME_EMPTY: &str = "A name needs at least one character that is not a space.";
-pub const NOT_A_HUB: &str = "That channel is not a Join to Create channel in this server. `/voice hub list` shows the ones that are.";
-pub const NOTHING_TO_CHANGE: &str =
-    "Nothing to change. Give a new name, room_name, category or top_level.";
-pub const CATEGORY_AND_TOP_LEVEL: &str = "Pick a category or top_level, not both.";
 pub const MOVED_TO_TOP: &str = "moved out of its category";
 pub const NO_HUBS: &str =
     "This server has no Join to Create channels. `/voice hub create` makes one.";
-pub const NEEDS_MANAGE_CHANNELS: &str = "Barnacle needs Manage Channels there to do that.";
 
 pub fn name_too_long(limit: usize) -> String {
     format!("That name is too long; the limit is {limit} characters.")
@@ -52,6 +47,26 @@ pub fn hub_line(hub: ChannelId, room_name: &str, open: usize) -> String {
     format!(
         "<#{}> opens `{room_name}-#` rooms, {open} open now",
         hub.get()
+    )
+}
+
+pub fn hub_line_ready(hub: ChannelId, room_name: &str, open: usize, blockers: &[&str]) -> String {
+    let line = hub_line(hub, room_name, open);
+    if blockers.is_empty() {
+        line
+    } else {
+        format!(
+            "{line}; cannot open rooms: Barnacle lacks {}",
+            join_names(blockers)
+        )
+    }
+}
+
+pub fn cannot_open_rooms(names: &[&str]) -> String {
+    let them = if names.len() == 1 { "it" } else { "them" };
+    format!(
+        "Barnacle cannot open rooms from it yet: it lacks {}. A server admin can grant {them} to Barnacle's role, or remove {them} from the channel's permissions.",
+        join_names(names)
     )
 }
 
