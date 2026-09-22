@@ -12,6 +12,7 @@ use crate::attendance::ClickOutcome;
 use crate::failure;
 use crate::failure::Failure;
 use crate::failure::Kind;
+use crate::failure::OptionProblem;
 use crate::failure::Scope;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
@@ -454,16 +455,30 @@ pub async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
         }
         poise::FrameworkError::ArgumentParse { error, ctx, .. } => {
             let scope = Scope::of_command(ctx);
-            failure::refused(
-                "command.refused",
-                "a command option could not be read",
-                "invalid_option",
-                &scope,
-            );
-            let content = format!(
-                "Barnacle could not read one of the options you gave `/{}`: {error}. Check it and try again.",
-                ctx.command().qualified_name
-            );
+            let command = &ctx.command().qualified_name;
+            let content = match OptionProblem::of(&*error) {
+                OptionProblem::Failed(failure) => {
+                    failure::report(
+                        "command.failed",
+                        "a command option could not be looked up",
+                        &failure,
+                        &scope,
+                    );
+                    failure::command_failed(command, &failure)
+                }
+                OptionProblem::Unreadable(detail) => {
+                    failure::refused_because(
+                        "command.refused",
+                        "a command option could not be read",
+                        "invalid_option",
+                        &detail,
+                        &scope,
+                    );
+                    format!(
+                        "Barnacle could not read one of the options you gave `/{command}`: {error}. Check it and try again."
+                    )
+                }
+            };
             reply(ctx, content, &scope).await;
         }
         poise::FrameworkError::CommandStructureMismatch {

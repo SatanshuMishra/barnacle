@@ -289,6 +289,23 @@ fn classify(error: &(dyn std::error::Error + 'static)) -> Option<(Kind, Option<D
     None
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OptionProblem {
+    Unreadable(String),
+    Failed(Failure),
+}
+
+impl OptionProblem {
+    pub fn of(error: &(dyn std::error::Error + 'static)) -> OptionProblem {
+        let failure = Failure::from_error(error);
+        if failure.kind == Kind::Internal {
+            OptionProblem::Unreadable(failure.message)
+        } else {
+            OptionProblem::Failed(failure)
+        }
+    }
+}
+
 pub fn failed(what: &str, failure: &Failure) -> String {
     format!("{what}. {}", failure.explanation())
 }
@@ -543,6 +560,24 @@ pub fn refused(event: &'static str, summary: &str, reason: &'static str, scope: 
         summary,
         scope,
         "barnacle.refusal.reason" = reason,
+    );
+}
+
+pub fn refused_because(
+    event: &'static str,
+    summary: &str,
+    reason: &'static str,
+    detail: &str,
+    scope: &Scope,
+) {
+    scoped_event!(
+        tracing::Level::INFO,
+        event,
+        "refused",
+        summary,
+        scope,
+        "barnacle.refusal.reason" = reason,
+        "exception.message" = detail,
     );
 }
 
