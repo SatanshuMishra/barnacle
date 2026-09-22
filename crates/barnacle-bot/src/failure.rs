@@ -177,8 +177,12 @@ pub struct Failure {
 impl Failure {
     pub fn from_error(error: &(dyn std::error::Error + 'static)) -> Failure {
         let chain = || std::iter::successors(Some(error), |cause| cause.source());
-        let message = chain()
-            .map(|cause| cause.to_string())
+        let causes: Vec<String> = chain().map(|cause| cause.to_string()).collect();
+        let message = causes
+            .iter()
+            .zip(std::iter::once(None).chain(causes.iter().map(Some)))
+            .filter(|(cause, above)| *above != Some(*cause))
+            .map(|(cause, _)| cause.as_str())
             .collect::<Vec<_>>()
             .join(": ");
         let (kind, discord) = chain().find_map(classify).unwrap_or((Kind::Internal, None));

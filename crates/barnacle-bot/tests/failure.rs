@@ -585,3 +585,57 @@ fn an_option_that_cannot_be_parsed_stays_a_refusal_with_its_detail() {
         OptionProblem::Unreadable(_)
     ));
 }
+
+#[derive(Debug)]
+struct Echo {
+    text: &'static str,
+    inner: Option<Box<Echo>>,
+}
+
+impl std::fmt::Display for Echo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.text)
+    }
+}
+
+impl std::error::Error for Echo {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.inner
+            .as_deref()
+            .map(|inner| inner as &(dyn std::error::Error + 'static))
+    }
+}
+
+fn echo(texts: &[&'static str]) -> Echo {
+    texts
+        .iter()
+        .rev()
+        .fold(None, |inner, text| {
+            Some(Echo {
+                text,
+                inner: inner.map(Box::new),
+            })
+        })
+        .unwrap()
+}
+
+#[test]
+fn a_cause_repeating_the_error_above_it_is_written_once() {
+    assert_eq!(
+        Failure::from_error(&echo(&["Missing Access", "Missing Access"])).message,
+        "Missing Access"
+    );
+    assert_eq!(
+        Failure::from_error(&echo(&[
+            "the post failed",
+            "Missing Access",
+            "Missing Access"
+        ]))
+        .message,
+        "the post failed: Missing Access"
+    );
+    assert_eq!(
+        Failure::from_error(&echo(&["retry", "Missing Access", "retry"])).message,
+        "retry: Missing Access: retry"
+    );
+}
