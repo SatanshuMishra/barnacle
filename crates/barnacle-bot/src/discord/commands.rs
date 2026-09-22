@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use barnacle_guess::Draw;
@@ -26,6 +27,9 @@ use crate::attendance_store::NewSeason;
 use crate::attendance_store::Post;
 use crate::attendance_store::Season;
 use crate::attendance_store::SeasonChange;
+use crate::failure;
+use crate::failure::Failure;
+use crate::failure::Scope;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::Place;
@@ -40,6 +44,7 @@ use crate::table::StartOutcome;
 use crate::text;
 use crate::voice::HUB_NAME_LIMIT;
 use crate::voice::NameProblem;
+use crate::voice::ROOM_ACCESS;
 use crate::voice::ROOM_NAME_LIMIT;
 use crate::voice::clean_name;
 use crate::voice_store::Hub;
@@ -55,6 +60,12 @@ const MILLIS_PER_SECOND: u64 = 1000;
 const REHEARSAL_NIGHTS: u32 = 3;
 const REHEARSAL_NIGHTS_MAX: u32 = 7;
 const CODENAME_LIMIT: usize = 100;
+const CLOCK_BEFORE_1970: &str = "the clock reads before 1970";
+const CLOCK_OUT_OF_RANGE: &str = "the clock reads a time outside the supported calendar";
+const SIGNUP_ACCESS: serenity::Permissions = serenity::Permissions::VIEW_CHANNEL
+    .union(serenity::Permissions::SEND_MESSAGES)
+    .union(serenity::Permissions::EMBED_LINKS)
+    .union(serenity::Permissions::READ_MESSAGE_HISTORY);
 
 pub fn all() -> Vec<poise::Command<Data, Error>> {
     vec![
@@ -201,6 +212,64 @@ async fn private(ctx: Context<'_>, content: impl Into<String>) -> Result<(), Err
     Ok(())
 }
 
+async fn refuse(ctx: Context<'_>, refusal: text::Refusal) -> Result<(), Error> {
+    failure::refused(
+        "command.refused",
+        "a command was refused",
+        refusal.code(),
+        &Scope::of_command(ctx),
+    );
+    private(ctx, refusal.message()).await
+}
+
+fn reported(ctx: Context<'_>, failure: &Failure) -> String {
+    failure::report(
+        "command.failed",
+        "a command did not finish",
+        failure,
+        &Scope::of_command(ctx),
+    );
+    failure::command_failed(&ctx.command().qualified_name, failure)
+}
+
+async fn fail(ctx: Context<'_>, failure: Failure) -> Result<(), Error> {
+    let reply = reported(ctx, &failure);
+    private(ctx, reply).await
+}
+
+fn missing_here(names: Vec<&'static str>) -> Option<text::Refusal> {
+    (!names.is_empty()).then_some(text::Refusal::MissingBotPermissions {
+        names,
+        channel: None,
+    })
+}
+
+fn missing_in_season_channel(ctx: Context<'_>, season: &Season) -> Option<text::Refusal> {
+    let granted = failure::barnacle_permissions_in(ctx.cache(), season.guild, season.channel)?;
+    let names = (SIGNUP_ACCESS - granted).get_permission_names();
+    (!names.is_empty()).then_some(text::Refusal::MissingBotPermissions {
+        names,
+        channel: Some(season.channel),
+    })
+}
+
+fn manage_channels_denied(
+    error: &serenity::Error,
+    granted: &[Option<serenity::Permissions>],
+) -> Failure {
+    let missing = granted
+        .iter()
+        .flatten()
+        .fold(serenity::Permissions::empty(), |missing, granted| {
+            missing | (serenity::Permissions::MANAGE_CHANNELS - *granted)
+        });
+    if missing.is_empty() {
+        Failure::from_error(error)
+    } else {
+        Failure::missing_permissions(missing.get_permission_names())
+    }
+}
+
 fn channel_access(ctx: Context<'_>) -> ChannelAccess {
     let (permissions, channel) = match ctx {
         poise::Context::Application(app) => (
@@ -263,7 +332,12 @@ async fn remove_round_post(ctx: Context<'_>) {
     if let poise::Context::Application(app) = ctx
         && let Err(error) = app.interaction.delete_response(ctx.http()).await
     {
-        tracing::error!(%error, "a round post that timed out could not be removed");
+        failure::report(
+            "command.failed",
+            "a round post that timed out could not be removed",
+            &Failure::from_error(&error),
+            &Scope::of_command(ctx),
+        );
     }
 }
 
@@ -300,9 +374,8 @@ async fn guess(
     let Some(place) = place(ctx) else {
         return Ok(());
     };
-    let missing = wiring::missing_permissions(channel_access(ctx));
-    if !missing.is_empty() {
-        return private(ctx, text::missing_permissions(&missing)).await;
+    if let Some(refusal) = missing_here(wiring::missing_permissions(channel_access(ctx))) {
+        return refuse(ctx, refusal).await;
     }
     let data = ctx.data();
     let options = wiring::round_options(min_tier, max_tier, historical);
@@ -322,7 +395,12 @@ async fn guess(
                 Ok(id) => Ok::<Snowflake, Error>(Snowflake::new(id.get())),
                 Err(error) => {
                     if let Err(cleanup) = handle.delete(ctx).await {
-                        tracing::error!(%cleanup, "an untracked round post could not be removed");
+                        failure::report(
+                            "command.failed",
+                            "an untracked round post could not be removed",
+                            &Failure::from_error(&cleanup),
+                            &Scope::of_command(ctx),
+                        );
                     }
                     Err(error.into())
                 }
@@ -331,8 +409,8 @@ async fn guess(
         .await;
     match outcome {
         StartOutcome::Started { .. } => Ok(()),
-        StartOutcome::Busy => private(ctx, text::ALREADY_RUNNING).await,
-        StartOutcome::NoShips(_) => private(ctx, text::empty_pool(&options)).await,
+        StartOutcome::Busy => refuse(ctx, text::Refusal::RoundAlreadyRunning).await,
+        StartOutcome::NoShips(_) => refuse(ctx, text::Refusal::EmptyPool(options)).await,
         StartOutcome::PostFailed(error) => Err(error),
         StartOutcome::PostTimedOut => {
             remove_round_post(ctx).await;
@@ -372,7 +450,7 @@ async fn ship_info(
             .map(|card| (index.clone(), card))
     });
     let Some((index, card)) = card else {
-        return private(ctx, text::NO_SHIP_MATCHES).await;
+        return refuse(ctx, text::Refusal::NoShipMatches).await;
     };
     let embed = card.fields.into_iter().fold(
         serenity::CreateEmbed::new()
@@ -475,10 +553,8 @@ async fn leaderboard(
     ctx.defer().await?;
     let response = match leaderboard_embeds(ctx, place, request).await {
         Ok(embeds) => serenity::EditInteractionResponse::new().embeds(embeds),
-        Err(error) => {
-            tracing::error!(command = %ctx.command().qualified_name, %error, "a command failed");
-            serenity::EditInteractionResponse::new().content(text::SOMETHING_WENT_WRONG)
-        }
+        Err(error) => serenity::EditInteractionResponse::new()
+            .content(reported(ctx, &Failure::from_error(&*error))),
     };
     app.interaction.edit_response(ctx.http(), response).await?;
     Ok(())
@@ -569,31 +645,30 @@ async fn season_start(
         return Ok(());
     };
     if channel_kind(ctx) != Some(serenity::ChannelType::Text) {
-        return private(ctx, text::RUN_IN_TEXT_CHANNEL).await;
+        return refuse(ctx, text::Refusal::WrongChannelType).await;
     }
-    let missing = wiring::missing_signup_permissions(channel_access(ctx));
-    if !missing.is_empty() {
-        return private(ctx, text::missing_permissions(&missing)).await;
+    if let Some(refusal) = missing_here(wiring::missing_signup_permissions(channel_access(ctx))) {
+        return refuse(ctx, refusal).await;
     }
     let (Some(first), Some(last)) = (parse_day(&first_day), parse_day(&last_day)) else {
-        return private(ctx, text::DATE_FORMAT).await;
+        return refuse(ctx, text::Refusal::DateFormat).await;
     };
     let Some(range) = Range::new(first, last) else {
-        return private(ctx, text::LAST_DAY_BEFORE_FIRST).await;
+        return refuse(ctx, text::Refusal::LastDayBeforeFirst).await;
     };
     let now_unix = super::now_unix();
     let Some(today) = schedule::today(now_unix) else {
-        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+        return fail(ctx, Failure::internal(CLOCK_OUT_OF_RANGE)).await;
     };
     if !range.near(today) {
-        return private(ctx, text::RANGE_TOO_FAR).await;
+        return refuse(ctx, text::Refusal::DatesTooFar).await;
     }
     let nights_left = range.nights_left(now_unix);
     if nights_left == 0 {
-        return private(ctx, text::NO_NIGHTS_LEFT).await;
+        return refuse(ctx, text::Refusal::NoNightsLeft).await;
     }
     let Some(created_at_ms) = super::now_ms() else {
-        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+        return fail(ctx, Failure::internal(CLOCK_BEFORE_1970)).await;
     };
     let new = NewSeason {
         guild: place.guild,
@@ -610,8 +685,8 @@ async fn season_start(
             let started = text::season_started(&season, nights_left, next_post_at(range, now_unix));
             private(ctx, started).await
         }
-        CreateOutcome::NumberTaken => private(ctx, text::season_number_taken(number)).await,
-        CreateOutcome::Overlaps(other) => private(ctx, text::season_overlaps(&other)).await,
+        CreateOutcome::NumberTaken => refuse(ctx, text::Refusal::SeasonNumberTaken(number)).await,
+        CreateOutcome::Overlaps(other) => refuse(ctx, text::Refusal::SeasonOverlaps(other)).await,
     }
 }
 
@@ -676,18 +751,18 @@ async fn season_edit(
         || clearing_codename
         || clearing_ping_role;
     if !named {
-        return private(ctx, text::NOTHING_TO_CHANGE).await;
+        return refuse(ctx, text::Refusal::NothingToChange).await;
     }
     if codename.is_some() && clearing_codename {
-        return private(ctx, text::CODENAME_BOTH_WAYS).await;
+        return refuse(ctx, text::Refusal::CodenameBothWays).await;
     }
     if ping_role.is_some() && clearing_ping_role {
-        return private(ctx, text::PING_BOTH_WAYS).await;
+        return refuse(ctx, text::Refusal::PingBothWays).await;
     }
     let first = first_day.as_deref().map(parse_day);
     let last = last_day.as_deref().map(parse_day);
     if matches!(first, Some(None)) || matches!(last, Some(None)) {
-        return private(ctx, text::DATE_FORMAT).await;
+        return refuse(ctx, text::Refusal::DateFormat).await;
     }
     let change = SeasonChange {
         number: new_number,
@@ -706,48 +781,49 @@ async fn season_edit(
     };
     let now_unix = super::now_unix();
     let Some(today) = schedule::today(now_unix) else {
-        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+        return fail(ctx, Failure::internal(CLOCK_OUT_OF_RANGE)).await;
     };
-    let outcome = ctx
-        .data()
-        .signups
+    let signups = &ctx.data().signups;
+    let Some(season) = signups.store().live_season(place.guild, number).await? else {
+        return refuse(ctx, text::Refusal::SeasonNotFound(number)).await;
+    };
+    if let Some(refusal) = missing_in_season_channel(ctx, &season) {
+        return refuse(ctx, refusal).await;
+    }
+    let outcome = signups
         .store()
         .edit_season(place.guild, number, &change, today)
         .await?;
     match outcome {
         EditOutcome::Edited { after, .. } => {
-            let signups = &ctx.data().signups;
             ctx.defer_ephemeral().await?;
             let cleared = signups
                 .clear_posts(&after, ClearScope::OutsideRange, now_unix)
                 .await;
             let refreshed = signups.refresh_posts(&after, now_unix).await;
-            if cleared.failures > 0 || refreshed.failures > 0 {
-                tracing::warn!(
-                    season = after.id,
-                    cleared = cleared.failures,
-                    refreshed = refreshed.failures,
-                    "a season edit could not reach every sign-up post"
-                );
-            }
-            let mut edited = text::season_edited(
+            let edited = text::season_edited(
                 &after,
                 after.range.nights_left(now_unix),
                 next_post_at(after.range, now_unix),
                 cleared.touched,
             );
-            if refreshed.failures > 0 {
-                edited.push_str(text::REFRESH_FAILED);
-            }
-            private(ctx, edited).await
+            private(
+                ctx,
+                text::season_edit_reached(&edited, &cleared, &refreshed),
+            )
+            .await
         }
         EditOutcome::NumberTaken => {
-            private(ctx, text::season_number_taken(new_number.unwrap_or(number))).await
+            refuse(
+                ctx,
+                text::Refusal::SeasonNumberTaken(new_number.unwrap_or(number)),
+            )
+            .await
         }
-        EditOutcome::Overlaps(other) => private(ctx, text::season_overlaps(&other)).await,
-        EditOutcome::BadRange => private(ctx, text::LAST_DAY_BEFORE_FIRST).await,
-        EditOutcome::TooFar => private(ctx, text::RANGE_TOO_FAR).await,
-        EditOutcome::NotFound => private(ctx, text::season_not_found(number)).await,
+        EditOutcome::Overlaps(other) => refuse(ctx, text::Refusal::SeasonOverlaps(other)).await,
+        EditOutcome::BadRange => refuse(ctx, text::Refusal::LastDayBeforeFirst).await,
+        EditOutcome::TooFar => refuse(ctx, text::Refusal::DatesTooFar).await,
+        EditOutcome::NotFound => refuse(ctx, text::Refusal::SeasonNotFound(number)).await,
     }
 }
 
@@ -762,18 +838,20 @@ async fn season_move(
         return Ok(());
     };
     if channel_kind(ctx) != Some(serenity::ChannelType::Text) {
-        return private(ctx, text::RUN_IN_TEXT_CHANNEL).await;
+        return refuse(ctx, text::Refusal::WrongChannelType).await;
     }
-    let missing = wiring::missing_signup_permissions(channel_access(ctx));
-    if !missing.is_empty() {
-        return private(ctx, text::missing_permissions(&missing)).await;
+    if let Some(refusal) = missing_here(wiring::missing_signup_permissions(channel_access(ctx))) {
+        return refuse(ctx, refusal).await;
     }
     let signups = &ctx.data().signups;
     let Some(season) = signups.store().live_season(place.guild, number).await? else {
-        return private(ctx, text::season_not_found(number)).await;
+        return refuse(ctx, text::Refusal::SeasonNotFound(number)).await;
     };
     if season.channel == place.channel {
-        return private(ctx, text::season_already_here(number)).await;
+        return refuse(ctx, text::Refusal::SeasonAlreadyHere(number)).await;
+    }
+    if let Some(refusal) = missing_in_season_channel(ctx, &season) {
+        return refuse(ctx, refusal).await;
     }
     let now_unix = super::now_unix();
     ctx.defer_ephemeral().await?;
@@ -781,19 +859,18 @@ async fn season_move(
         .clear_posts(&season, ClearScope::All, now_unix)
         .await;
     if cleared.failures > 0 {
-        tracing::warn!(
-            season = season.id,
-            failures = cleared.failures,
-            "a season move left sign-up posts in the old channel"
-        );
-        return private(ctx, text::CLEAR_FAILED_MOVE).await;
+        return private(
+            ctx,
+            text::failures_noted(text::CLEAR_FAILED_MOVE, cleared.failures),
+        )
+        .await;
     }
     if !signups
         .store()
         .move_season(place.guild, season.id, place.channel)
         .await?
     {
-        return private(ctx, text::season_not_found(number)).await;
+        return refuse(ctx, text::Refusal::SeasonNotFound(number)).await;
     }
     let after = Season {
         channel: place.channel,
@@ -819,24 +896,26 @@ async fn season_end(
         return Ok(());
     };
     let Some(now_ms) = super::now_ms() else {
-        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+        return fail(ctx, Failure::internal(CLOCK_BEFORE_1970)).await;
     };
     let now_unix = super::now_unix();
     let signups = &ctx.data().signups;
     let Some(season) = signups.store().live_season(place.guild, number).await? else {
-        return private(ctx, text::season_not_found(number)).await;
+        return refuse(ctx, text::Refusal::SeasonNotFound(number)).await;
     };
+    if let Some(refusal) = missing_in_season_channel(ctx, &season) {
+        return refuse(ctx, refusal).await;
+    }
     ctx.defer_ephemeral().await?;
     let cleared = signups
         .clear_posts(&season, ClearScope::All, now_unix)
         .await;
     if cleared.failures > 0 {
-        tracing::warn!(
-            season = season.id,
-            failures = cleared.failures,
-            "a season could not be ended because its sign-up posts remain"
-        );
-        return private(ctx, text::CLEAR_FAILED_END).await;
+        return private(
+            ctx,
+            text::failures_noted(text::CLEAR_FAILED_END, cleared.failures),
+        )
+        .await;
     }
     match signups
         .store()
@@ -845,7 +924,7 @@ async fn season_end(
     {
         EndOutcome::Removed => private(ctx, text::season_removed(number)).await,
         EndOutcome::Ended { .. } => private(ctx, text::season_ended(number, cleared.touched)).await,
-        EndOutcome::NotFound => private(ctx, text::season_not_found(number)).await,
+        EndOutcome::NotFound => refuse(ctx, text::Refusal::SeasonNotFound(number)).await,
     }
 }
 
@@ -906,28 +985,31 @@ async fn rehearse_start(
         return Ok(());
     };
     if !rehearsing(ctx, place.guild) {
-        return private(ctx, text::REHEARSAL_ONLY).await;
+        return refuse(ctx, text::Refusal::RehearsalOnly).await;
     }
     if channel_kind(ctx) != Some(serenity::ChannelType::Text) {
-        return private(ctx, text::RUN_IN_TEXT_CHANNEL).await;
+        return refuse(ctx, text::Refusal::WrongChannelType).await;
     }
-    let missing = wiring::missing_signup_permissions(channel_access(ctx));
-    if !missing.is_empty() {
-        return private(ctx, text::missing_permissions(&missing)).await;
+    if let Some(refusal) = missing_here(wiring::missing_signup_permissions(channel_access(ctx))) {
+        return refuse(ctx, refusal).await;
     }
     let now_unix = super::now_unix();
     let Some(today) = schedule::today(now_unix) else {
-        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+        return fail(ctx, Failure::internal(CLOCK_OUT_OF_RANGE)).await;
     };
     let Some(range) = rehearsal_range(today, nights.unwrap_or(REHEARSAL_NIGHTS), now_unix) else {
-        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+        return fail(
+            ctx,
+            Failure::internal("the rehearsal nights fall outside the supported calendar"),
+        )
+        .await;
     };
     if !range.near(today) {
-        return private(ctx, text::RANGE_TOO_FAR).await;
+        return refuse(ctx, text::Refusal::DatesTooFar).await;
     }
     let nights_left = range.nights_left(now_unix);
     let Some(created_at_ms) = super::now_ms() else {
-        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+        return fail(ctx, Failure::internal(CLOCK_BEFORE_1970)).await;
     };
     let new = NewSeason {
         guild: place.guild,
@@ -945,8 +1027,8 @@ async fn rehearse_start(
                 text::rehearsal_started(&season, nights_left, next_post_at(range, now_unix));
             private(ctx, started).await
         }
-        CreateOutcome::NumberTaken => private(ctx, text::season_number_taken(number)).await,
-        CreateOutcome::Overlaps(other) => private(ctx, text::season_overlaps(&other)).await,
+        CreateOutcome::NumberTaken => refuse(ctx, text::Refusal::SeasonNumberTaken(number)).await,
+        CreateOutcome::Overlaps(other) => refuse(ctx, text::Refusal::SeasonOverlaps(other)).await,
     }
 }
 
@@ -956,40 +1038,49 @@ async fn rehearse_next(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     };
     if !rehearsing(ctx, place.guild) {
-        return private(ctx, text::REHEARSAL_ONLY).await;
+        return refuse(ctx, text::Refusal::RehearsalOnly).await;
     }
     let signups = &ctx.data().signups;
     let store = signups.store();
     let now_unix = super::now_unix();
     let offset = store.rehearsal_clock(place.guild).await?;
     let Some(rehearsal_now) = now_unix.checked_add(offset) else {
-        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+        return fail(
+            ctx,
+            Failure::internal("the rehearsal clock offset overflows the current time"),
+        )
+        .await;
     };
     let seasons = store.seasons_in(place.guild).await?;
     let posts = posts_of(store, &seasons).await?;
     let Some(moment) = next_moment(&seasons, &posts, rehearsal_now) else {
-        return private(ctx, text::NOTHING_PENDING).await;
+        return refuse(ctx, text::Refusal::NothingPending).await;
     };
     let Some(moment_ms) = u64::try_from(moment)
         .ok()
         .and_then(|seconds| seconds.checked_mul(MILLIS_PER_SECOND))
     else {
-        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+        return fail(
+            ctx,
+            Failure::internal("the next rehearsal step falls outside the clock's range"),
+        )
+        .await;
     };
     let Some(shifted) = moment.checked_sub(now_unix) else {
-        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+        return fail(
+            ctx,
+            Failure::internal("the rehearsal clock shift overflows"),
+        )
+        .await;
     };
     ctx.defer_ephemeral().await?;
     store.set_rehearsal_clock(place.guild, shifted).await?;
     let report = signups.tick_in(place.guild, moment, moment_ms).await;
-    if report.failures > 0 {
-        tracing::warn!(
-            guild = place.guild.get(),
-            failures = report.failures,
-            "a rehearsal step had beat steps fail"
-        );
-    }
-    private(ctx, text::stepped(moment, &report)).await
+    private(
+        ctx,
+        text::failures_noted(&text::stepped(moment, &report), report.failures),
+    )
+    .await
 }
 
 #[poise::command(slash_command, rename = "reset")]
@@ -998,7 +1089,7 @@ async fn rehearse_reset(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     };
     if !rehearsing(ctx, place.guild) {
-        return private(ctx, text::REHEARSAL_ONLY).await;
+        return refuse(ctx, text::Refusal::RehearsalOnly).await;
     }
     ctx.defer_ephemeral().await?;
     let purged = ctx
@@ -1007,12 +1098,11 @@ async fn rehearse_reset(ctx: Context<'_>) -> Result<(), Error> {
         .purge(place.guild, super::now_unix())
         .await;
     if purged.failures > 0 {
-        tracing::warn!(
-            guild = place.guild.get(),
-            failures = purged.failures,
-            "a rehearsal reset left sign-up posts behind, so nothing was deleted"
-        );
-        return private(ctx, text::reset_blocked(&purged)).await;
+        return private(
+            ctx,
+            text::failures_noted(&text::reset_blocked(&purged), purged.failures),
+        )
+        .await;
     }
     private(ctx, text::reset_done(&purged)).await
 }
@@ -1032,14 +1122,14 @@ async fn hub(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-fn name_problem(problem: NameProblem) -> String {
+fn name_problem(problem: NameProblem) -> text::Refusal {
     match problem {
-        NameProblem::Empty => voice_text::NAME_EMPTY.to_owned(),
-        NameProblem::TooLong { limit } => voice_text::name_too_long(limit),
+        NameProblem::Empty => text::Refusal::NameEmpty,
+        NameProblem::TooLong { limit } => text::Refusal::NameTooLong { limit },
     }
 }
 
-fn cleaned(raw: Option<&str>, limit: usize) -> Result<Option<String>, String> {
+fn cleaned(raw: Option<&str>, limit: usize) -> Result<Option<String>, text::Refusal> {
     raw.map(|raw| clean_name(raw, limit))
         .transpose()
         .map_err(name_problem)
@@ -1063,6 +1153,57 @@ enum Placement {
     TopLevel,
 }
 
+impl Placement {
+    fn category(&self) -> Option<ChannelId> {
+        match self {
+            Placement::Into(category) => Some(ChannelId::new(category.get())),
+            Placement::TopLevel => None,
+        }
+    }
+}
+
+fn room_blockers(
+    ctx: Context<'_>,
+    guild: GuildId,
+    channel: &serenity::GuildChannel,
+) -> Vec<&'static str> {
+    failure::barnacle_permissions(ctx.cache(), guild)
+        .map(|granted| {
+            failure::copy_blockers(
+                granted,
+                &channel.permission_overwrites,
+                serenity::Permissions::from_bits_truncate(ROOM_ACCESS),
+            )
+        })
+        .unwrap_or_default()
+}
+
+fn cached_channel(
+    ctx: Context<'_>,
+    guild: GuildId,
+    channel: ChannelId,
+) -> Option<serenity::GuildChannel> {
+    let guild = ctx.cache().guild(NonZeroU64::new(guild.get())?)?;
+    guild
+        .channels
+        .get(&serenity::ChannelId::from(NonZeroU64::new(channel.get())?))
+        .cloned()
+}
+
+fn cached_room_blockers(ctx: Context<'_>, guild: GuildId, hub: ChannelId) -> Vec<&'static str> {
+    cached_channel(ctx, guild, hub)
+        .map(|channel| room_blockers(ctx, guild, &channel))
+        .unwrap_or_default()
+}
+
+fn with_readiness(reply: String, blockers: &[&str]) -> String {
+    if blockers.is_empty() {
+        reply
+    } else {
+        format!("{reply} {}", voice_text::cannot_open_rooms(blockers))
+    }
+}
+
 #[poise::command(slash_command, rename = "create")]
 async fn hub_create(
     ctx: Context<'_>,
@@ -1081,19 +1222,20 @@ async fn hub_create(
     };
     let room_name = match clean_name(&room_name, ROOM_NAME_LIMIT) {
         Ok(room_name) => room_name,
-        Err(problem) => return private(ctx, name_problem(problem)).await,
+        Err(problem) => return refuse(ctx, name_problem(problem)).await,
     };
     let name = match clean_name(
         name.as_deref().unwrap_or(voice_text::HUB_DEFAULT_NAME),
         HUB_NAME_LIMIT,
     ) {
         Ok(name) => name,
-        Err(problem) => return private(ctx, name_problem(problem)).await,
+        Err(problem) => return refuse(ctx, name_problem(problem)).await,
     };
     let Some(created_at_ms) = super::now_ms() else {
-        return private(ctx, text::SOMETHING_WENT_WRONG).await;
+        return fail(ctx, Failure::internal(CLOCK_BEFORE_1970)).await;
     };
     ctx.defer_ephemeral().await?;
+    let guild_id = GuildId::new(guild.get());
     let channel = serenity::CreateChannel::new(name).kind(serenity::ChannelType::Voice);
     let channel = category
         .iter()
@@ -1101,24 +1243,45 @@ async fn hub_create(
     let created = match guild.create_channel(ctx.http(), channel).await {
         Ok(created) => created,
         Err(error) if refused(&error, MISSING_PERMISSIONS) => {
-            return private(ctx, voice_text::NEEDS_MANAGE_CHANNELS).await;
+            let granted = match &category {
+                Some(category) => failure::barnacle_permissions_in(
+                    ctx.cache(),
+                    guild_id,
+                    ChannelId::new(category.id.get()),
+                ),
+                None => failure::barnacle_permissions(ctx.cache(), guild_id),
+            };
+            return fail(ctx, manage_channels_denied(&error, &[granted])).await;
         }
         Err(error) => return Err(error.into()),
     };
     let hub = Hub {
         channel: ChannelId::new(created.id.get()),
-        guild: GuildId::new(guild.get()),
+        guild: guild_id,
         room_name,
         created_by: UserId::new(ctx.author().id.get()),
         created_at_ms,
     };
     if let Err(error) = ctx.data().voice.store().add_hub(&hub).await {
         if let Err(cleanup) = created.id.delete(ctx.http()).await {
-            tracing::error!(%cleanup, "an unrecorded Join to Create channel could not be removed");
+            failure::report(
+                "command.failed",
+                "an unrecorded Join to Create channel could not be removed",
+                &Failure::from_error(&cleanup),
+                &Scope::of_command(ctx).hub(hub.channel),
+            );
         }
         return Err(error.into());
     }
-    private(ctx, voice_text::hub_created(hub.channel, &hub.room_name)).await
+    let blockers = room_blockers(ctx, hub.guild, &created);
+    private(
+        ctx,
+        with_readiness(
+            voice_text::hub_created(hub.channel, &hub.room_name),
+            &blockers,
+        ),
+    )
+    .await
 }
 
 #[poise::command(slash_command, rename = "edit")]
@@ -1139,18 +1302,18 @@ async fn hub_edit(
     #[description = "Move it out of its category"] top_level: Option<bool>,
 ) -> Result<(), Error> {
     let Some(stored) = own_hub(ctx, &hub).await? else {
-        return private(ctx, voice_text::NOT_A_HUB).await;
+        return refuse(ctx, text::Refusal::NotAHub).await;
     };
     if category.is_some() && top_level.is_some() {
-        return private(ctx, voice_text::CATEGORY_AND_TOP_LEVEL).await;
+        return refuse(ctx, text::Refusal::CategoryAndTopLevel).await;
     }
     let name = match cleaned(name.as_deref(), HUB_NAME_LIMIT) {
         Ok(name) => name.filter(|name| *name != hub.name),
-        Err(problem) => return private(ctx, problem).await,
+        Err(problem) => return refuse(ctx, problem).await,
     };
     let room_name = match cleaned(room_name.as_deref(), ROOM_NAME_LIMIT) {
         Ok(room_name) => room_name.filter(|room_name| *room_name != stored.room_name),
-        Err(problem) => return private(ctx, problem).await,
+        Err(problem) => return refuse(ctx, problem).await,
     };
     let placement = match (category, top_level) {
         (Some(category), _) if hub.parent_id != Some(category.id) => {
@@ -1160,10 +1323,10 @@ async fn hub_edit(
         _ => None,
     };
     if name.is_none() && room_name.is_none() && placement.is_none() {
-        return private(ctx, voice_text::NOTHING_TO_CHANGE).await;
+        return refuse(ctx, text::Refusal::HubNothingToChange).await;
     }
     ctx.defer_ephemeral().await?;
-    if name.is_some() || placement.is_some() {
+    let edited = if name.is_some() || placement.is_some() {
         let edit = name
             .iter()
             .fold(serenity::EditChannel::new(), |edit, name| edit.name(name));
@@ -1173,13 +1336,21 @@ async fn hub_edit(
             None => edit,
         };
         match hub.id.edit(ctx.http(), edit).await {
-            Ok(_) => {}
+            Ok(channel) => Some(channel),
             Err(error) if refused(&error, MISSING_PERMISSIONS) => {
-                return private(ctx, voice_text::NEEDS_MANAGE_CHANNELS).await;
+                let granted: Vec<Option<serenity::Permissions>> = std::iter::once(stored.channel)
+                    .chain(placement.as_ref().and_then(Placement::category))
+                    .map(|channel| {
+                        failure::barnacle_permissions_in(ctx.cache(), stored.guild, channel)
+                    })
+                    .collect();
+                return fail(ctx, manage_channels_denied(&error, &granted)).await;
             }
             Err(error) => return Err(error.into()),
         }
-    }
+    } else {
+        None
+    };
     if let Some(room_name) = &room_name
         && !ctx
             .data()
@@ -1188,8 +1359,12 @@ async fn hub_edit(
             .rename_rooms(stored.channel, room_name)
             .await?
     {
-        return private(ctx, voice_text::NOT_A_HUB).await;
+        return refuse(ctx, text::Refusal::NotAHub).await;
     }
+    let blockers = match &edited {
+        Some(channel) => room_blockers(ctx, stored.guild, channel),
+        None => cached_room_blockers(ctx, stored.guild, stored.channel),
+    };
     let changes: Vec<String> = [
         name.as_deref().map(voice_text::renamed),
         room_name.as_deref().map(voice_text::rooms_renamed),
@@ -1201,7 +1376,11 @@ async fn hub_edit(
     .into_iter()
     .flatten()
     .collect();
-    private(ctx, voice_text::hub_edited(stored.channel, &changes)).await
+    private(
+        ctx,
+        with_readiness(voice_text::hub_edited(stored.channel, &changes), &blockers),
+    )
+    .await
 }
 
 #[poise::command(slash_command, rename = "remove")]
@@ -1212,14 +1391,16 @@ async fn hub_remove(
     hub: serenity::GuildChannel,
 ) -> Result<(), Error> {
     let Some(stored) = own_hub(ctx, &hub).await? else {
-        return private(ctx, voice_text::NOT_A_HUB).await;
+        return refuse(ctx, text::Refusal::NotAHub).await;
     };
     ctx.defer_ephemeral().await?;
     match hub.id.delete(ctx.http()).await {
         Ok(_) => {}
         Err(error) if refused(&error, UNKNOWN_CHANNEL) => {}
         Err(error) if refused(&error, MISSING_PERMISSIONS) => {
-            return private(ctx, voice_text::NEEDS_MANAGE_CHANNELS).await;
+            let granted =
+                failure::barnacle_permissions_in(ctx.cache(), stored.guild, stored.channel);
+            return fail(ctx, manage_channels_denied(&error, &[granted])).await;
         }
         Err(error) => return Err(error.into()),
     }
@@ -1240,7 +1421,13 @@ async fn hub_list(ctx: Context<'_>) -> Result<(), Error> {
     let mut lines = Vec::with_capacity(hubs.len());
     for hub in &hubs {
         let open = store.open_rooms_of(hub.channel).await?;
-        lines.push(voice_text::hub_line(hub.channel, &hub.room_name, open));
+        let blockers = cached_room_blockers(ctx, hub.guild, hub.channel);
+        lines.push(voice_text::hub_line_ready(
+            hub.channel,
+            &hub.room_name,
+            open,
+            &blockers,
+        ));
     }
     private(ctx, voice_text::hub_list(&lines)).await
 }
