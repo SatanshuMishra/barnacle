@@ -9,13 +9,24 @@ config="${BARNACLE_CONFIG:-/etc/barnacle/barnacle.toml}"
 scope="${BARNACLE_COMMAND_SCOPE:-guilds}"
 guild_ids="${BARNACLE_GUILD_IDS:-}"
 rehearsal_ids="${BARNACLE_REHEARSAL_GUILD_IDS:-}"
+log_format=$(printf '%s' "${BARNACLE_LOG_FORMAT:-}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+emit() {
+    if [ "$log_format" = json ]; then
+        log_message=$(printf '%s' "$4" | tr '\001-\037' ' ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+        printf '{"timestamp":"%s","level":"%s","target":"barnacle::entrypoint","message":"%s","event.name":"%s","event.outcome":"%s"}\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$log_message" "$2" "$3" >&2
+    else
+        printf 'barnacle: %s\n' "$4" >&2
+    fi
+}
 
 say() {
-    printf 'barnacle: %s\n' "$1" >&2
+    emit INFO "$1" success "$2"
 }
 
 die() {
-    printf 'barnacle: %s\n' "$1" >&2
+    emit ERROR entrypoint.failed failure "$1"
     exit 1
 }
 
@@ -71,7 +82,7 @@ if [ "$scope" = guilds ] && [ -z "$guilds" ]; then
 fi
 
 if [ -f "$config" ]; then
-    say "using the config at $config"
+    say entrypoint.config.found "using the config at $config"
 else
     mkdir -p "$(dirname "$config")"
     {
@@ -88,7 +99,7 @@ else
             printf 'guilds = [%s]\n' "$rehearsal"
         fi
     } > "$config"
-    say "wrote $config from the environment"
+    say entrypoint.config.written "wrote $config from the environment"
 fi
 
 mkdir -p "$(dirname "$database")"
@@ -112,15 +123,15 @@ for file in "$migrations"/*.sql; do
 done
 
 if [ -z "$pending" ]; then
-    say 'the database schema is current'
+    say entrypoint.schema.current 'the database schema is current'
 else
     if [ -s "$database" ]; then
         backup="$database.bak-$(date -u +%Y%m%dT%H%M%SZ)"
         cp "$database" "$backup"
-        say "backed the database up to $backup"
+        say entrypoint.database.backed_up "backed the database up to $backup"
     fi
     for name in $pending; do
-        say "applying $name"
+        say entrypoint.migration.applying "applying $name"
         sqlite3 "$database" < "$migrations/$name.sql"
     done
 fi

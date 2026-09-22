@@ -40,9 +40,12 @@ merge.
 | `BARNACLE_DATA_DIR` | no | `/opt/barnacle` | Parent of the `catalog` directory |
 | `BARNACLE_CURATION` | no | `/opt/barnacle/curation/ships.toml` | Curation file path |
 | `BARNACLE_CONFIG` | no | `/etc/barnacle/barnacle.toml` | Config path; an existing file is used as-is |
+| `BARNACLE_LOG_FORMAT` | no | `text` | `text`, or `json` for machine-readable lines, one JSON object each |
+| `BARNACLE_LOG_LEVEL` | no | `info` | Level filter, such as `warn` or `info,barnacle_bot=debug` |
 
-`RUST_LOG` has no effect. `tracing-subscriber` is built without its
-`env-filter` feature, so logging is fixed at INFO on stderr.
+Set the log level with `BARNACLE_LOG_LEVEL`, not `RUST_LOG`, which Barnacle
+ignores. [docs/logging.md](../logging.md) describes both log formats and every
+event and field.
 
 ## Setting the application up
 
@@ -150,9 +153,6 @@ A **Bind Mount** in place of the Volume Mount will not work without preparation.
 The container runs as uid 10001, and a named volume inherits the image's
 ownership of `/var/lib/barnacle` on first use, while a host directory does not —
 `chown 10001:10001` it first.
-
-Logs carry ANSI escape codes. `tracing-subscriber`'s formatter does not detect a
-non-terminal, and the bot does not disable colour.
 
 The bot installs no signal handler, so `tini` runs as pid 1 and forwards
 `SIGTERM` to it. Without that the kernel would drop `SIGTERM` on pid 1, and every

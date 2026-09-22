@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod fakes;
+pub mod logs;
 
 use barnacle_bot::attendance_store::Attendance;
 use barnacle_bot::solves::Solves;
