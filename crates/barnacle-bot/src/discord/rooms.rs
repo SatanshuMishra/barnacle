@@ -4,9 +4,11 @@ use std::sync::Arc;
 use barnacle_guess::UserId;
 use poise::serenity_prelude as serenity;
 
+use crate::failure;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::RoleId;
+use crate::voice;
 use crate::voice::HubLayout;
 use crate::voice::MoveOutcome;
 use crate::voice::Occupancy;
@@ -172,9 +174,21 @@ impl Rooms for DiscordRooms {
             Err(error) => Err(failed(error)),
         }
     }
+
+    async fn notify(&self, hub: ChannelId, user: UserId, content: &str) -> Result<(), RoomsError> {
+        let message = serenity::CreateMessage::new()
+            .content(content)
+            .allowed_mentions(serenity::CreateAllowedMentions::new().users([user_id(user)?]));
+        channel_id(hub)?
+            .send_message(&self.http, message)
+            .await
+            .map_err(failed)?;
+        Ok(())
+    }
 }
 
 pub fn hub_layout(cache: &serenity::Cache, guild: GuildId, hub: ChannelId) -> Option<HubLayout> {
+    let granted = failure::barnacle_permissions(cache, guild);
     let guild = cache.guild(NonZeroU64::new(guild.get())?)?;
     let channel = guild
         .channels
@@ -193,6 +207,15 @@ pub fn hub_layout(cache: &serenity::Cache, guild: GuildId, hub: ChannelId) -> Op
             .iter()
             .filter_map(overwrite)
             .collect(),
+        blockers: granted
+            .map(|granted| {
+                failure::copy_blockers(
+                    granted,
+                    &channel.permission_overwrites,
+                    serenity::Permissions::from_bits_truncate(voice::ROOM_ACCESS),
+                )
+            })
+            .unwrap_or_default(),
     })
 }
 

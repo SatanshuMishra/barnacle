@@ -23,6 +23,7 @@ use barnacle_bot::attendance_store::Post;
 use barnacle_bot::attendance_store::PostState;
 use barnacle_bot::attendance_store::Season;
 use barnacle_bot::attendance_store::SeasonChange;
+use barnacle_bot::failure::Kind;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::RoleId;
@@ -1807,4 +1808,136 @@ async fn a_click_uses_the_rehearsal_clock() {
             start_unix: FIRST_START
         }
     );
+}
+
+fn only(events: Vec<serde_json::Value>) -> serde_json::Value {
+    assert_eq!(events.len(), 1, "{events:?}");
+    events.into_iter().next().unwrap()
+}
+
+#[tokio::test]
+async fn a_click_that_cannot_be_saved_returns_its_failure() {
+    let logs = common::logs::capture();
+    let pool = attendance_pool().await;
+    let store = Attendance::with_pool(pool.clone()).await.unwrap();
+    let season = created(&store, &proposal()).await;
+    let signups = Signups::new(FakeBoard::new(), store.clone());
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let message = message_for(&store, &season, first_night()).await;
+    sqlx::query("DROP TABLE cb_marks")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let outcome = signups
+        .click(
+            press(&season, message, AKI, Target::All),
+            FIRST_POST_AT,
+            millis(FIRST_POST_AT),
+        )
+        .await;
+    let failure = match outcome {
+        ClickOutcome::Failed(failure) => failure,
+        other => panic!("expected a failed click, got {other:?}"),
+    };
+    assert_eq!(failure.kind, Kind::Database);
+    assert!(
+        logs.events()
+            .iter()
+            .all(|event| event["barnacle.reference"] != failure.reference.as_str())
+    );
+}
+
+#[tokio::test]
+async fn a_post_barnacle_cannot_send_is_logged_with_its_reason() {
+    let logs = common::logs::capture();
+    let board = FakeBoard::new();
+    board.fail_sends(true);
+    let (signups, season, _) = ready(board.clone()).await;
+    let report = signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    assert_eq!(report.failures, 1);
+    let event = only(logs.named("signup.post.failed"));
+    assert_eq!(event["event.outcome"], "failure");
+    assert_eq!(event["message"], "a sign-up post could not be published");
+    assert!(
+        event["exception.message"]
+            .as_str()
+            .unwrap()
+            .contains("the fake board refuses every send")
+    );
+    assert_eq!(event["error.type"], "internal");
+    assert_eq!(event["barnacle.reference"].as_str().unwrap().len(), 8);
+    assert_eq!(event["barnacle.season.id"], season.id.to_string());
+    assert_eq!(event["discord.channel.id"], CHANNEL.get().to_string());
+    assert_eq!(event["discord.guild.id"], GUILD.get().to_string());
+    assert_eq!(event["barnacle.night"], "2026-09-16");
+    assert!(logs.named("signup.post.published").is_empty());
+}
+
+#[tokio::test]
+async fn each_sign_up_step_is_recorded_with_its_post() {
+    let logs = common::logs::capture();
+    let board = FakeBoard::new();
+    let (signups, season, store) = ready(board.clone()).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let message = message_for(&store, &season, first_night()).await;
+    signups.tick(FIRST_START, millis(FIRST_START)).await;
+    signups.tick(FIRST_REMOVE_AT, millis(FIRST_REMOVE_AT)).await;
+    for name in [
+        "signup.post.published",
+        "signup.post.closed",
+        "signup.post.removed",
+    ] {
+        let first = logs
+            .named(name)
+            .into_iter()
+            .find(|event| event["barnacle.night"] == "2026-09-16")
+            .unwrap_or_else(|| panic!("no {name} event for the first night"));
+        assert_eq!(first["level"], "INFO");
+        assert_eq!(first["event.outcome"], "success");
+        assert_eq!(first["discord.message.id"], message.get().to_string());
+        assert_eq!(first["barnacle.season.id"], season.id.to_string());
+        assert_eq!(first["discord.channel.id"], CHANNEL.get().to_string());
+    }
+    assert!(logs.named("signup.post.failed").is_empty());
+}
+
+#[tokio::test]
+async fn a_post_that_cannot_be_redrawn_is_logged_with_its_message() {
+    let logs = common::logs::capture();
+    let board = FakeBoard::new();
+    let (signups, season, store) = ready(board.clone()).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let message = message_for(&store, &season, first_night()).await;
+    board.fail_edits(true);
+    let report = signups.tick(FIRST_START, millis(FIRST_START)).await;
+    assert_eq!(report.failures, 1);
+    let event = only(logs.named("signup.post.failed"));
+    assert_eq!(event["message"], "a sign-up post could not be redrawn");
+    assert!(
+        event["exception.message"]
+            .as_str()
+            .unwrap()
+            .contains("the fake board refuses every edit")
+    );
+    assert_eq!(event["discord.message.id"], message.get().to_string());
+    assert_eq!(event["barnacle.night"], "2026-09-16");
+    assert!(logs.named("signup.post.closed").is_empty());
+}
+
+#[tokio::test]
+async fn a_post_that_cannot_be_removed_is_logged_once() {
+    let logs = common::logs::capture();
+    let board = FakeBoard::new();
+    let (signups, season, store) = ready(board.clone()).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let message = message_for(&store, &season, first_night()).await;
+    board.fail_deletes(true);
+    let report = signups
+        .clear_posts(&season, ClearScope::All, FIRST_POST_AT)
+        .await;
+    assert_eq!(report.failures, 1);
+    let event = only(logs.named("signup.post.failed"));
+    assert_eq!(event["message"], "a sign-up post could not be removed");
+    assert_eq!(event["discord.message.id"], message.get().to_string());
+    assert_eq!(event["barnacle.season.id"], season.id.to_string());
 }

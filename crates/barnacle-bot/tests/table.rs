@@ -623,3 +623,97 @@ async fn a_cancel_while_a_win_is_settling_finds_the_round_over() {
     assert_eq!(winners(&discord), [(PLAYER, millis(5_000))]);
     assert_eq!(discord.endings().len(), 1);
 }
+
+fn only(events: Vec<serde_json::Value>) -> serde_json::Value {
+    assert_eq!(events.len(), 1, "{events:?}");
+    events.into_iter().next().unwrap()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_round_records_its_start_and_end_with_its_channel_and_number() {
+    let logs = common::logs::capture();
+    let table = yamato_table(FakeDiscord::new(), FakeStore::default());
+    let number = started(&table, PLACE).await;
+    wait(60).await;
+    for name in ["guess.round.started", "guess.round.ended"] {
+        let event = only(logs.named(name));
+        assert_eq!(event["level"], "INFO");
+        assert_eq!(event["event.outcome"], "success");
+        assert_eq!(event["discord.guild.id"], PLACE.guild.get().to_string());
+        assert_eq!(event["discord.channel.id"], PLACE.channel.get().to_string());
+        assert_eq!(event["barnacle.round.number"], number);
+    }
+    assert!(logs.named("guess.post.failed").is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_hint_and_an_ending_discord_refuses_are_logged() {
+    let logs = common::logs::capture();
+    let table = yamato_table(FakeDiscord::failing(), FakeStore::default());
+    let number = started(&table, PLACE).await;
+    wait(60).await;
+    let failed = logs.named("guess.post.failed");
+    let summaries: Vec<&str> = failed
+        .iter()
+        .map(|event| event["message"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        summaries,
+        [
+            "a hint could not be posted",
+            "a round ending could not be posted"
+        ]
+    );
+    for event in &failed {
+        assert!(
+            event["exception.message"]
+                .as_str()
+                .unwrap()
+                .contains("the fake Discord refuses every post")
+        );
+        assert_eq!(event["barnacle.round.number"], number);
+        assert_eq!(event["discord.channel.id"], PLACE.channel.get().to_string());
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_post_that_never_finishes_is_logged_as_timed_out() {
+    let logs = common::logs::capture();
+    let table = yamato_table(FakeDiscord::hanging(), FakeStore::default());
+    started(&table, PLACE).await;
+    wait(60).await;
+    let failed = logs.named("guess.post.failed");
+    let summaries: Vec<&str> = failed
+        .iter()
+        .map(|event| event["message"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        summaries,
+        [
+            "posting a hint timed out",
+            "posting a round ending timed out"
+        ]
+    );
+    assert!(failed.iter().all(|event| event["error.type"] == "timeout"));
+    assert!(failed.iter().all(|event| event["level"] == "WARN"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_solve_that_cannot_be_saved_is_logged_with_its_winner() {
+    let logs = common::logs::capture();
+    let table = yamato_table(FakeDiscord::new(), FakeStore::failing());
+    let number = started(&table, PLACE).await;
+    table
+        .hear(PLACE, guess(PLAYER, false, POSTED_AT + 1, "yamato"))
+        .await;
+    wait(1).await;
+    let event = only(logs.named("guess.solve.failed"));
+    assert_eq!(event["level"], "ERROR");
+    assert_eq!(event["discord.user.id"], PLAYER.get().to_string());
+    assert_eq!(event["barnacle.round.number"], number);
+    assert_eq!(event["barnacle.reference"].as_str().unwrap().len(), 8);
+    assert_eq!(
+        only(logs.named("guess.round.ended"))["barnacle.round.number"],
+        number
+    );
+}
