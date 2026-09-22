@@ -8,6 +8,7 @@ use barnacle_bot::failure;
 use barnacle_bot::failure::DiscordRefusal;
 use barnacle_bot::failure::Failure;
 use barnacle_bot::failure::Kind;
+use barnacle_bot::failure::OptionProblem;
 use barnacle_bot::failure::Reference;
 use barnacle_bot::failure::Scope;
 use barnacle_bot::ids::ChannelId;
@@ -548,4 +549,39 @@ fn a_component_scope_names_the_server_channel_member_interaction_and_message() {
             .interaction(1_180_000_000_000_000_010)
             .message(Snowflake::new(1_180_000_000_000_000_011))
     );
+}
+
+#[test]
+fn an_option_discord_would_not_look_up_is_a_failure_with_a_remedy() {
+    let problem = OptionProblem::of(&refusal(403, 50001, "Missing Access"));
+    let OptionProblem::Failed(failure) = problem else {
+        panic!("expected a failure, got {problem:?}");
+    };
+    assert_eq!(failure.kind, Kind::MissingAccess);
+    let reply = failure::command_failed("voice hub create", &failure);
+    assert!(
+        reply.starts_with(
+            "`/voice hub create` did not finish. Barnacle cannot see a channel it needs here."
+        ),
+        "{reply}"
+    );
+    assert!(reply.contains("View Channel"), "{reply}");
+    assert!(
+        reply.ends_with(&format!("(Reference: {})", failure.reference)),
+        "{reply}"
+    );
+}
+
+#[test]
+fn an_option_that_cannot_be_parsed_stays_a_refusal_with_its_detail() {
+    let error: Box<dyn std::error::Error + Send + Sync> = "`next week` is not a number".into();
+    assert_eq!(
+        OptionProblem::of(&*error),
+        OptionProblem::Unreadable("`next week` is not a number".to_owned())
+    );
+    let wrong_type = serenity::Error::Model(serenity::ModelError::InvalidChannelType);
+    assert!(matches!(
+        OptionProblem::of(&wrong_type),
+        OptionProblem::Unreadable(_)
+    ));
 }

@@ -143,6 +143,9 @@ The values of `error.type`:
 | Field | Type | Meaning |
 |---|---|---|
 | `barnacle.refusal.reason` | string | Why Barnacle turned the request down |
+| `exception.message` | string | The underlying error, when one explains the refusal, such as the text of an option that could not be read |
+
+A command option that fails because Discord refused to look it up, for example a channel Barnacle cannot see, is not a refusal of bad input. It is logged as `command.failed` with the classified `error.type` and a reference, and the reply says what to fix.
 
 ### Context, whenever known
 

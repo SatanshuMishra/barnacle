@@ -250,6 +250,26 @@ fn refusals_are_info_events_with_a_reason() {
 }
 
 #[test]
+fn a_refusal_with_an_underlying_error_logs_its_detail() {
+    let logs = common::logs::capture();
+    failure::refused_because(
+        "command.refused",
+        "a command option could not be read",
+        "invalid_option",
+        "`next week` is not a number",
+        &Scope::default().command("cb season start"),
+    );
+    let event = only(logs.named("command.refused"));
+    assert_eq!(event["level"], "INFO");
+    assert_eq!(event["event.outcome"], "refused");
+    assert_eq!(event["barnacle.refusal.reason"], "invalid_option");
+    assert_eq!(event["exception.message"], "`next week` is not a number");
+    assert_eq!(event["discord.command.name"], "cb season start");
+    assert!(event.get("barnacle.reference").is_none());
+    assert!(event.get("error.type").is_none());
+}
+
+#[test]
 fn records_are_info_events_with_a_success_outcome() {
     let logs = common::logs::capture();
     let scope = Scope::default()
