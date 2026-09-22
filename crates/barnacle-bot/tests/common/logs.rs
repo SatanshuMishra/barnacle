@@ -1,19 +1,24 @@
+use std::cell::RefCell;
 use std::io;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::marker::PhantomData;
+use std::sync::OnceLock;
 
 use barnacle_bot::logging;
 use barnacle_bot::logging::LogFormat;
 use barnacle_bot::logging::LogSettings;
-use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::fmt::MakeWriter;
 
-#[derive(Clone, Default)]
-struct Written(Arc<Mutex<Vec<u8>>>);
+thread_local! {
+    static WRITTEN: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
 
-impl io::Write for Written {
+static INSTALLED: OnceLock<()> = OnceLock::new();
+
+struct ThisThread;
+
+impl io::Write for ThisThread {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
+        WRITTEN.with(|written| written.borrow_mut().extend_from_slice(bytes));
         Ok(bytes.len())
     }
 
@@ -22,36 +27,39 @@ impl io::Write for Written {
     }
 }
 
-impl<'w> MakeWriter<'w> for Written {
-    type Writer = Written;
+struct EachThread;
 
-    fn make_writer(&'w self) -> Written {
-        self.clone()
+impl<'w> MakeWriter<'w> for EachThread {
+    type Writer = ThisThread;
+
+    fn make_writer(&'w self) -> ThisThread {
+        ThisThread
     }
 }
 
 pub struct Logs {
-    written: Written,
-    _installed: DefaultGuard,
+    _this_thread: PhantomData<*const ()>,
 }
 
 pub fn capture() -> Logs {
-    let written = Written::default();
-    let settings = LogSettings {
-        format: LogFormat::Json,
-        level: "debug".to_owned(),
-    };
-    let installed =
-        tracing::subscriber::set_default(logging::subscriber(&settings, written.clone(), false));
+    INSTALLED.get_or_init(|| {
+        let settings = LogSettings {
+            format: LogFormat::Json,
+            level: "debug".to_owned(),
+        };
+        tracing::subscriber::set_global_default(logging::subscriber(&settings, EachThread, false))
+            .unwrap();
+        tracing::callsite::rebuild_interest_cache();
+    });
+    WRITTEN.with(|written| written.borrow_mut().clear());
     Logs {
-        written,
-        _installed: installed,
+        _this_thread: PhantomData,
     }
 }
 
 impl Logs {
     pub fn events(&self) -> Vec<serde_json::Value> {
-        let written = self.written.0.lock().unwrap().clone();
+        let written = WRITTEN.with(|written| written.borrow().clone());
         String::from_utf8(written)
             .unwrap()
             .lines()
