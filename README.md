@@ -180,6 +180,10 @@ image carries the bot, the catalog and the migrations, applies pending migration
 on start, and reads its config from environment variables, so no `barnacle.toml`
 is needed there.
 
+## Logs
+
+Barnacle logs to the console. `BARNACLE_LOG_FORMAT` picks `text` (the default) or `json`, one JSON object per line for a log shipper, and `BARNACLE_LOG_LEVEL` sets the level filter, `info` by default. Both are read from the process environment, not from `.env`. Every failure a person sees in Discord ends with a reference that finds its log event. [docs/logging.md](docs/logging.md) lists every event and field.
+
 ## License
 
 Apache-2.0. See `LICENSE`.

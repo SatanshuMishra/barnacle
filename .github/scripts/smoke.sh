@@ -35,11 +35,35 @@ expect_present() {
     fi
 }
 
+every_line_is_json() {
+    local line
+    while IFS= read -r line; do
+        jq -e . >/dev/null 2>&1 <<<"$line" || return 1
+    done <<<"$1"
+}
+
+expect_json_lines() {
+    if every_line_is_json "$2"; then
+        report pass "$1"
+    else
+        report fail "$1"
+    fi
+}
+
+expect_event() {
+    if jq -e -s --arg event "$3" 'any(.[]; ."event.name" == $event)' >/dev/null 2>&1 <<<"$2"; then
+        report pass "$1"
+    else
+        report fail "$1"
+    fi
+}
+
 start() {
     docker run --rm \
         --volume "$volume:/var/lib/barnacle" \
         --env DISCORD_TOKEN=smoke.invalid.token \
         --env BARNACLE_GUILD_IDS=1 \
+        "$@" \
         "$image" 2>&1 || true
 }
 
@@ -52,6 +76,10 @@ printf '%s\n' "$first"
 printf '\n=== second start against the same volume ===\n'
 second="$(start)"
 printf '%s\n' "$second"
+
+printf '\n=== third start with JSON logs against the same volume ===\n'
+third="$(start --env BARNACLE_LOG_FORMAT=json)"
+printf '%s\n' "$third"
 
 ledger="$(docker run --rm \
     --volume "$volume:/var/lib/barnacle" \
@@ -69,8 +97,12 @@ expect_present 'first start renders the config from the environment' "$first" \
 expect_present 'second start finds the schema current' "$second" \
     'the database schema is current'
 expect_absent 'second start applies nothing' "$second" 'applying 0'
+expect_json_lines 'third start writes only JSON lines' "$third"
+expect_present 'third start finds the schema current' "$third" \
+    '"event.name":"entrypoint.schema.current"'
+expect_event 'third start logs the Discord failure as service.failed' "$third" service.failed
 
-for stage in "$first" "$second"; do
+for stage in "$first" "$second" "$third"; do
     expect_present 'startup reaches Discord' "$stage" 'Discord'
     expect_absent 'no catalog is missing' "$stage" 'no catalog is selected'
     expect_absent 'the catalog loads' "$stage" 'current catalog could not be loaded'
