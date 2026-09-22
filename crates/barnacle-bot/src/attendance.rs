@@ -16,6 +16,9 @@ use crate::attendance_store::Mark;
 use crate::attendance_store::Post;
 use crate::attendance_store::PostState;
 use crate::attendance_store::Season;
+use crate::failure;
+use crate::failure::Failure;
+use crate::failure::Scope;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::RoleId;
@@ -134,12 +137,12 @@ pub struct Click {
     pub attending: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClickOutcome {
     Recorded,
     Closed { start_unix: i64 },
     UnknownSeason,
-    Failed,
+    Failed(Failure),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -210,11 +213,19 @@ impl<B: Board> Signups<B> {
     }
 
     pub async fn tick(self: &Arc<Self>, now_unix: i64, now_ms: u64) -> TickReport {
-        let Ok(seasons) = self.store.live_seasons(now_unix).await else {
-            return TickReport {
-                failures: 1,
-                ..TickReport::default()
-            };
+        let seasons = match self.store.live_seasons(now_unix).await {
+            Ok(seasons) => seasons,
+            Err(error) => {
+                post_failed(
+                    "the live CB seasons could not be read",
+                    &error,
+                    &Scope::default(),
+                );
+                return TickReport {
+                    failures: 1,
+                    ..TickReport::default()
+                };
+            }
         };
         let mut offsets: HashMap<GuildId, Option<i64>> = HashMap::new();
         for guild in seasons.iter().map(|season| season.guild) {
@@ -222,7 +233,17 @@ impl<B: Board> Signups<B> {
                 continue;
             }
             let offset = if self.rehearsal.contains(&guild) {
-                self.store.rehearsal_clock(guild).await.ok()
+                self.store
+                    .rehearsal_clock(guild)
+                    .await
+                    .inspect_err(|error| {
+                        post_failed(
+                            "a rehearsal server's clock could not be read, so its sign-up posts were skipped",
+                            error,
+                            &Scope::default().guild(guild),
+                        );
+                    })
+                    .ok()
             } else {
                 Some(0)
             };
@@ -238,6 +259,14 @@ impl<B: Board> Signups<B> {
         }
         for (offset, seasons) in groups {
             let Some((instant, instant_ms)) = shifted(now_unix, now_ms, offset) else {
+                failure::report(
+                    "signup.post.failed",
+                    "a rehearsal clock moves the time out of range, so its sign-up posts were skipped",
+                    &Failure::internal(format!(
+                        "a rehearsal clock offset of {offset} seconds moves the time out of range"
+                    )),
+                    &Scope::default(),
+                );
                 report.failures += 1;
                 continue;
             };
@@ -253,11 +282,19 @@ impl<B: Board> Signups<B> {
         now_unix: i64,
         now_ms: u64,
     ) -> TickReport {
-        let Ok(seasons) = self.store.live_seasons(now_unix).await else {
-            return TickReport {
-                failures: 1,
-                ..TickReport::default()
-            };
+        let seasons = match self.store.live_seasons(now_unix).await {
+            Ok(seasons) => seasons,
+            Err(error) => {
+                post_failed(
+                    "the live CB seasons could not be read",
+                    &error,
+                    &Scope::default().guild(guild),
+                );
+                return TickReport {
+                    failures: 1,
+                    ..TickReport::default()
+                };
+            }
         };
         let seasons = seasons
             .into_iter()
@@ -267,11 +304,19 @@ impl<B: Board> Signups<B> {
     }
 
     pub async fn purge(self: &Arc<Self>, guild: GuildId, now_unix: i64) -> PurgeReport {
-        let Ok(seasons) = self.store.seasons_in_any_state(guild).await else {
-            return PurgeReport {
-                failures: 1,
-                ..PurgeReport::default()
-            };
+        let seasons = match self.store.seasons_in_any_state(guild).await {
+            Ok(seasons) => seasons,
+            Err(error) => {
+                post_failed(
+                    "the server's CB seasons could not be read for a purge",
+                    &error,
+                    &Scope::default().guild(guild),
+                );
+                return PurgeReport {
+                    failures: 1,
+                    ..PurgeReport::default()
+                };
+            }
         };
         let mut cleared = PostsReport::default();
         for season in &seasons {
@@ -302,10 +347,24 @@ impl<B: Board> Signups<B> {
                     report.seasons += 1;
                     report.answers += usize::try_from(answers).unwrap_or(usize::MAX);
                 }
-                Err(_) => report.failures += 1,
+                Err(error) => {
+                    post_failed(
+                        "a CB season could not be purged",
+                        &error,
+                        &season_scope(season),
+                    );
+                    report.failures += 1;
+                }
             }
         }
-        if report.failures == 0 && self.store.clear_rehearsal_clock(guild).await.is_err() {
+        if report.failures == 0
+            && let Err(error) = self.store.clear_rehearsal_clock(guild).await
+        {
+            post_failed(
+                "a purged server's rehearsal clock could not be cleared",
+                &error,
+                &Scope::default().guild(guild),
+            );
             report.failures += 1;
         }
         report
@@ -320,8 +379,16 @@ impl<B: Board> Signups<B> {
         if !self.rehearsal.contains(&guild) {
             return (now_unix, now_ms);
         }
-        let Ok(offset) = self.store.rehearsal_clock(guild).await else {
-            return (now_unix, now_ms);
+        let offset = match self.store.rehearsal_clock(guild).await {
+            Ok(offset) => offset,
+            Err(error) => {
+                post_failed(
+                    "a rehearsal server's clock could not be read, so the real time was used",
+                    &error,
+                    &Scope::default().guild(guild),
+                );
+                return (now_unix, now_ms);
+            }
         };
         shifted(now_unix, now_ms, offset).unwrap_or((now_unix, now_ms))
     }
@@ -330,9 +397,17 @@ impl<B: Board> Signups<B> {
         let _beating = self.beats.lock().await;
         let mut report = TickReport::default();
         for season in &seasons {
-            let Ok(posts) = self.store.posts(season.id).await else {
-                report.failures += 1;
-                continue;
+            let posts = match self.store.posts(season.id).await {
+                Ok(posts) => posts,
+                Err(error) => {
+                    post_failed(
+                        "a season's sign-up posts could not be read",
+                        &error,
+                        &season_scope(season),
+                    );
+                    report.failures += 1;
+                    continue;
+                }
             };
             let mut swept = Vec::new();
             for post in posts
@@ -344,22 +419,11 @@ impl<B: Board> Signups<B> {
                     season: season.id,
                     night: post.night,
                 };
-                match self.board.delete_post(season.channel, post.message).await {
-                    Ok(Removal::Deleted | Removal::Gone) => {
-                        if self
-                            .store
-                            .set_post_state(season.id, post.night, PostState::Removed)
-                            .await
-                            .is_ok()
-                        {
-                            self.forget(post.message);
-                            swept.push(post.night);
-                            report.removed.push(tag);
-                        } else {
-                            report.failures += 1;
-                        }
-                    }
-                    Err(_) => report.failures += 1,
+                if self.remove(season, post).await {
+                    swept.push(post.night);
+                    report.removed.push(tag);
+                } else {
+                    report.failures += 1;
                 }
             }
             for post in posts
@@ -372,20 +436,27 @@ impl<B: Board> Signups<B> {
                     season: season.id,
                     night: post.night,
                 };
+                let scope = post_scope(season, post.night).message(post.message);
                 if !self
                     .redraw(season, post.night, post.message, now_unix)
                     .await
                 {
                     report.failures += 1;
-                } else if self
+                    continue;
+                }
+                match self
                     .store
                     .set_post_state(season.id, post.night, PostState::Closed)
                     .await
-                    .is_ok()
                 {
-                    report.closed.push(tag);
-                } else {
-                    report.failures += 1;
+                    Ok(()) => {
+                        failure::record("signup.post.closed", "a sign-up post closed", &scope);
+                        report.closed.push(tag);
+                    }
+                    Err(error) => {
+                        post_failed("a closed sign-up post could not be saved", &error, &scope);
+                        report.failures += 1;
+                    }
                 }
             }
             let Some(night) = season.range.due_night(now_unix) else {
@@ -395,11 +466,13 @@ impl<B: Board> Signups<B> {
                 season: season.id,
                 night,
             };
+            let scope = post_scope(season, night);
             let delivery = match self.store.post(season.id, night).await {
                 Ok(Some(post)) if post.state != PostState::Removed => continue,
                 Ok(Some(_)) => Delivery::Redraw,
                 Ok(None) => Delivery::New,
-                Err(_) => {
+                Err(error) => {
+                    post_failed("a due sign-up post could not be looked up", &error, &scope);
                     report.failures += 1;
                     continue;
                 }
@@ -407,36 +480,72 @@ impl<B: Board> Signups<B> {
             let season = &match self.store.season(season.id).await {
                 Ok(Some(fresh)) if fresh.ended_at_ms.is_none() => fresh,
                 Ok(_) => continue,
-                Err(_) => {
+                Err(error) => {
+                    post_failed(
+                        "a season could not be read before publishing its sign-up post",
+                        &error,
+                        &scope,
+                    );
                     report.failures += 1;
                     continue;
                 }
             };
+            let scope = post_scope(season, night);
             match self.board.find_post(season.channel, tag).await {
                 Ok(Some(message)) => {
-                    if self.record(season.id, night, message, now_ms).await {
+                    let scope = scope.message(message);
+                    if self.record(season.id, night, message, now_ms, &scope).await {
+                        failure::record(
+                            "signup.post.published",
+                            "a sign-up post already in the channel was adopted",
+                            &scope,
+                        );
                         report.adopted.push(tag);
                     } else {
                         report.failures += 1;
                     }
                 }
                 Ok(None) => {
-                    let Ok(view) = self.view(season, night, now_unix).await else {
-                        report.failures += 1;
-                        continue;
+                    let view = match self.view(season, night, now_unix).await {
+                        Ok(view) => view,
+                        Err(error) => {
+                            post_failed(
+                                "the roster for a new sign-up post could not be read",
+                                &error,
+                                &scope,
+                            );
+                            report.failures += 1;
+                            continue;
+                        }
                     };
                     match self.board.send_post(season.channel, &view, delivery).await {
                         Ok(message) => {
-                            if self.record(season.id, night, message, now_ms).await {
+                            let scope = scope.message(message);
+                            if self.record(season.id, night, message, now_ms, &scope).await {
+                                failure::record(
+                                    "signup.post.published",
+                                    "a sign-up post was published",
+                                    &scope,
+                                );
                                 report.posted.push(tag);
                             } else {
                                 report.failures += 1;
                             }
                         }
-                        Err(_) => report.failures += 1,
+                        Err(error) => {
+                            post_failed("a sign-up post could not be published", &error, &scope);
+                            report.failures += 1;
+                        }
                     }
                 }
-                Err(_) => report.failures += 1,
+                Err(error) => {
+                    post_failed(
+                        "the channel could not be searched for an existing sign-up post",
+                        &error,
+                        &scope,
+                    );
+                    report.failures += 1;
+                }
             }
         }
         report
@@ -448,11 +557,19 @@ impl<B: Board> Signups<B> {
         scope: ClearScope,
         _now_unix: i64,
     ) -> PostsReport {
-        let Ok(posts) = self.store.posts(season.id).await else {
-            return PostsReport {
-                touched: 0,
-                failures: 1,
-            };
+        let posts = match self.store.posts(season.id).await {
+            Ok(posts) => posts,
+            Err(error) => {
+                post_failed(
+                    "a season's sign-up posts could not be read",
+                    &error,
+                    &season_scope(season),
+                );
+                return PostsReport {
+                    touched: 0,
+                    failures: 1,
+                };
+            }
         };
         let mut report = PostsReport::default();
         for post in posts
@@ -463,32 +580,29 @@ impl<B: Board> Signups<B> {
                 ClearScope::OutsideRange => !season.range.holds(post.night),
             })
         {
-            match self.board.delete_post(season.channel, post.message).await {
-                Ok(Removal::Deleted | Removal::Gone) => {
-                    if self
-                        .store
-                        .set_post_state(season.id, post.night, PostState::Removed)
-                        .await
-                        .is_ok()
-                    {
-                        self.forget(post.message);
-                        report.touched += 1;
-                    } else {
-                        report.failures += 1;
-                    }
-                }
-                Err(_) => report.failures += 1,
+            if self.remove(season, post).await {
+                report.touched += 1;
+            } else {
+                report.failures += 1;
             }
         }
         report
     }
 
     pub async fn refresh_posts(self: &Arc<Self>, season: &Season, now_unix: i64) -> PostsReport {
-        let Ok(posts) = self.store.posts(season.id).await else {
-            return PostsReport {
-                touched: 0,
-                failures: 1,
-            };
+        let posts = match self.store.posts(season.id).await {
+            Ok(posts) => posts,
+            Err(error) => {
+                post_failed(
+                    "a season's sign-up posts could not be read",
+                    &error,
+                    &season_scope(season),
+                );
+                return PostsReport {
+                    touched: 0,
+                    failures: 1,
+                };
+            }
         };
         let mut report = PostsReport::default();
         for post in posts.iter().filter(|post| post.state != PostState::Removed) {
@@ -508,7 +622,7 @@ impl<B: Board> Signups<B> {
         let season = match self.store.season(click.season).await {
             Ok(Some(season)) => season,
             Ok(None) => return ClickOutcome::UnknownSeason,
-            Err(_) => return ClickOutcome::Failed,
+            Err(error) => return ClickOutcome::Failed(Failure::from_error(&error)),
         };
         if season.guild != click.guild
             || season.ended_at_ms.is_some()
@@ -526,7 +640,7 @@ impl<B: Board> Signups<B> {
             Target::All => &Hour::ALL,
             Target::One(hour) => std::slice::from_ref(hour),
         };
-        if self
+        if let Err(error) = self
             .store
             .mark(
                 season.id,
@@ -537,9 +651,8 @@ impl<B: Board> Signups<B> {
                 now_ms,
             )
             .await
-            .is_err()
         {
-            return ClickOutcome::Failed;
+            return ClickOutcome::Failed(Failure::from_error(&error));
         }
         self.redraw(&season, click.night, click.message, now_unix)
             .await;
@@ -556,6 +669,37 @@ impl<B: Board> Signups<B> {
         Ok(build_view(season, night, now_unix, &marks))
     }
 
+    async fn remove(&self, season: &Season, post: &Post) -> bool {
+        let scope = post_scope(season, post.night).message(post.message);
+        match self.board.delete_post(season.channel, post.message).await {
+            Ok(Removal::Deleted | Removal::Gone) => {
+                match self
+                    .store
+                    .set_post_state(season.id, post.night, PostState::Removed)
+                    .await
+                {
+                    Ok(()) => {
+                        self.forget(post.message);
+                        failure::record(
+                            "signup.post.removed",
+                            "a sign-up post was removed",
+                            &scope,
+                        );
+                        true
+                    }
+                    Err(error) => {
+                        post_failed("a removed sign-up post could not be saved", &error, &scope);
+                        false
+                    }
+                }
+            }
+            Err(error) => {
+                post_failed("a sign-up post could not be removed", &error, &scope);
+                false
+            }
+        }
+    }
+
     async fn redraw(
         &self,
         season: &Season,
@@ -570,28 +714,60 @@ impl<B: Board> Signups<B> {
             return true;
         }
         let target = slot.wanted.load(SeqCst);
-        let Ok(Some(season)) = self.store.season(season.id).await else {
-            return false;
+        let scope = post_scope(season, night).message(message);
+        let season = match self.store.season(season.id).await {
+            Ok(Some(season)) => season,
+            Ok(None) => {
+                failure::report(
+                    "signup.post.failed",
+                    "a sign-up post could not be redrawn because its season is gone",
+                    &Failure::internal(format!("season {} no longer exists", season.id)),
+                    &scope,
+                );
+                return false;
+            }
+            Err(error) => {
+                post_failed(
+                    "a season could not be read to redraw its sign-up post",
+                    &error,
+                    &scope,
+                );
+                return false;
+            }
         };
-        let Ok(view) = self.view(&season, night, now_unix).await else {
-            return false;
+        let view = match self.view(&season, night, now_unix).await {
+            Ok(view) => view,
+            Err(error) => {
+                post_failed(
+                    "the roster for a sign-up post could not be read",
+                    &error,
+                    &scope,
+                );
+                return false;
+            }
         };
-        if self
-            .board
-            .edit_post(season.channel, message, &view)
-            .await
-            .is_err()
-        {
+        if let Err(error) = self.board.edit_post(season.channel, message, &view).await {
+            post_failed("a sign-up post could not be redrawn", &error, &scope);
             return false;
         }
         slot.drawn.store(target, SeqCst);
         true
     }
 
-    async fn record(&self, season: i64, night: Night, message: Snowflake, now_ms: u64) -> bool {
+    async fn record(
+        &self,
+        season: i64,
+        night: Night,
+        message: Snowflake,
+        now_ms: u64,
+        scope: &Scope,
+    ) -> bool {
         self.store
             .record_post(season, night, message, now_ms)
             .await
+            .inspect_err(|error| {
+                post_failed("a published sign-up post could not be saved", error, scope);
+            })
             .is_ok()
     }
 
@@ -650,6 +826,26 @@ fn moments<'a>(
         })
         .map(Night::post_at_unix);
     removals.chain(closes).chain(postings)
+}
+
+fn post_failed(summary: &str, error: &(dyn std::error::Error + 'static), scope: &Scope) {
+    failure::report(
+        "signup.post.failed",
+        summary,
+        &Failure::from_error(error),
+        scope,
+    );
+}
+
+fn season_scope(season: &Season) -> Scope {
+    Scope::default()
+        .guild(season.guild)
+        .channel(season.channel)
+        .season(season.id)
+}
+
+fn post_scope(season: &Season, night: Night) -> Scope {
+    season_scope(season).night(night.label())
 }
 
 fn shifted(now_unix: i64, now_ms: u64, offset: i64) -> Option<(i64, u64)> {

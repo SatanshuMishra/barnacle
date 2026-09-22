@@ -21,6 +21,9 @@ use barnacle_guess::UserId;
 use rand::rngs::StdRng;
 use tokio::sync::Mutex;
 
+use crate::failure;
+use crate::failure::Failure;
+use crate::failure::Scope;
 use crate::ids::ChannelId;
 use crate::ids::Place;
 use crate::solves::SolveRecord;
@@ -165,7 +168,11 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
             }),
         };
         drop(seat);
-        tracing::info!(channel = place.channel.get(), number, "round started");
+        failure::record(
+            "guess.round.started",
+            "a silhouette round started",
+            &round_scope(place, number),
+        );
         self.spawn_timer(place, number);
         StartOutcome::Started { number }
     }
@@ -225,7 +232,12 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
         let personal_best = match self.solves.record(&record).await {
             Ok(best) => Some(best),
             Err(error) => {
-                tracing::error!(%error, "a solve could not be recorded");
+                failure::report(
+                    "guess.solve.failed",
+                    "a solve could not be saved",
+                    &Failure::from_error(&error),
+                    &round_scope(place, number).user(record.user),
+                );
                 None
             }
         };
@@ -235,7 +247,7 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
             message: leader.message,
             personal_best,
         };
-        self.announce_ending(place.channel, &active, &ending).await;
+        self.announce_ending(place, &active, &ending).await;
     }
 
     pub async fn cancel(
@@ -265,7 +277,7 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
             by: user,
             reveal: active.round.draw().reveal().clone(),
         };
-        self.announce_ending(place.channel, &active, &ending).await;
+        self.announce_ending(place, &active, &ending).await;
         CancelOutcome::Cancelled
     }
 
@@ -295,20 +307,20 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
 
     fn spawn_timer(self: &Arc<Self>, place: Place, number: u64) {
         let table = Arc::clone(self);
-        tokio::spawn(async move { table.run_timer(place.channel, number).await });
+        tokio::spawn(async move { table.run_timer(place, number).await });
     }
 
-    async fn run_timer(&self, channel: ChannelId, number: u64) {
+    async fn run_timer(&self, place: Place, number: u64) {
         tokio::time::sleep(self.timing.before_hint).await;
-        if !self.post_hint(channel, number).await {
+        if !self.post_hint(place, number).await {
             return;
         }
         tokio::time::sleep(self.timing.after_hint).await;
-        self.time_out(channel, number).await;
+        self.time_out(place, number).await;
     }
 
-    async fn post_hint(&self, channel: ChannelId, number: u64) -> bool {
-        let Some(seat) = self.existing_seat(channel) else {
+    async fn post_hint(&self, place: Place, number: u64) -> bool {
+        let Some(seat) = self.existing_seat(place.channel) else {
             return false;
         };
         let seat = seat.lock().await;
@@ -321,17 +333,18 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
         };
         let posting = self
             .announcer
-            .post_hint(channel, active.round.draw().hint());
+            .post_hint(place.channel, active.round.draw().hint());
+        let scope = round_scope(place, number);
         match tokio::time::timeout(ANNOUNCE_TIMEOUT, posting).await {
             Ok(Ok(())) => {}
-            Ok(Err(error)) => tracing::error!(%error, "a hint could not be posted"),
-            Err(_) => tracing::error!("posting a hint timed out"),
+            Ok(Err(error)) => post_failed("a hint could not be posted", &error, &scope),
+            Err(elapsed) => post_failed("posting a hint timed out", &elapsed, &scope),
         }
         true
     }
 
-    async fn time_out(&self, channel: ChannelId, number: u64) {
-        let Some(seat) = self.existing_seat(channel) else {
+    async fn time_out(&self, place: Place, number: u64) {
+        let Some(seat) = self.existing_seat(place.channel) else {
             return;
         };
         let mut seat = seat.lock().await;
@@ -348,22 +361,35 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
         let ending = Ending::TimedOut {
             reveal: active.round.draw().reveal().clone(),
         };
-        self.announce_ending(channel, &active, &ending).await;
+        self.announce_ending(place, &active, &ending).await;
     }
 
-    async fn announce_ending(&self, channel: ChannelId, active: &Active, ending: &Ending) {
-        tracing::info!(
-            channel = channel.get(),
-            number = active.number,
-            "round ended"
-        );
+    async fn announce_ending(&self, place: Place, active: &Active, ending: &Ending) {
+        let scope = round_scope(place, active.number);
+        failure::record("guess.round.ended", "a silhouette round ended", &scope);
         let posting = self
             .announcer
-            .post_ending(channel, active.round.posted(), ending);
+            .post_ending(place.channel, active.round.posted(), ending);
         match tokio::time::timeout(ANNOUNCE_TIMEOUT, posting).await {
             Ok(Ok(())) => {}
-            Ok(Err(error)) => tracing::error!(%error, "a round ending could not be posted"),
-            Err(_) => tracing::error!("posting a round ending timed out"),
+            Ok(Err(error)) => post_failed("a round ending could not be posted", &error, &scope),
+            Err(elapsed) => post_failed("posting a round ending timed out", &elapsed, &scope),
         }
     }
+}
+
+fn round_scope(place: Place, number: u64) -> Scope {
+    Scope {
+        round: u32::try_from(number).ok(),
+        ..Scope::default().guild(place.guild).channel(place.channel)
+    }
+}
+
+fn post_failed(summary: &str, error: &(dyn std::error::Error + 'static), scope: &Scope) {
+    failure::report(
+        "guess.post.failed",
+        summary,
+        &Failure::from_error(error),
+        scope,
+    );
 }

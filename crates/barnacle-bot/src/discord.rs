@@ -10,6 +10,7 @@ use std::time::Duration;
 use barnacle_catalog::Catalog;
 use barnacle_catalog::curation::Curated;
 use barnacle_catalog::store::CatalogRoot;
+use barnacle_guess::Snowflake;
 use barnacle_guess::Timing;
 use poise::serenity_prelude as serenity;
 use rand::rngs::StdRng;
@@ -18,7 +19,11 @@ use tokio::sync::Semaphore;
 use crate::attendance::Signups;
 use crate::attendance_store::Attendance;
 use crate::config::CommandScope;
+use crate::failure;
+use crate::failure::Failure;
+use crate::failure::Scope;
 use crate::ids::GuildId;
+use crate::logging;
 use crate::lookup::Directory;
 use crate::solves::Solves;
 use crate::startup::Loaded;
@@ -100,6 +105,7 @@ pub async fn run(
             commands: command_list(!rehearsal.is_empty()),
             event_handler: |framework, event| Box::pin(events::handle(framework, event)),
             on_error: |error| Box::pin(events::on_error(error)),
+            post_command: |ctx| Box::pin(completed(ctx)),
             ..Default::default()
         })
         .setup(move |ctx, ready, _framework| {
@@ -114,13 +120,18 @@ pub async fn run(
                     .clear_rehearsal_clocks_except(&rehearsal_guilds)
                     .await
                 {
-                    Ok(0) => {}
-                    Ok(cleared) => {
-                        tracing::info!(cleared, "rehearsal clocks cleared for unlisted servers");
-                    }
-                    Err(error) => {
-                        tracing::error!(%error, "stale rehearsal clocks could not be cleared");
-                    }
+                    Ok(cleared) => tracing::info!(
+                        "event.name" = "rehearsal.clock.cleared",
+                        "event.outcome" = "success",
+                        "barnacle.cleared" = cleared,
+                        "rehearsal clocks cleared for unlisted servers"
+                    ),
+                    Err(error) => failure::report(
+                        "rehearsal.clock.clear_failed",
+                        "stale rehearsal clocks could not be cleared",
+                        &Failure::from_error(&error),
+                        &Scope::default(),
+                    ),
                 }
                 let ticker = Arc::clone(&signups);
                 tokio::spawn(async move {
@@ -129,7 +140,12 @@ pub async fn run(
                     loop {
                         beat.tick().await;
                         let Some(now_ms) = now_ms() else {
-                            tracing::warn!("the clock reads before 1970, so this beat was skipped");
+                            failure::report(
+                                "signup.tick.failed",
+                                "the clock reads before 1970, so this beat was skipped",
+                                &Failure::internal("the clock reads before 1970"),
+                                &Scope::default(),
+                            );
                             continue;
                         };
                         let beating = Arc::clone(&ticker);
@@ -137,14 +153,17 @@ pub async fn run(
                             tokio::spawn(async move { beating.tick(now_unix(), now_ms).await })
                                 .await;
                         match beat_result {
-                            Ok(report) if report.failures > 0 => tracing::warn!(
-                                failures = report.failures,
-                                "a sign-up step failed and will be retried"
+                            Ok(report) => tracing::debug!(
+                                "event.name" = "signup.tick.completed",
+                                "event.outcome" = "success",
+                                "barnacle.failures" = report.failures,
+                                "a sign-up beat ran"
                             ),
-                            Ok(_) => {}
-                            Err(error) => tracing::error!(
-                                %error,
-                                "a sign-up beat died; the next beat will be attempted"
+                            Err(error) => failure::report(
+                                "signup.tick.failed",
+                                "a sign-up beat died; the next beat will be attempted",
+                                &Failure::from_error(&error),
+                                &Scope::default(),
                             ),
                         }
                     }
@@ -161,8 +180,11 @@ pub async fn run(
                     loop {
                         beat.tick().await;
                         let Some(now_ms) = now_ms() else {
-                            tracing::warn!(
-                                "the clock reads before 1970, so this sweep was skipped"
+                            failure::report(
+                                "voice.sweep.failed",
+                                "the clock reads before 1970, so this sweep was skipped",
+                                &Failure::internal("the clock reads before 1970"),
+                                &Scope::default(),
                             );
                             continue;
                         };
@@ -175,19 +197,22 @@ pub async fn run(
                         })
                         .await;
                         match sweep_result {
-                            Ok(report) if report.failures > 0 => tracing::warn!(
-                                failures = report.failures,
-                                "a room sweep step failed and will be retried"
+                            Ok(report) => tracing::debug!(
+                                "event.name" = "voice.sweep.completed",
+                                "event.outcome" = "success",
+                                "barnacle.failures" = report.failures,
+                                "a room sweep ran"
                             ),
-                            Ok(_) => {}
-                            Err(error) => tracing::error!(
-                                %error,
-                                "a room sweep died; the next sweep will be attempted"
+                            Err(error) => failure::report(
+                                "voice.sweep.failed",
+                                "a room sweep died; the next sweep will be attempted",
+                                &Failure::from_error(&error),
+                                &Scope::default(),
                             ),
                         }
                     }
                 });
-                Ok::<Data, Error>(Data {
+                let data = Data {
                     table,
                     root: loaded.root,
                     catalog_name: loaded.catalog_name,
@@ -198,7 +223,18 @@ pub async fn run(
                     signups,
                     rehearsal: rehearsal_guilds,
                     voice,
-                })
+                };
+                tracing::info!(
+                    "event.name" = "service.started",
+                    "event.outcome" = "success",
+                    "service.name" = "barnacle",
+                    "service.version" = env!("CARGO_PKG_VERSION"),
+                    "barnacle.catalog" = data.catalog_name.as_str(),
+                    "barnacle.log.schema" = logging::SCHEMA,
+                    "barnacle.guilds" = ready.guilds.len(),
+                    "Barnacle started"
+                );
+                Ok::<Data, Error>(data)
             })
         })
         .build();
@@ -212,6 +248,26 @@ pub async fn run(
         .map_err(RunError::Registration)?;
     client.start().await?;
     Ok(())
+}
+
+async fn completed(ctx: Context<'_>) {
+    let scope = Scope::of_command(ctx);
+    let started_ms = Snowflake::new(ctx.id()).unix_millis();
+    tracing::info!(
+        "event.name" = "command.completed",
+        "event.outcome" = "success",
+        "discord.guild.id" = scope
+            .guild
+            .map(|guild| tracing::field::display(guild.get())),
+        "discord.channel.id" = scope
+            .channel
+            .map(|channel| tracing::field::display(channel.get())),
+        "discord.user.id" = scope.user.map(|user| tracing::field::display(user.get())),
+        "discord.interaction.id" = scope.interaction.map(tracing::field::display),
+        "discord.command.name" = scope.command.as_deref(),
+        "barnacle.duration_ms" = now_ms().map(|now_ms| now_ms.saturating_sub(started_ms)),
+        "a command finished"
+    );
 }
 
 pub fn command_list(rehearsing: bool) -> Vec<poise::Command<Data, Error>> {
@@ -235,7 +291,11 @@ async fn register(
     match scope {
         CommandScope::Global => {
             poise::builtins::register_globally(http, &command_list(false)).await?;
-            tracing::info!("commands registered globally");
+            failure::record(
+                "commands.registered",
+                "commands registered globally",
+                &Scope::default(),
+            );
         }
         CommandScope::Guilds { guilds } => {
             tracing::debug!(
@@ -249,7 +309,11 @@ async fn register(
                     serenity::GuildId::new(*guild),
                 )
                 .await?;
-                tracing::info!(guild, "commands registered in server");
+                failure::record(
+                    "commands.registered",
+                    "commands registered in a server",
+                    &Scope::default().guild(GuildId::new(*guild)),
+                );
             }
         }
     }
