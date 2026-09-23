@@ -35,6 +35,7 @@ const AKI: UserId = UserId::new(200);
 const BOREALIS: UserId = UserId::new(300);
 const CREWMATES: RoleId = RoleId::new(4242);
 const RESERVES: RoleId = RoleId::new(4343);
+const TRIALS: RoleId = RoleId::new(4444);
 const CREATED_AT: u64 = 1_700_000_000_000;
 const ENDED_AT: u64 = 1_700_000_900_000;
 
@@ -68,7 +69,7 @@ fn proposal(number: u32, first: &str, last: &str) -> NewSeason {
         range: Range::new(day(first), day(last)).unwrap(),
         created_by: MANAGER,
         created_at_ms: CREATED_AT,
-        ping_role: None,
+        ping_roles: Vec::new(),
     }
 }
 
@@ -92,7 +93,7 @@ async fn season_35(store: &Attendance) -> Season {
 
 async fn pinging_season_35(store: &Attendance) -> Season {
     let new = NewSeason {
-        ping_role: Some(CREWMATES),
+        ping_roles: vec![CREWMATES],
         ..proposal(35, "2026-09-16", "2026-11-05")
     };
     created(store, &new).await
@@ -156,7 +157,7 @@ async fn create_season_rejects_an_overlapping_range() {
 async fn a_season_stores_and_returns_its_ping_role() {
     let store = attendance().await;
     let season = pinging_season_35(&store).await;
-    assert_eq!(season.ping_role, Some(CREWMATES));
+    assert_eq!(season.ping_roles, vec![CREWMATES]);
     assert_eq!(season.ended_at_ms, None);
     assert_eq!(store.season(season.id).await.unwrap(), Some(season.clone()));
     assert_eq!(store.live_season(GUILD, 35).await.unwrap(), Some(season));
@@ -281,7 +282,7 @@ async fn a_click_can_still_resolve_an_ended_season() {
     assert_eq!(found.number, 35);
     assert_eq!(found.guild, GUILD);
     assert_eq!(found.channel, CHANNEL);
-    assert_eq!(found.ping_role, Some(CREWMATES));
+    assert_eq!(found.ping_roles, vec![CREWMATES]);
     assert_eq!(found.ended_at_ms, Some(ENDED_AT));
 }
 
@@ -393,7 +394,7 @@ async fn edit_season_changes_only_what_it_is_given() {
     assert_eq!(after.range, season.range);
     assert_eq!(after.created_by, season.created_by);
     assert_eq!(after.created_at_ms, season.created_at_ms);
-    assert_eq!(after.ping_role, season.ping_role);
+    assert_eq!(after.ping_roles, season.ping_roles);
     assert_eq!(after.ended_at_ms, None);
     assert_eq!(store.live_season(GUILD, 35).await.unwrap(), None);
     assert_eq!(store.live_season(GUILD, 36).await.unwrap(), Some(after));
@@ -405,26 +406,26 @@ async fn edit_season_clears_a_codename_and_a_ping_role() {
     let season = pinging_season_35(&store).await;
     let clear = SeasonChange {
         codename: Some(None),
-        ping_role: Some(None),
+        ping_roles: Some(Vec::new()),
         ..SeasonChange::default()
     };
     let (before, after) = edited(&store, 35, &clear).await;
     assert_eq!(before, season);
     assert_eq!(after.codename, None);
-    assert_eq!(after.ping_role, None);
+    assert_eq!(after.ping_roles, Vec::new());
     assert_eq!(
         store.live_season(GUILD, 35).await.unwrap(),
         Some(after.clone())
     );
     let set = SeasonChange {
         codename: Some(Some("Basilisk".to_owned())),
-        ping_role: Some(Some(RESERVES)),
+        ping_roles: Some(vec![RESERVES]),
         ..SeasonChange::default()
     };
     let (was, now) = edited(&store, 35, &set).await;
     assert_eq!(was, after);
     assert_eq!(now.codename.as_deref(), Some("Basilisk"));
-    assert_eq!(now.ping_role, Some(RESERVES));
+    assert_eq!(now.ping_roles, vec![RESERVES]);
     assert_eq!(store.live_season(GUILD, 35).await.unwrap(), Some(now));
 }
 
@@ -509,7 +510,11 @@ async fn a_bad_role_id_is_named() {
         .await
         .unwrap();
     let store = Attendance::with_pool(pool.clone()).await.unwrap();
-    sqlx::query("INSERT INTO cb_seasons (id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id) VALUES (1, 1, 10, 35, NULL, '2026-09-16', '2026-11-05', 100, 0, 0)")
+    sqlx::query("INSERT INTO cb_seasons (id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms) VALUES (1, 1, 10, 35, NULL, '2026-09-16', '2026-11-05', 100, 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO cb_season_ping_roles (season_id, position, role_id) VALUES (1, 1, 0)")
         .execute(&pool)
         .await
         .unwrap();
@@ -758,7 +763,7 @@ async fn a_missing_table_is_named() {
     ));
     let pool = memory_pool().await;
     sqlx::raw_sql(
-        "CREATE TABLE cb_seasons (id INTEGER PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL, number INTEGER NOT NULL, codename TEXT, first_day TEXT NOT NULL, last_day TEXT NOT NULL, created_by INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, ping_role_id INTEGER, ended_at_ms INTEGER, every_day INTEGER NOT NULL DEFAULT 0) STRICT",
+        "CREATE TABLE cb_seasons (id INTEGER PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL, number INTEGER NOT NULL, codename TEXT, first_day TEXT NOT NULL, last_day TEXT NOT NULL, created_by INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, ended_at_ms INTEGER, every_day INTEGER NOT NULL DEFAULT 0) STRICT; CREATE TABLE cb_season_ping_roles (season_id INTEGER NOT NULL, position INTEGER NOT NULL, role_id INTEGER NOT NULL, PRIMARY KEY (season_id, position)) STRICT",
     )
     .execute(&pool)
     .await
@@ -1145,6 +1150,10 @@ async fn a_database_without_the_rehearsal_clock_is_named() {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(common::CB_PING_ROLES.trim_start_matches(".bail on\n"))
+        .execute(&pool)
+        .await
+        .unwrap();
     let error = Attendance::with_pool(pool).await.err().unwrap();
     assert!(matches!(
         error,
@@ -1182,4 +1191,221 @@ async fn a_refused_season_leaves_the_rehearsal_clock_alone() {
         CreateOutcome::NumberTaken
     );
     assert_eq!(store.rehearsal_clock(GUILD).await.unwrap(), 86_400);
+}
+
+async fn ping_role_rows(pool: &SqlitePool, season: i64) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM cb_season_ping_roles WHERE season_id = ?")
+        .bind(season)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_season_stores_and_returns_its_ping_roles_in_order() {
+    let store = attendance().await;
+    let new = NewSeason {
+        ping_roles: vec![CREWMATES, RESERVES, TRIALS],
+        ..proposal(35, "2026-09-16", "2026-11-05")
+    };
+    let season = created(&store, &new).await;
+    assert_eq!(season.ping_roles, vec![CREWMATES, RESERVES, TRIALS]);
+    assert_eq!(
+        store.season(season.id).await.unwrap().unwrap().ping_roles,
+        vec![CREWMATES, RESERVES, TRIALS]
+    );
+    assert_eq!(
+        store
+            .live_season(GUILD, 35)
+            .await
+            .unwrap()
+            .unwrap()
+            .ping_roles,
+        vec![CREWMATES, RESERVES, TRIALS]
+    );
+}
+
+#[tokio::test]
+async fn edit_season_replaces_or_clears_every_ping_role() {
+    let store = attendance().await;
+    let new = NewSeason {
+        ping_roles: vec![CREWMATES, RESERVES],
+        ..proposal(35, "2026-09-16", "2026-11-05")
+    };
+    created(&store, &new).await;
+    let replace = SeasonChange {
+        ping_roles: Some(vec![TRIALS]),
+        ..SeasonChange::default()
+    };
+    let (_, replaced) = edited(&store, 35, &replace).await;
+    assert_eq!(replaced.ping_roles, vec![TRIALS]);
+    assert_eq!(
+        store
+            .live_season(GUILD, 35)
+            .await
+            .unwrap()
+            .unwrap()
+            .ping_roles,
+        vec![TRIALS]
+    );
+    let clear = SeasonChange {
+        ping_roles: Some(Vec::new()),
+        ..SeasonChange::default()
+    };
+    let (_, cleared) = edited(&store, 35, &clear).await;
+    assert_eq!(cleared.ping_roles, Vec::new());
+    assert_eq!(
+        store
+            .live_season(GUILD, 35)
+            .await
+            .unwrap()
+            .unwrap()
+            .ping_roles,
+        Vec::new()
+    );
+}
+
+#[tokio::test]
+async fn removing_a_season_removes_its_ping_roles() {
+    let pool = attendance_pool().await;
+    let store = Attendance::with_pool(pool.clone()).await.unwrap();
+    let ended = pinging_season_35(&store).await;
+    assert_eq!(ping_role_rows(&pool, ended.id).await, 1);
+    assert_eq!(
+        store.end_season(GUILD, 35, ENDED_AT).await.unwrap(),
+        EndOutcome::Removed
+    );
+    assert_eq!(ping_role_rows(&pool, ended.id).await, 0);
+    let purged = pinging_season_35(&store).await;
+    assert_eq!(ping_role_rows(&pool, purged.id).await, 1);
+    assert_eq!(
+        store.purge_season(GUILD, purged.id, 35).await.unwrap(),
+        Some(0)
+    );
+    assert_eq!(ping_role_rows(&pool, purged.id).await, 0);
+    let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cb_season_ping_roles")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+}
+
+#[tokio::test]
+async fn migration_0006_moves_each_ping_role_to_position_one() {
+    let pool = memory_pool().await;
+    for migration in [
+        common::CB_MIGRATION,
+        common::CB_CONTROLS,
+        common::CB_HARNESS,
+    ] {
+        sqlx::raw_sql(migration.trim_start_matches(".bail on\n"))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    sqlx::raw_sql("INSERT INTO cb_seasons (id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms, ping_role_id) VALUES (1, 1, 10, 35, NULL, '2026-09-16', '2026-11-05', 100, 0, 4242), (2, 1, 10, 36, NULL, '2026-12-02', '2026-12-20', 100, 0, NULL)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(common::CB_PING_ROLES.trim_start_matches(".bail on\n"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let store = Attendance::with_pool(pool).await.unwrap();
+    assert_eq!(
+        store.season(1).await.unwrap().unwrap().ping_roles,
+        vec![CREWMATES]
+    );
+    assert_eq!(
+        store.season(2).await.unwrap().unwrap().ping_roles,
+        Vec::new()
+    );
+}
+
+#[tokio::test]
+async fn the_0006_rollback_restores_the_first_ping_role() {
+    let pool = attendance_pool().await;
+    let store = Attendance::with_pool(pool.clone()).await.unwrap();
+    let new = NewSeason {
+        ping_roles: vec![CREWMATES, RESERVES],
+        ..proposal(35, "2026-09-16", "2026-11-05")
+    };
+    let season = created(&store, &new).await;
+    sqlx::raw_sql(common::CB_PING_ROLES_DOWN.trim_start_matches(".bail on\n"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let names: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('cb_seasons') ORDER BY cid")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        names,
+        [
+            "id",
+            "guild_id",
+            "channel_id",
+            "number",
+            "codename",
+            "first_day",
+            "last_day",
+            "created_by",
+            "created_at_ms",
+            "ping_role_id",
+            "ended_at_ms",
+            "every_day",
+        ]
+    );
+    let restored: Option<i64> =
+        sqlx::query_scalar("SELECT ping_role_id FROM cb_seasons WHERE id = ?")
+            .bind(season.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(restored, Some(4242));
+}
+
+#[tokio::test]
+async fn replacing_a_post_message_keeps_its_state_and_needs_the_old_message() {
+    let (store, season) = posted_season(attendance_pool().await).await;
+    let first = night("2026-09-16");
+    let old = Snowflake::new(7);
+    let new = Snowflake::new(8);
+    store
+        .set_post_state(season.id, first, PostState::Closed)
+        .await
+        .unwrap();
+    let closed = store.post(season.id, first).await.unwrap();
+    assert!(
+        !store
+            .replace_post_message(season.id, first, old, new)
+            .await
+            .unwrap()
+    );
+    assert_eq!(store.post(season.id, first).await.unwrap(), closed);
+    store
+        .set_post_state(season.id, first, PostState::Open)
+        .await
+        .unwrap();
+    assert!(
+        !store
+            .replace_post_message(season.id, first, Snowflake::new(99), new)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store.post(season.id, first).await.unwrap().unwrap().message,
+        old
+    );
+    assert!(
+        store
+            .replace_post_message(season.id, first, old, new)
+            .await
+            .unwrap()
+    );
+    let replaced = store.post(season.id, first).await.unwrap().unwrap();
+    assert_eq!(replaced.message, new);
+    assert_eq!(replaced.state, PostState::Open);
+    assert_eq!(replaced.posted_at_ms, CREATED_AT);
 }

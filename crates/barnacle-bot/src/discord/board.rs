@@ -40,7 +40,7 @@ fn signup_embed(view: &SignupView) -> serenity::CreateEmbed {
 }
 
 fn ping_mentions(delivery: Delivery, view: &SignupView) -> serenity::CreateAllowedMentions {
-    let allowance = wiring::ping_allowance(delivery, view.ping);
+    let allowance = wiring::ping_allowance(delivery, &view.pings);
     let mentions = serenity::CreateAllowedMentions::new().roles(
         allowance
             .roles
@@ -157,7 +157,7 @@ impl Board for DiscordBoard {
         delivery: Delivery,
     ) -> Result<Sent, BoardError> {
         let message = serenity::CreateMessage::new()
-            .content(wiring::ping_content(view.ping))
+            .content(wiring::ping_content(&view.pings))
             .embed(signup_embed(view))
             .components(signup_rows(view))
             .allowed_mentions(ping_mentions(delivery, view));
@@ -172,7 +172,7 @@ impl Board for DiscordBoard {
             .collect();
         Ok(Sent {
             message: Snowflake::new(posted.id.get()),
-            ping_heard: wiring::ping_heard(view.ping, &mentioned, posted.mention_everyone),
+            unheard: wiring::unheard_pings(&view.pings, &mentioned, posted.mention_everyone),
         })
     }
 
@@ -202,7 +202,7 @@ impl Board for DiscordBoard {
         view: &SignupView,
     ) -> Result<(), BoardError> {
         let edit = serenity::EditMessage::new()
-            .content(wiring::ping_content(view.ping))
+            .content(wiring::ping_content(&view.pings))
             .embed(signup_embed(view))
             .components(signup_rows(view))
             .allowed_mentions(ping_mentions(Delivery::Redraw, view));

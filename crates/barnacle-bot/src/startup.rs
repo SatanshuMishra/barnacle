@@ -98,6 +98,14 @@ pub enum StartupError {
         source: AttendanceError,
     },
     #[error(
+        "the ping roles are missing from {path}; back the file up, then add them with `sqlite3 {path} < migrations/0006_cb_ping_roles.sql`"
+    )]
+    PingRoles {
+        path: PathBuf,
+        #[source]
+        source: AttendanceError,
+    },
+    #[error(
         "the voice room tables are missing from {path}; add them with `sqlite3 {path} < migrations/0005_voice_rooms.sql`"
     )]
     VoiceRooms {
@@ -110,6 +118,7 @@ pub enum StartupError {
 fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
     let path = path.to_owned();
     match source {
+        AttendanceError::MissingPingRoles => StartupError::PingRoles { path, source },
         AttendanceError::UnexpectedColumns { .. } | AttendanceError::MissingIndex { .. } => {
             StartupError::SeasonControls { path, source }
         }

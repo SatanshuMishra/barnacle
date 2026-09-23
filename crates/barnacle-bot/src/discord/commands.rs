@@ -18,7 +18,10 @@ use super::rooms::MISSING_PERMISSIONS;
 use super::rooms::UNKNOWN_CHANNEL;
 use super::rooms::refused;
 use crate::attendance::ClearScope;
+use crate::attendance::RepostOutcome;
+use crate::attendance::RepostPing;
 use crate::attendance::next_moment;
+use crate::attendance::next_post_at;
 use crate::attendance_store::Attendance;
 use crate::attendance_store::CreateOutcome;
 use crate::attendance_store::EditOutcome;
@@ -53,6 +56,7 @@ use crate::voice_text;
 use crate::wiring;
 use crate::wiring::ChannelAccess;
 use crate::wiring::LeaderboardRequest;
+use crate::wiring::PingChoiceProblem;
 use crate::wiring::PingReach;
 use crate::wiring::PingVerdict;
 use crate::wiring::SetupPing;
@@ -113,9 +117,16 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
                     },
                     poise::Command {
                         description: Some(
-                            "Change a season's number, dates, codename or ping role".into(),
+                            "Change a season's number, dates, codename or ping roles".into(),
                         ),
                         ..season_edit()
+                    },
+                    poise::Command {
+                        description: Some(
+                            "Send a season's open sign-up post again at the bottom of its channel"
+                                .into(),
+                        ),
+                        ..season_repost()
                     },
                     poise::Command {
                         description: Some("Move a season's sign-up posts to this channel".into()),
@@ -337,6 +348,23 @@ fn grants_mention(granted: serenity::Permissions) -> bool {
     granted.intersects(MENTION_GRANT)
 }
 
+fn person_permissions_in(ctx: Context<'_>, season: &Season) -> Option<serenity::Permissions> {
+    let poise::Context::Application(app) = ctx else {
+        return None;
+    };
+    let member = app.interaction.member.as_deref()?;
+    if ctx.channel_id().get() == season.channel.get() {
+        return member.permissions;
+    }
+    let guild = ctx.guild()?;
+    let channel = guild
+        .channels
+        .get(&serenity::ChannelId::from(NonZeroU64::new(
+            season.channel.get(),
+        )?))?;
+    Some(guild.user_permissions_in(channel, member))
+}
+
 fn role_mentionable(ctx: Context<'_>, ping: Ping) -> Option<bool> {
     match ping {
         Ping::Everyone => Some(false),
@@ -393,12 +421,46 @@ fn check_ping(
     }
 }
 
-fn season_ping(season: &Season) -> Option<Ping> {
-    season.ping_role.map(|role| Ping::of(season.guild, role))
+fn check_pings(
+    ctx: Context<'_>,
+    pings: &[Ping],
+    place: Place,
+    channel_granted: Option<serenity::Permissions>,
+    creating: bool,
+) -> Vec<CheckedPing> {
+    pings
+        .iter()
+        .map(|ping| check_ping(ctx, *ping, place, channel_granted, creating))
+        .collect()
 }
 
-fn ping_warning(checked: Option<CheckedPing>, channel: ChannelId) -> Option<String> {
-    checked.and_then(|checked| text::silent_ping_warning(checked.ping, checked.verdict, channel))
+fn chosen_ping_roles(
+    guild: GuildId,
+    given: [Option<serenity::RoleId>; 5],
+) -> Result<Vec<RoleId>, text::Refusal> {
+    wiring::ping_choice(
+        guild,
+        given.map(|role| role.map(|role| RoleId::new(role.get()))),
+    )
+    .map_err(|problem| match problem {
+        PingChoiceProblem::MixedEveryone => text::Refusal::PingMixesEveryone,
+    })
+}
+
+fn pings_of(guild: GuildId, roles: &[RoleId]) -> Vec<Ping> {
+    roles.iter().map(|role| Ping::of(guild, *role)).collect()
+}
+
+fn season_pings(season: &Season) -> Vec<Ping> {
+    pings_of(season.guild, &season.ping_roles)
+}
+
+fn ping_warning(checked: &[CheckedPing], channel: ChannelId) -> Option<String> {
+    let verdicts: Vec<(Ping, PingVerdict)> = checked
+        .iter()
+        .map(|checked| (checked.ping, checked.verdict))
+        .collect();
+    text::silent_ping_warning(&verdicts, channel)
 }
 
 fn warned(warning: Option<String>, reply: String) -> String {
@@ -410,31 +472,19 @@ fn warned(warning: Option<String>, reply: String) -> String {
 
 async fn refuse_blocked_ping(
     ctx: Context<'_>,
-    checked: Option<CheckedPing>,
+    checked: &[CheckedPing],
     channel: ChannelId,
 ) -> Result<bool, Error> {
-    match checked {
-        Some(checked) if checked.setup == SetupPing::Refuse => {
-            refuse(
-                ctx,
-                text::Refusal::PingBlockedByChannel {
-                    ping: checked.ping,
-                    channel,
-                },
-            )
-            .await?;
-            Ok(true)
-        }
-        _ => Ok(false),
+    let pings: Vec<Ping> = checked
+        .iter()
+        .filter(|checked| checked.setup == SetupPing::Refuse)
+        .map(|checked| checked.ping)
+        .collect();
+    if pings.is_empty() {
+        return Ok(false);
     }
-}
-
-fn next_post_at(range: Range, now_unix: i64) -> Option<i64> {
-    range
-        .due_night(now_unix)
-        .is_none()
-        .then(|| range.next_night(now_unix).map(Night::post_at_unix))
-        .flatten()
+    refuse(ctx, text::Refusal::PingBlockedByChannel { pings, channel }).await?;
+    Ok(true)
 }
 
 async fn remove_round_post(ctx: Context<'_>) {
@@ -738,6 +788,7 @@ async fn season(_ctx: Context<'_>) -> Result<(), Error> {
 }
 
 #[poise::command(slash_command, rename = "start")]
+#[allow(clippy::too_many_arguments)]
 async fn season_start(
     ctx: Context<'_>,
     #[description = "Which CB season this is, for example 35"]
@@ -749,6 +800,18 @@ async fn season_start(
     #[max_length = 100]
     codename: Option<String>,
     #[description = "Role to ping when a sign-up is posted"] ping_role: Option<serenity::RoleId>,
+    #[description = "Another role to ping when a sign-up is posted"] ping_role_2: Option<
+        serenity::RoleId,
+    >,
+    #[description = "Another role to ping when a sign-up is posted"] ping_role_3: Option<
+        serenity::RoleId,
+    >,
+    #[description = "Another role to ping when a sign-up is posted"] ping_role_4: Option<
+        serenity::RoleId,
+    >,
+    #[description = "Another role to ping when a sign-up is posted"] ping_role_5: Option<
+        serenity::RoleId,
+    >,
 ) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -779,17 +842,27 @@ async fn season_start(
     let Some(created_at_ms) = super::now_ms() else {
         return fail(ctx, Failure::internal(CLOCK_BEFORE_1970)).await;
     };
-    let ping_role = ping_role.map(|role| RoleId::new(role.get()));
-    let checked = ping_role.map(|role| {
-        check_ping(
-            ctx,
-            Ping::of(place.guild, role),
-            place,
-            app_permissions(ctx),
-            true,
-        )
-    });
-    if refuse_blocked_ping(ctx, checked, place.channel).await? {
+    let ping_roles = match chosen_ping_roles(
+        place.guild,
+        [
+            ping_role,
+            ping_role_2,
+            ping_role_3,
+            ping_role_4,
+            ping_role_5,
+        ],
+    ) {
+        Ok(roles) => roles,
+        Err(refusal) => return refuse(ctx, refusal).await,
+    };
+    let checked = check_pings(
+        ctx,
+        &pings_of(place.guild, &ping_roles),
+        place,
+        app_permissions(ctx),
+        true,
+    );
+    if refuse_blocked_ping(ctx, &checked, place.channel).await? {
         return Ok(());
     }
     let new = NewSeason {
@@ -800,12 +873,12 @@ async fn season_start(
         range,
         created_by: UserId::new(ctx.author().id.get()),
         created_at_ms,
-        ping_role,
+        ping_roles,
     };
     match ctx.data().signups.store().create_season(&new).await? {
         CreateOutcome::Created(season) => {
             let started = text::season_started(&season, nights_left, next_post_at(range, now_unix));
-            private(ctx, warned(ping_warning(checked, place.channel), started)).await
+            private(ctx, warned(ping_warning(&checked, place.channel), started)).await
         }
         CreateOutcome::NumberTaken => refuse(ctx, text::Refusal::SeasonNumberTaken(number)).await,
         CreateOutcome::Overlaps(other) => refuse(ctx, text::Refusal::SeasonOverlaps(other)).await,
@@ -857,19 +930,39 @@ async fn season_edit(
     #[max_length = 100]
     codename: Option<String>,
     #[description = "Role to ping when a sign-up is posted"] ping_role: Option<serenity::RoleId>,
+    #[description = "Another role to ping when a sign-up is posted"] ping_role_2: Option<
+        serenity::RoleId,
+    >,
+    #[description = "Another role to ping when a sign-up is posted"] ping_role_3: Option<
+        serenity::RoleId,
+    >,
+    #[description = "Another role to ping when a sign-up is posted"] ping_role_4: Option<
+        serenity::RoleId,
+    >,
+    #[description = "Another role to ping when a sign-up is posted"] ping_role_5: Option<
+        serenity::RoleId,
+    >,
     #[description = "Remove the codename"] clear_codename: Option<bool>,
-    #[description = "Stop pinging a role"] clear_ping_role: Option<bool>,
+    #[description = "Stop pinging every role"] clear_ping_role: Option<bool>,
 ) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
     };
     let clearing_codename = clear_codename.unwrap_or(false);
     let clearing_ping_role = clear_ping_role.unwrap_or(false);
+    let given_ping_roles = [
+        ping_role,
+        ping_role_2,
+        ping_role_3,
+        ping_role_4,
+        ping_role_5,
+    ];
+    let naming_ping_roles = given_ping_roles.iter().any(Option::is_some);
     let named = new_number.is_some()
         || first_day.is_some()
         || last_day.is_some()
         || codename.is_some()
-        || ping_role.is_some()
+        || naming_ping_roles
         || clearing_codename
         || clearing_ping_role;
     if !named {
@@ -878,9 +971,13 @@ async fn season_edit(
     if codename.is_some() && clearing_codename {
         return refuse(ctx, text::Refusal::CodenameBothWays).await;
     }
-    if ping_role.is_some() && clearing_ping_role {
+    if naming_ping_roles && clearing_ping_role {
         return refuse(ctx, text::Refusal::PingBothWays).await;
     }
+    let chosen_roles = match chosen_ping_roles(place.guild, given_ping_roles) {
+        Ok(roles) => roles,
+        Err(refusal) => return refuse(ctx, refusal).await,
+    };
     let first = first_day.as_deref().map(parse_day);
     let last = last_day.as_deref().map(parse_day);
     if matches!(first, Some(None)) || matches!(last, Some(None)) {
@@ -895,10 +992,10 @@ async fn season_edit(
         } else {
             codename.map(Some)
         },
-        ping_role: if clearing_ping_role {
-            Some(None)
+        ping_roles: if clearing_ping_role {
+            Some(Vec::new())
         } else {
-            ping_role.map(|role| Some(RoleId::new(role.get())))
+            naming_ping_roles.then_some(chosen_roles)
         },
     };
     let now_unix = super::now_unix();
@@ -933,19 +1030,17 @@ async fn season_edit(
                 guild: after.guild,
                 channel: after.channel,
             };
-            let checked = season_ping(&after).map(|ping| {
-                check_ping(
-                    ctx,
-                    ping,
-                    posts_in,
-                    failure::barnacle_permissions_in(ctx.cache(), after.guild, after.channel),
-                    false,
-                )
-            });
+            let checked = check_pings(
+                ctx,
+                &season_pings(&after),
+                posts_in,
+                failure::barnacle_permissions_in(ctx.cache(), after.guild, after.channel),
+                false,
+            );
             private(
                 ctx,
                 warned(
-                    ping_warning(checked, after.channel),
+                    ping_warning(&checked, after.channel),
                     text::season_edit_reached(&edited, &cleared, &refreshed),
                 ),
             )
@@ -962,6 +1057,103 @@ async fn season_edit(
         EditOutcome::BadRange => refuse(ctx, text::Refusal::LastDayBeforeFirst).await,
         EditOutcome::TooFar => refuse(ctx, text::Refusal::DatesTooFar).await,
         EditOutcome::NotFound => refuse(ctx, text::Refusal::SeasonNotFound(number)).await,
+    }
+}
+
+#[poise::command(slash_command, rename = "repost")]
+async fn season_repost(
+    ctx: Context<'_>,
+    #[description = "Which season to repost, for example 35"]
+    #[min = 1]
+    number: u32,
+    #[description = "Ping the season's roles again"] ping_again: Option<bool>,
+) -> Result<(), Error> {
+    let Some(place) = place(ctx) else {
+        return Ok(());
+    };
+    let pinging_again = ping_again.unwrap_or(false);
+    let signups = &ctx.data().signups;
+    let Some(season) = signups.store().live_season(place.guild, number).await? else {
+        return refuse(ctx, text::Refusal::SeasonNotFound(number)).await;
+    };
+    if let Some(refusal) = missing_in_season_channel(ctx, &season) {
+        return refuse(ctx, refusal).await;
+    }
+    let pings = season_pings(&season);
+    let checked = if pinging_again {
+        if pings.is_empty() {
+            return refuse(ctx, text::Refusal::RepostNothingToPing).await;
+        }
+        let mentionable: Vec<bool> = pings
+            .iter()
+            .map(|ping| role_mentionable(ctx, *ping).unwrap_or(false))
+            .collect();
+        let person = person_permissions_in(ctx, &season).map(grants_mention);
+        if !wiring::may_ping_again(&pings, person, &mentionable) {
+            return refuse(ctx, text::Refusal::RepostPingNotAllowed).await;
+        }
+        check_pings(
+            ctx,
+            &pings,
+            Place {
+                guild: season.guild,
+                channel: season.channel,
+            },
+            failure::barnacle_permissions_in(ctx.cache(), season.guild, season.channel),
+            false,
+        )
+    } else {
+        Vec::new()
+    };
+    let Some(now_ms) = super::now_ms() else {
+        return fail(ctx, Failure::internal(CLOCK_BEFORE_1970)).await;
+    };
+    let now_unix = super::now_unix();
+    let ping = if pinging_again {
+        RepostPing::Again {
+            checked: season.ping_roles.clone(),
+        }
+    } else {
+        RepostPing::Quiet
+    };
+    ctx.defer_ephemeral().await?;
+    match signups
+        .repost(place.guild, number, ping, now_unix, now_ms)
+        .await
+    {
+        RepostOutcome::Reposted {
+            night,
+            adopted,
+            pinged,
+            ..
+        } => {
+            private(
+                ctx,
+                warned(
+                    ping_warning(&checked, season.channel),
+                    text::reposted(&season, night, adopted, &pinged),
+                ),
+            )
+            .await
+        }
+        RepostOutcome::NotFound => refuse(ctx, text::Refusal::SeasonNotFound(number)).await,
+        RepostOutcome::NothingOpen {
+            next_post_at,
+            nights_left,
+        } => {
+            refuse(
+                ctx,
+                text::Refusal::NothingToRepost {
+                    number,
+                    next_post_at,
+                    nights_left,
+                },
+            )
+            .await
+        }
+        RepostOutcome::PingsChanged => refuse(ctx, text::Refusal::RepostPingsChanged).await,
+        RepostOutcome::Superseded => refuse(ctx, text::Refusal::RepostSuperseded).await,
+        RepostOutcome::Failed(failure) => fail(ctx, failure).await,
     }
 }
 
@@ -1020,9 +1212,14 @@ async fn season_move(
         cleared.touched,
         next_post_at(after.range, now_unix),
     );
-    let checked =
-        season_ping(&after).map(|ping| check_ping(ctx, ping, place, app_permissions(ctx), false));
-    private(ctx, warned(ping_warning(checked, place.channel), moved)).await
+    let checked = check_pings(
+        ctx,
+        &season_pings(&after),
+        place,
+        app_permissions(ctx),
+        false,
+    );
+    private(ctx, warned(ping_warning(&checked, place.channel), moved)).await
 }
 
 #[poise::command(slash_command, rename = "end")]
@@ -1107,6 +1304,7 @@ async fn posts_of(store: &Attendance, seasons: &[Season]) -> Result<Vec<(i64, Ve
 }
 
 #[poise::command(slash_command, rename = "start")]
+#[allow(clippy::too_many_arguments)]
 async fn rehearse_start(
     ctx: Context<'_>,
     #[description = "Which CB season this is, for example 99"]
@@ -1116,6 +1314,18 @@ async fn rehearse_start(
     #[max_length = 100]
     codename: Option<String>,
     #[description = "Role to ping when a sign-up is posted"] ping_role: Option<serenity::RoleId>,
+    #[description = "Another role to ping when a sign-up is posted"] ping_role_2: Option<
+        serenity::RoleId,
+    >,
+    #[description = "Another role to ping when a sign-up is posted"] ping_role_3: Option<
+        serenity::RoleId,
+    >,
+    #[description = "Another role to ping when a sign-up is posted"] ping_role_4: Option<
+        serenity::RoleId,
+    >,
+    #[description = "Another role to ping when a sign-up is posted"] ping_role_5: Option<
+        serenity::RoleId,
+    >,
     #[description = "How many nights to rehearse, one per day from tomorrow (default 3)"]
     #[min = 1]
     #[max = 7]
@@ -1151,17 +1361,27 @@ async fn rehearse_start(
     let Some(created_at_ms) = super::now_ms() else {
         return fail(ctx, Failure::internal(CLOCK_BEFORE_1970)).await;
     };
-    let ping_role = ping_role.map(|role| RoleId::new(role.get()));
-    let checked = ping_role.map(|role| {
-        check_ping(
-            ctx,
-            Ping::of(place.guild, role),
-            place,
-            app_permissions(ctx),
-            true,
-        )
-    });
-    if refuse_blocked_ping(ctx, checked, place.channel).await? {
+    let ping_roles = match chosen_ping_roles(
+        place.guild,
+        [
+            ping_role,
+            ping_role_2,
+            ping_role_3,
+            ping_role_4,
+            ping_role_5,
+        ],
+    ) {
+        Ok(roles) => roles,
+        Err(refusal) => return refuse(ctx, refusal).await,
+    };
+    let checked = check_pings(
+        ctx,
+        &pings_of(place.guild, &ping_roles),
+        place,
+        app_permissions(ctx),
+        true,
+    );
+    if refuse_blocked_ping(ctx, &checked, place.channel).await? {
         return Ok(());
     }
     let new = NewSeason {
@@ -1172,13 +1392,13 @@ async fn rehearse_start(
         range,
         created_by: UserId::new(ctx.author().id.get()),
         created_at_ms,
-        ping_role,
+        ping_roles,
     };
     match ctx.data().signups.store().create_season(&new).await? {
         CreateOutcome::Created(season) => {
             let started =
                 text::rehearsal_started(&season, nights_left, next_post_at(range, now_unix));
-            private(ctx, warned(ping_warning(checked, place.channel), started)).await
+            private(ctx, warned(ping_warning(&checked, place.channel), started)).await
         }
         CreateOutcome::NumberTaken => refuse(ctx, text::Refusal::SeasonNumberTaken(number)).await,
         CreateOutcome::Overlaps(other) => refuse(ctx, text::Refusal::SeasonOverlaps(other)).await,

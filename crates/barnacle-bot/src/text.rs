@@ -215,9 +215,19 @@ pub enum Refusal {
     CategoryAndTopLevel,
     HubNothingToChange,
     PingBlockedByChannel {
-        ping: Ping,
+        pings: Vec<Ping>,
         channel: ChannelId,
     },
+    PingMixesEveryone,
+    NothingToRepost {
+        number: u32,
+        next_post_at: Option<i64>,
+        nights_left: usize,
+    },
+    RepostNothingToPing,
+    RepostPingNotAllowed,
+    RepostPingsChanged,
+    RepostSuperseded,
 }
 
 impl Refusal {
@@ -247,6 +257,12 @@ impl Refusal {
             Refusal::CategoryAndTopLevel => "category_and_top_level",
             Refusal::HubNothingToChange => "hub_nothing_to_change",
             Refusal::PingBlockedByChannel { .. } => "ping_blocked_by_channel",
+            Refusal::PingMixesEveryone => "ping_mixes_everyone",
+            Refusal::NothingToRepost { .. } => "nothing_to_repost",
+            Refusal::RepostNothingToPing => "repost_nothing_to_ping",
+            Refusal::RepostPingNotAllowed => "repost_ping_not_allowed",
+            Refusal::RepostPingsChanged => "repost_pings_changed",
+            Refusal::RepostSuperseded => "repost_superseded",
         }
     }
 
@@ -328,8 +344,32 @@ impl Refusal {
             Refusal::HubNothingToChange => {
                 "Nothing to change. Give a new name, room_name, category or top_level.".to_owned()
             }
-            Refusal::PingBlockedByChannel { ping, channel } => {
-                ping_blocked_by_channel(*ping, *channel)
+            Refusal::PingBlockedByChannel { pings, channel } => {
+                ping_blocked_by_channel(pings, *channel)
+            }
+            Refusal::PingMixesEveryone => {
+                "@everyone already pings every member, so it cannot be combined with other roles. Pick @everyone alone, or name roles without it."
+                    .to_owned()
+            }
+            Refusal::NothingToRepost {
+                number,
+                next_post_at,
+                nights_left,
+            } => nothing_to_repost(*number, *next_post_at, *nights_left),
+            Refusal::RepostNothingToPing => {
+                "This season pings no role, so ping_again has nothing to ping. Add a ping role with /cb season edit, or repost without ping_again."
+                    .to_owned()
+            }
+            Refusal::RepostPingNotAllowed => format!(
+                "ping_again pings the season's roles in your name, so you need to be able to ping them yourself: hold {MENTION_PERMISSION} in the season's channel, or every role has to allow anyone to mention it. You can still repost without ping_again."
+            ),
+            Refusal::RepostPingsChanged => {
+                "The season's ping roles changed while reposting, so nothing was reposted. Run the command again."
+                    .to_owned()
+            }
+            Refusal::RepostSuperseded => {
+                "The sign-up post changed while it was being reposted, so nothing was reposted. Check the season with /cb season show, then run the command again if it is still needed."
+                    .to_owned()
             }
         }
     }
@@ -347,13 +387,23 @@ fn missing_bot_permissions(names: &[&str], channel: Option<ChannelId>) -> String
     )
 }
 
-fn ping_blocked_by_channel(ping: Ping, channel: ChannelId) -> String {
+fn ping_blocked_by_channel(pings: &[Ping], channel: ChannelId) -> String {
     format!(
         "{} would not be pinged in <#{}>: Barnacle holds {MENTION_PERMISSION} in the server, but a permission override in that channel removes it. A server admin can allow {MENTION_PERMISSION} for Barnacle in that channel's permissions{}, then run the command again.",
-        ping_mention(ping),
+        ping_mentions(pings),
         channel.get(),
-        mentionable_alternative(ping)
+        mentionable_alternatives(pings)
     )
+}
+
+fn nothing_to_repost(number: u32, next_post_at: Option<i64>, nights_left: usize) -> String {
+    let head = format!("Season {number} has no open sign-up post to repost.");
+    let tail = match (nights_left, next_post_at) {
+        (0, _) => "The season has no sign-up posts left.".to_owned(),
+        (_, Some(at_unix)) => format!("The next one goes up at {}.", full_time(at_unix)),
+        (_, None) => "The next one goes up within a minute.".to_owned(),
+    };
+    format!("{head} {tail}")
 }
 
 fn empty_pool(options: &RoundOptions) -> String {
@@ -516,7 +566,13 @@ pub fn season_line(season: &Season, nights_left: usize, post_at_unix: Option<i64
         season.range.last_day(),
         nights_ahead(nights_left),
         post_time(post_at_unix),
-        pings_line(season.ping_role.map(|role| Ping::of(season.guild, role)))
+        pings_line(
+            &season
+                .ping_roles
+                .iter()
+                .map(|role| Ping::of(season.guild, *role))
+                .collect::<Vec<Ping>>()
+        )
     )
 }
 
@@ -691,15 +747,43 @@ pub fn reset_done(purge: &PurgeReport) -> String {
     }])
 }
 
-pub fn pings_line(ping: Option<Ping>) -> String {
-    match ping {
-        Some(Ping::Everyone) => " Pings @everyone.".to_owned(),
-        Some(Ping::Role(role)) => format!(" Pings <@&{role}>."),
-        None => String::new(),
+pub fn reposted(season: &Season, night: Night, adopted: bool, pinged: &[Ping]) -> String {
+    let name = season_name(season.number, season.codename.as_deref());
+    let place = format!("<#{}>", season.channel.get());
+    let label = night.label();
+    let done = if adopted {
+        format!(
+            "Recovered {name}'s sign-up post for {label} in {place}, left there by an earlier repost that did not finish. It was not pinged again."
+        )
+    } else {
+        format!(
+            "Reposted {name}'s sign-up post for {label} at the bottom of {place}. Every answer is kept."
+        )
+    };
+    if pinged.is_empty() {
+        done
+    } else {
+        format!("{done} It pinged {}.", ping_mentions(pinged))
     }
 }
 
-pub fn silent_ping_warning(ping: Ping, verdict: PingVerdict, channel: ChannelId) -> Option<String> {
+pub fn pings_line(pings: &[Ping]) -> String {
+    if pings.is_empty() {
+        String::new()
+    } else {
+        format!(" Pings {}.", ping_mentions(pings))
+    }
+}
+
+pub fn silent_ping_warning(checked: &[(Ping, PingVerdict)], channel: ChannelId) -> Option<String> {
+    let warnings: Vec<String> = checked
+        .iter()
+        .filter_map(|(ping, verdict)| ping_warning(*ping, *verdict, channel))
+        .collect();
+    (!warnings.is_empty()).then(|| warnings.join(" "))
+}
+
+fn ping_warning(ping: Ping, verdict: PingVerdict, channel: ChannelId) -> Option<String> {
     let mention = ping_mention(ping);
     let place = format!("<#{}>", channel.get());
     match verdict {
@@ -734,10 +818,29 @@ fn ping_mention(ping: Ping) -> String {
     }
 }
 
+fn ping_mentions(pings: &[Ping]) -> String {
+    joined(
+        &pings
+            .iter()
+            .copied()
+            .map(ping_mention)
+            .collect::<Vec<String>>(),
+    )
+}
+
 fn mentionable_alternative(ping: Ping) -> String {
-    match ping {
-        Ping::Everyone => String::new(),
-        Ping::Role(_) => format!(", or turn on the role's {MENTIONABLE_SETTING} setting"),
+    mentionable_alternatives(&[ping])
+}
+
+fn mentionable_alternatives(pings: &[Ping]) -> String {
+    match pings
+        .iter()
+        .filter(|ping| matches!(ping, Ping::Role(_)))
+        .count()
+    {
+        0 => String::new(),
+        1 => format!(", or turn on the role's {MENTIONABLE_SETTING} setting"),
+        _ => format!(", or turn on each role's {MENTIONABLE_SETTING} setting"),
     }
 }
 

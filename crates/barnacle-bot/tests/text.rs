@@ -258,9 +258,19 @@ fn every_refusal() -> Vec<Refusal> {
         Refusal::CategoryAndTopLevel,
         Refusal::HubNothingToChange,
         Refusal::PingBlockedByChannel {
-            ping: Ping::Everyone,
+            pings: vec![Ping::Everyone],
             channel: ChannelId::new(123),
         },
+        Refusal::PingMixesEveryone,
+        Refusal::NothingToRepost {
+            number: 35,
+            next_post_at: None,
+            nights_left: 0,
+        },
+        Refusal::RepostNothingToPing,
+        Refusal::RepostPingNotAllowed,
+        Refusal::RepostPingsChanged,
+        Refusal::RepostSuperseded,
     ]
 }
 
@@ -290,10 +300,16 @@ fn variant(refusal: &Refusal) -> usize {
         Refusal::CategoryAndTopLevel => 21,
         Refusal::HubNothingToChange => 22,
         Refusal::PingBlockedByChannel { .. } => 23,
+        Refusal::PingMixesEveryone => 24,
+        Refusal::NothingToRepost { .. } => 25,
+        Refusal::RepostNothingToPing => 26,
+        Refusal::RepostPingNotAllowed => 27,
+        Refusal::RepostPingsChanged => 28,
+        Refusal::RepostSuperseded => 29,
     }
 }
 
-const REFUSAL_VARIANTS: usize = 24;
+const REFUSAL_VARIANTS: usize = 30;
 
 #[test]
 fn every_refusal_code_is_unique_and_snake_case() {
@@ -530,7 +546,7 @@ fn signup_view(open: bool, rows: Vec<RosterRow>, hidden: usize) -> SignupView {
         codename: Some("Komodo Dragon".to_owned()),
         night: signup_night(),
         open,
-        ping: None,
+        pings: Vec::new(),
         hours: tallies(),
         rows,
         hidden,
@@ -547,14 +563,14 @@ fn season(number: u32, codename: Option<&str>, first_day: &str, last_day: &str) 
         range: Range::new(parse_day(first_day).unwrap(), parse_day(last_day).unwrap()).unwrap(),
         created_by: UserId::new(7),
         created_at_ms: 0,
-        ping_role: None,
+        ping_roles: Vec::new(),
         ended_at_ms: None,
     }
 }
 
 fn pinging(season: &Season, role: u64) -> Season {
     Season {
-        ping_role: Some(RoleId::new(role)),
+        ping_roles: vec![RoleId::new(role)],
         ..season.clone()
     }
 }
@@ -791,10 +807,10 @@ fn an_ended_season_says_the_answers_are_kept() {
 #[test]
 fn a_season_line_names_its_ping_role() {
     assert_eq!(
-        text::pings_line(Some(Ping::Role(RoleId::new(123)))),
+        text::pings_line(&[Ping::Role(RoleId::new(123))]),
         " Pings <@&123>."
     );
-    assert_eq!(text::pings_line(None), "");
+    assert_eq!(text::pings_line(&[]), "");
     let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
     assert_eq!(
         text::season_line(&pinging(&komodo, 456), 23, Some(1_790_811_000)),
@@ -808,14 +824,14 @@ fn a_silent_ping_warning_names_the_ping_the_cause_and_the_fix() {
     let role = Ping::Role(RoleId::new(456));
     let channel = ChannelId::new(123);
     assert_eq!(
-        text::silent_ping_warning(role, PingVerdict::Sounds, channel),
+        text::silent_ping_warning(&[(role, PingVerdict::Sounds)], channel),
         None
     );
     assert_eq!(
-        text::silent_ping_warning(Ping::Everyone, PingVerdict::Sounds, channel),
+        text::silent_ping_warning(&[(Ping::Everyone, PingVerdict::Sounds)], channel),
         None
     );
-    let silent = text::silent_ping_warning(role, PingVerdict::Silent, channel).unwrap();
+    let silent = text::silent_ping_warning(&[(role, PingVerdict::Silent)], channel).unwrap();
     for wanted in [
         "<@&456>",
         "<#123>",
@@ -824,7 +840,8 @@ fn a_silent_ping_warning_names_the_ping_the_cause_and_the_fix() {
     ] {
         assert!(silent.contains(wanted), "{silent}");
     }
-    let everyone = text::silent_ping_warning(Ping::Everyone, PingVerdict::Silent, channel).unwrap();
+    let everyone =
+        text::silent_ping_warning(&[(Ping::Everyone, PingVerdict::Silent)], channel).unwrap();
     assert!(everyone.contains("@everyone"), "{everyone}");
     assert!(
         everyone.contains("Mention @everyone, @here, and All Roles"),
@@ -832,10 +849,11 @@ fn a_silent_ping_warning_names_the_ping_the_cause_and_the_fix() {
     );
     assert!(!everyone.contains("mentionable"), "{everyone}");
     assert!(!everyone.contains("<@&"), "{everyone}");
-    let blocked = text::silent_ping_warning(role, PingVerdict::BlockedByChannel, channel).unwrap();
+    let blocked =
+        text::silent_ping_warning(&[(role, PingVerdict::BlockedByChannel)], channel).unwrap();
     assert!(blocked.contains("<#123>"), "{blocked}");
     assert!(blocked.contains("override"), "{blocked}");
-    let unchecked = text::silent_ping_warning(role, PingVerdict::Unchecked, channel).unwrap();
+    let unchecked = text::silent_ping_warning(&[(role, PingVerdict::Unchecked)], channel).unwrap();
     assert!(unchecked.contains("could not check"), "{unchecked}");
     assert!(unchecked.contains("<#123>"), "{unchecked}");
 }
@@ -843,7 +861,7 @@ fn a_silent_ping_warning_names_the_ping_the_cause_and_the_fix() {
 #[test]
 fn a_channel_blocked_ping_refusal_names_the_override() {
     let refusal = Refusal::PingBlockedByChannel {
-        ping: Ping::Role(RoleId::new(456)),
+        pings: vec![Ping::Role(RoleId::new(456))],
         channel: ChannelId::new(123),
     };
     assert_eq!(refusal.code(), "ping_blocked_by_channel");
@@ -863,6 +881,125 @@ fn a_season_line_names_everyone_as_plain_text() {
     let line = text::season_line(&pinging(&komodo, 1), 23, Some(1_790_811_000));
     assert!(line.ends_with(" Pings @everyone."), "{line}");
     assert!(!line.contains("<@&"), "{line}");
+}
+
+#[test]
+fn a_season_line_lists_every_ping() {
+    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
+    let three = Season {
+        ping_roles: vec![RoleId::new(4), RoleId::new(5), RoleId::new(6)],
+        ..komodo
+    };
+    let line = text::season_line(&three, 23, Some(1_790_811_000));
+    assert!(line.ends_with(" Pings <@&4>, <@&5> and <@&6>."), "{line}");
+}
+
+#[test]
+fn a_warning_names_each_ping_that_cannot_sound() {
+    let warning = text::silent_ping_warning(
+        &[
+            (Ping::Role(RoleId::new(4)), PingVerdict::Sounds),
+            (Ping::Role(RoleId::new(5)), PingVerdict::Silent),
+        ],
+        ChannelId::new(123),
+    )
+    .unwrap();
+    assert!(warning.contains("<@&5>"), "{warning}");
+    assert!(!warning.contains("<@&4>"), "{warning}");
+}
+
+#[test]
+fn a_channel_blocked_refusal_names_every_blocked_ping() {
+    let message = Refusal::PingBlockedByChannel {
+        pings: vec![Ping::Role(RoleId::new(4)), Ping::Role(RoleId::new(5))],
+        channel: ChannelId::new(123),
+    }
+    .message();
+    assert!(message.contains("<@&4>"), "{message}");
+    assert!(message.contains("<@&5>"), "{message}");
+}
+
+#[test]
+fn a_mixed_everyone_refusal_says_to_pick_one_or_the_other() {
+    let refusal = Refusal::PingMixesEveryone;
+    assert_eq!(refusal.code(), "ping_mixes_everyone");
+    let message = refusal.message();
+    assert!(message.contains("@everyone"), "{message}");
+}
+
+#[test]
+fn a_repost_reply_says_what_was_done() {
+    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
+    let night = signup_night();
+    let quiet = text::reposted(&komodo, night, false, &[]);
+    for wanted in [night.label().as_str(), "<#123>", "Season 35"] {
+        assert!(quiet.contains(wanted), "{quiet}");
+    }
+    assert!(!quiet.contains("<@&"), "{quiet}");
+    assert!(!quiet.contains("ecovered"), "{quiet}");
+    let pinged = text::reposted(
+        &komodo,
+        night,
+        false,
+        &[Ping::Role(RoleId::new(4)), Ping::Role(RoleId::new(5))],
+    );
+    assert!(pinged.contains("<@&4>"), "{pinged}");
+    assert!(pinged.contains("<@&5>"), "{pinged}");
+    let recovered = text::reposted(&komodo, night, true, &[]);
+    assert!(recovered.contains("Recovered"), "{recovered}");
+    assert!(recovered.contains("<#123>"), "{recovered}");
+    assert!(recovered.contains(night.label().as_str()), "{recovered}");
+}
+
+#[test]
+fn repost_refusals_name_their_reason() {
+    let at = Refusal::NothingToRepost {
+        number: 35,
+        next_post_at: Some(1_790_811_000),
+        nights_left: 3,
+    };
+    assert_eq!(at.code(), "nothing_to_repost");
+    assert!(
+        at.message().contains("<t:1790811000:F>"),
+        "{}",
+        at.message()
+    );
+    let soon = Refusal::NothingToRepost {
+        number: 35,
+        next_post_at: None,
+        nights_left: 3,
+    }
+    .message();
+    assert!(soon.contains("within a minute"), "{soon}");
+    let over = Refusal::NothingToRepost {
+        number: 35,
+        next_post_at: None,
+        nights_left: 0,
+    }
+    .message();
+    assert!(over.contains("no sign-up posts left"), "{over}");
+    assert!(!over.contains("within a minute"), "{over}");
+    assert_eq!(
+        Refusal::RepostNothingToPing.code(),
+        "repost_nothing_to_ping"
+    );
+    assert_eq!(
+        Refusal::RepostPingNotAllowed.code(),
+        "repost_ping_not_allowed"
+    );
+    assert!(
+        Refusal::RepostPingNotAllowed
+            .message()
+            .contains("Mention @everyone, @here, and All Roles")
+    );
+    assert_eq!(Refusal::RepostPingsChanged.code(), "repost_pings_changed");
+    assert!(Refusal::RepostPingsChanged.message().contains("again"));
+    assert_eq!(Refusal::RepostSuperseded.code(), "repost_superseded");
+    assert!(
+        Refusal::RepostSuperseded
+            .message()
+            .contains("nothing was reposted")
+    );
 }
 
 fn tags(count: usize) -> Vec<PostTag> {

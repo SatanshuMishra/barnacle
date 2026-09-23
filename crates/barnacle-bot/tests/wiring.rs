@@ -12,6 +12,7 @@ use barnacle_bot::wiring;
 use barnacle_bot::wiring::ChannelAccess;
 use barnacle_bot::wiring::LeaderboardRequest;
 use barnacle_bot::wiring::PingAllowance;
+use barnacle_bot::wiring::PingChoiceProblem;
 use barnacle_bot::wiring::PingReach;
 use barnacle_bot::wiring::PingVerdict;
 use barnacle_bot::wiring::SetupPing;
@@ -242,33 +243,33 @@ fn a_signup_channel_needs_four_permissions() {
 #[test]
 fn a_ping_role_renders_as_a_role_mention() {
     assert_eq!(
-        wiring::ping_content(Some(Ping::Role(RoleId::new(123)))),
+        wiring::ping_content(&[Ping::Role(RoleId::new(123))]),
         "<@&123>"
     );
-    assert_eq!(wiring::ping_content(None), "");
+    assert_eq!(wiring::ping_content(&[]), "");
 }
 
 #[test]
 fn only_a_new_post_may_ping() {
     let role = RoleId::new(123);
     assert_eq!(
-        wiring::ping_allowance(Delivery::New, Some(Ping::Role(role))),
+        wiring::ping_allowance(Delivery::New, &[Ping::Role(role)]),
         PingAllowance {
             everyone: false,
             roles: vec![role],
         }
     );
     assert_eq!(
-        wiring::ping_allowance(Delivery::New, None),
+        wiring::ping_allowance(Delivery::New, &[]),
         PingAllowance::default()
     );
     assert_eq!(
-        wiring::ping_allowance(Delivery::Redraw, Some(Ping::Role(role))),
+        wiring::ping_allowance(Delivery::Redraw, &[Ping::Role(role)]),
         PingAllowance::default(),
         "a redraw may never ping"
     );
     assert_eq!(
-        wiring::ping_allowance(Delivery::Redraw, None),
+        wiring::ping_allowance(Delivery::Redraw, &[]),
         PingAllowance::default()
     );
 }
@@ -276,18 +277,18 @@ fn only_a_new_post_may_ping() {
 #[test]
 fn an_everyone_ping_allows_everyone_only_on_a_new_post() {
     assert_eq!(
-        wiring::ping_allowance(Delivery::New, Some(Ping::Everyone)),
+        wiring::ping_allowance(Delivery::New, &[Ping::Everyone]),
         PingAllowance {
             everyone: true,
             roles: vec![],
         }
     );
     assert_eq!(
-        wiring::ping_allowance(Delivery::Redraw, Some(Ping::Everyone)),
+        wiring::ping_allowance(Delivery::Redraw, &[Ping::Everyone]),
         PingAllowance::default(),
         "a redraw may never ping everyone"
     );
-    assert_eq!(wiring::ping_content(Some(Ping::Everyone)), "@everyone");
+    assert_eq!(wiring::ping_content(&[Ping::Everyone]), "@everyone");
 }
 
 #[test]
@@ -422,15 +423,99 @@ fn only_a_create_refuses_and_only_for_a_channel_override() {
 fn a_ping_is_heard_only_when_discord_lists_it() {
     let role = RoleId::new(456);
     let other = RoleId::new(789);
-    assert!(wiring::ping_heard(None, &[], false));
-    assert!(wiring::ping_heard(None, &[role], true));
-    assert!(wiring::ping_heard(
-        Some(Ping::Role(role)),
-        &[other, role],
-        false
+    assert!(wiring::unheard_pings(&[], &[], false).is_empty());
+    assert!(wiring::unheard_pings(&[], &[role], true).is_empty());
+    assert!(wiring::unheard_pings(&[Ping::Role(role)], &[other, role], false).is_empty());
+    assert!(!wiring::unheard_pings(&[Ping::Role(role)], &[other], true).is_empty());
+    assert!(!wiring::unheard_pings(&[Ping::Role(role)], &[], true).is_empty());
+    assert!(wiring::unheard_pings(&[Ping::Everyone], &[], true).is_empty());
+    assert!(!wiring::unheard_pings(&[Ping::Everyone], &[role], false).is_empty());
+}
+
+#[test]
+fn several_pings_are_written_in_order_and_allowed_together() {
+    let pings = [Ping::Role(RoleId::new(1)), Ping::Role(RoleId::new(2))];
+    assert_eq!(wiring::ping_content(&pings), "<@&1> <@&2>");
+    assert_eq!(
+        wiring::ping_allowance(Delivery::New, &pings),
+        PingAllowance {
+            everyone: false,
+            roles: vec![RoleId::new(1), RoleId::new(2)],
+        }
+    );
+    assert_eq!(
+        wiring::ping_allowance(Delivery::Redraw, &pings),
+        PingAllowance::default()
+    );
+}
+
+#[test]
+fn unheard_pings_lists_each_ping_discord_missed() {
+    let one = RoleId::new(1);
+    let two = RoleId::new(2);
+    let pings = [Ping::Role(one), Ping::Role(two)];
+    assert_eq!(
+        wiring::unheard_pings(&pings, &[one], false),
+        vec![Ping::Role(two)]
+    );
+    assert_eq!(wiring::unheard_pings(&pings, &[one, two], false), vec![]);
+    assert_eq!(
+        wiring::unheard_pings(&[Ping::Everyone], &[], false),
+        vec![Ping::Everyone]
+    );
+}
+
+#[test]
+fn ping_choice_keeps_option_order_and_drops_repeats() {
+    let server = GuildId::new(7);
+    let a = RoleId::new(8);
+    let b = RoleId::new(9);
+    assert_eq!(
+        wiring::ping_choice(server, [None, Some(a), None, Some(b), Some(a)]),
+        Ok(vec![a, b])
+    );
+    assert_eq!(wiring::ping_choice(server, [None; 5]), Ok(vec![]));
+    assert_eq!(wiring::ping_choice(server, [Some(a); 5]), Ok(vec![a]));
+}
+
+#[test]
+fn ping_choice_refuses_everyone_among_named_roles() {
+    let server = GuildId::new(7);
+    let everyone = RoleId::new(7);
+    assert_eq!(
+        wiring::ping_choice(
+            server,
+            [Some(everyone), Some(RoleId::new(8)), None, None, None]
+        ),
+        Err(PingChoiceProblem::MixedEveryone)
+    );
+    assert_eq!(
+        wiring::ping_choice(server, [Some(everyone), Some(everyone), None, None, None]),
+        Ok(vec![everyone])
+    );
+}
+
+#[test]
+fn ping_again_needs_the_person_to_be_able_to_ping() {
+    let roles = [Ping::Role(RoleId::new(4)), Ping::Role(RoleId::new(5))];
+    assert!(!wiring::may_ping_again(&roles, None, &[true, true]));
+    assert!(wiring::may_ping_again(&roles, Some(true), &[false, false]));
+    assert!(wiring::may_ping_again(&roles, Some(false), &[true, true]));
+    assert!(!wiring::may_ping_again(&roles, Some(false), &[true, false]));
+    assert!(!wiring::may_ping_again(&[Ping::Everyone], None, &[false]));
+    assert!(wiring::may_ping_again(
+        &[Ping::Everyone],
+        Some(true),
+        &[false]
     ));
-    assert!(!wiring::ping_heard(Some(Ping::Role(role)), &[other], true));
-    assert!(!wiring::ping_heard(Some(Ping::Role(role)), &[], true));
-    assert!(wiring::ping_heard(Some(Ping::Everyone), &[], true));
-    assert!(!wiring::ping_heard(Some(Ping::Everyone), &[role], false));
+    assert!(!wiring::may_ping_again(
+        &[Ping::Everyone],
+        Some(false),
+        &[false]
+    ));
+    assert!(!wiring::may_ping_again(
+        &[Ping::Everyone],
+        Some(false),
+        &[true]
+    ));
 }
