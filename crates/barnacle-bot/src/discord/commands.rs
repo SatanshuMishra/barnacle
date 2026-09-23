@@ -1120,7 +1120,7 @@ async fn season_repost(
         if !wiring::may_ping_again(&pings, person, &mentionable) {
             return refuse(ctx, text::Refusal::RepostPingNotAllowed).await;
         }
-        check_pings(
+        judge_pings(
             ctx,
             &pings,
             Place {
@@ -1155,6 +1155,7 @@ async fn season_repost(
             pinged,
             ..
         } => {
+            log_ping_checks(ctx, &checked, false);
             private(
                 ctx,
                 warned(
@@ -1164,11 +1165,15 @@ async fn season_repost(
             )
             .await
         }
-        RepostOutcome::NotFound => refuse(ctx, text::Refusal::SeasonNotFound(number)).await,
+        RepostOutcome::NotFound => {
+            log_ping_checks(ctx, &checked, true);
+            refuse(ctx, text::Refusal::SeasonNotFound(number)).await
+        }
         RepostOutcome::NothingOpen {
             next_post_at,
             nights_left,
         } => {
+            log_ping_checks(ctx, &checked, true);
             refuse(
                 ctx,
                 text::Refusal::NothingToRepost {
@@ -1179,8 +1184,14 @@ async fn season_repost(
             )
             .await
         }
-        RepostOutcome::PingsChanged => refuse(ctx, text::Refusal::RepostPingsChanged).await,
-        RepostOutcome::Superseded => refuse(ctx, text::Refusal::RepostSuperseded).await,
+        RepostOutcome::PingsChanged => {
+            log_ping_checks(ctx, &checked, true);
+            refuse(ctx, text::Refusal::RepostPingsChanged).await
+        }
+        RepostOutcome::Superseded => {
+            log_ping_checks(ctx, &checked, true);
+            refuse(ctx, text::Refusal::RepostSuperseded).await
+        }
         RepostOutcome::Failed(failure) => fail(ctx, failure).await,
     }
 }
