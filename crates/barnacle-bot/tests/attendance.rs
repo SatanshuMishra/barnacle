@@ -2347,10 +2347,10 @@ async fn a_repost_whose_post_was_cleared_meanwhile_deletes_its_new_post() {
     while board.sends().len() < 2 {
         tokio::task::yield_now().await;
     }
-    let cleared = signups
-        .clear_posts(&season, ClearScope::All, REPOST_AT)
-        .await;
-    assert_eq!(cleared.failures, 0);
+    store
+        .set_post_state(season.id, first_night(), PostState::Removed)
+        .await
+        .unwrap();
     board.open_sends();
     assert_eq!(reposting.await.unwrap(), RepostOutcome::Superseded);
     let deleted = board.deletes();
@@ -2365,6 +2365,44 @@ async fn a_repost_whose_post_was_cleared_meanwhile_deletes_its_new_post() {
     );
     let post = store.post(season.id, first_night()).await.unwrap().unwrap();
     assert_eq!(post.message, old);
+    assert_eq!(post.state, PostState::Removed);
+}
+
+#[tokio::test]
+async fn a_clear_racing_a_repost_leaves_no_post_behind() {
+    let board = FakeBoard::new();
+    let (signups, season, store, old) = posted(board.clone(), &proposal()).await;
+    board.gate_sends();
+    let reposting = {
+        let signups = Arc::clone(&signups);
+        tokio::spawn(async move { repost(&signups, RepostPing::Quiet).await })
+    };
+    while board.sends().len() < 2 {
+        tokio::task::yield_now().await;
+    }
+    let clearing = {
+        let signups = Arc::clone(&signups);
+        let season = season.clone();
+        tokio::spawn(async move {
+            signups
+                .clear_posts(&season, ClearScope::All, REPOST_AT)
+                .await
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(
+        !clearing.is_finished(),
+        "a clear must wait for a repost that is still sending"
+    );
+    board.open_sends();
+    let RepostOutcome::Reposted { message, .. } = reposting.await.unwrap() else {
+        panic!("the repost should finish before the clear starts");
+    };
+    assert_eq!(clearing.await.unwrap().failures, 0);
+    assert_ne!(message, old);
+    assert!(board.deletes().contains(&message));
+    let post = store.post(season.id, first_night()).await.unwrap().unwrap();
+    assert_eq!(post.message, message);
     assert_eq!(post.state, PostState::Removed);
 }
 

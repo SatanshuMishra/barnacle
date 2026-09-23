@@ -610,6 +610,7 @@ impl<B: Board> Signups<B> {
         scope: ClearScope,
         _now_unix: i64,
     ) -> PostsReport {
+        let _beating = self.beats.lock().await;
         let posts = match self.store.posts(season.id).await {
             Ok(posts) => posts,
             Err(error) => {
