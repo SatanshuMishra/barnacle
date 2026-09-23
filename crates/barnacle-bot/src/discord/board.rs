@@ -40,7 +40,10 @@ fn signup_embed(view: &SignupView) -> serenity::CreateEmbed {
 }
 
 fn ping_mentions(delivery: Delivery, view: &SignupView) -> serenity::CreateAllowedMentions {
-    let allowance = wiring::ping_allowance(delivery, view.ping);
+    allowed_mentions(wiring::ping_allowance(delivery, view.ping))
+}
+
+pub fn allowed_mentions(allowance: wiring::PingAllowance) -> serenity::CreateAllowedMentions {
     let mentions = serenity::CreateAllowedMentions::new().roles(
         allowance
             .roles
