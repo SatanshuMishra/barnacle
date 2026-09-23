@@ -8,9 +8,11 @@ use crate::attendance::BoardError;
 use crate::attendance::Delivery;
 use crate::attendance::PostTag;
 use crate::attendance::Removal;
+use crate::attendance::Sent;
 use crate::attendance::SignupView;
 use crate::attendance::Target;
 use crate::ids::ChannelId;
+use crate::ids::RoleId;
 use crate::schedule::Hour;
 use crate::text;
 use crate::wiring;
@@ -38,12 +40,19 @@ fn signup_embed(view: &SignupView) -> serenity::CreateEmbed {
 }
 
 fn ping_mentions(delivery: Delivery, view: &SignupView) -> serenity::CreateAllowedMentions {
-    serenity::CreateAllowedMentions::new().roles(
-        wiring::ping_allowance(delivery, view.ping)
+    let allowance = wiring::ping_allowance(delivery, view.ping);
+    let mentions = serenity::CreateAllowedMentions::new().roles(
+        allowance
+            .roles
             .into_iter()
             .filter_map(|role| std::num::NonZeroU64::new(role.get()))
             .map(serenity::RoleId::from),
-    )
+    );
+    if allowance.everyone {
+        mentions.everyone(true)
+    } else {
+        mentions
+    }
 }
 
 fn signup_button(
@@ -146,7 +155,7 @@ impl Board for DiscordBoard {
         channel: ChannelId,
         view: &SignupView,
         delivery: Delivery,
-    ) -> Result<Snowflake, BoardError> {
+    ) -> Result<Sent, BoardError> {
         let message = serenity::CreateMessage::new()
             .content(wiring::ping_content(view.ping))
             .embed(signup_embed(view))
@@ -156,7 +165,15 @@ impl Board for DiscordBoard {
             .send_message(&self.http, message)
             .await
             .map_err(failed)?;
-        Ok(Snowflake::new(posted.id.get()))
+        let mentioned: Vec<RoleId> = posted
+            .mention_roles
+            .iter()
+            .map(|role| RoleId::new(role.get()))
+            .collect();
+        Ok(Sent {
+            message: Snowflake::new(posted.id.get()),
+            ping_heard: wiring::ping_heard(view.ping, &mentioned, posted.mention_everyone),
+        })
     }
 
     async fn find_post(

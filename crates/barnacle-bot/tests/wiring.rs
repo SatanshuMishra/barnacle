@@ -2,6 +2,8 @@ mod common;
 
 use barnacle_bot::attendance::Delivery;
 use barnacle_bot::attendance::Target;
+use barnacle_bot::ids::GuildId;
+use barnacle_bot::ids::Ping;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::schedule::Hour;
 use barnacle_bot::schedule::Night;
@@ -9,6 +11,10 @@ use barnacle_bot::solves::Ranking;
 use barnacle_bot::wiring;
 use barnacle_bot::wiring::ChannelAccess;
 use barnacle_bot::wiring::LeaderboardRequest;
+use barnacle_bot::wiring::PingAllowance;
+use barnacle_bot::wiring::PingReach;
+use barnacle_bot::wiring::PingVerdict;
+use barnacle_bot::wiring::SetupPing;
 use barnacle_bot::wiring::SignupClick;
 use barnacle_bot::wiring::SortChoice;
 use barnacle_guess::RoundOptions;
@@ -235,18 +241,196 @@ fn a_signup_channel_needs_four_permissions() {
 
 #[test]
 fn a_ping_role_renders_as_a_role_mention() {
-    assert_eq!(wiring::ping_content(Some(RoleId::new(123))), "<@&123>");
+    assert_eq!(
+        wiring::ping_content(Some(Ping::Role(RoleId::new(123)))),
+        "<@&123>"
+    );
     assert_eq!(wiring::ping_content(None), "");
 }
 
 #[test]
 fn only_a_new_post_may_ping() {
     let role = RoleId::new(123);
-    assert_eq!(wiring::ping_allowance(Delivery::New, Some(role)), [role]);
-    assert!(wiring::ping_allowance(Delivery::New, None).is_empty());
-    assert!(
-        wiring::ping_allowance(Delivery::Redraw, Some(role)).is_empty(),
+    assert_eq!(
+        wiring::ping_allowance(Delivery::New, Some(Ping::Role(role))),
+        PingAllowance {
+            everyone: false,
+            roles: vec![role],
+        }
+    );
+    assert_eq!(
+        wiring::ping_allowance(Delivery::New, None),
+        PingAllowance::default()
+    );
+    assert_eq!(
+        wiring::ping_allowance(Delivery::Redraw, Some(Ping::Role(role))),
+        PingAllowance::default(),
         "a redraw may never ping"
     );
-    assert!(wiring::ping_allowance(Delivery::Redraw, None).is_empty());
+    assert_eq!(
+        wiring::ping_allowance(Delivery::Redraw, None),
+        PingAllowance::default()
+    );
+}
+
+#[test]
+fn an_everyone_ping_allows_everyone_only_on_a_new_post() {
+    assert_eq!(
+        wiring::ping_allowance(Delivery::New, Some(Ping::Everyone)),
+        PingAllowance {
+            everyone: true,
+            roles: vec![],
+        }
+    );
+    assert_eq!(
+        wiring::ping_allowance(Delivery::Redraw, Some(Ping::Everyone)),
+        PingAllowance::default(),
+        "a redraw may never ping everyone"
+    );
+    assert_eq!(wiring::ping_content(Some(Ping::Everyone)), "@everyone");
+}
+
+#[test]
+fn ping_of_names_everyone_by_the_server_id() {
+    assert_eq!(Ping::of(GuildId::new(7), RoleId::new(7)), Ping::Everyone);
+    assert_eq!(
+        Ping::of(GuildId::new(7), RoleId::new(8)),
+        Ping::Role(RoleId::new(8))
+    );
+}
+
+fn reach(role_mentionable: bool, server_grant: bool, channel_grant: bool) -> PingReach {
+    PingReach {
+        role_mentionable,
+        server_grant,
+        channel_grant,
+    }
+}
+
+fn every_reach() -> Vec<PingReach> {
+    [false, true]
+        .into_iter()
+        .flat_map(|mentionable| {
+            [false, true].into_iter().flat_map(move |server| {
+                [false, true]
+                    .into_iter()
+                    .map(move |channel| reach(mentionable, server, channel))
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn a_named_ping_sounds_when_mentionable_or_permitted() {
+    let role = Ping::Role(RoleId::new(456));
+    for mentionable in every_reach()
+        .into_iter()
+        .filter(|reach| reach.role_mentionable)
+    {
+        assert_eq!(
+            wiring::ping_verdict(role, Some(mentionable)),
+            PingVerdict::Sounds,
+            "{mentionable:?}"
+        );
+    }
+    for permitted in every_reach()
+        .into_iter()
+        .filter(|reach| reach.channel_grant)
+    {
+        assert_eq!(
+            wiring::ping_verdict(role, Some(permitted)),
+            PingVerdict::Sounds,
+            "{permitted:?}"
+        );
+    }
+}
+
+#[test]
+fn a_silent_ping_blames_the_channel_only_when_the_server_grants_it() {
+    let role = Ping::Role(RoleId::new(456));
+    assert_eq!(
+        wiring::ping_verdict(role, Some(reach(false, true, false))),
+        PingVerdict::BlockedByChannel
+    );
+    assert_eq!(
+        wiring::ping_verdict(role, Some(reach(false, false, false))),
+        PingVerdict::Silent
+    );
+}
+
+#[test]
+fn everyone_needs_the_permission_even_when_marked_mentionable() {
+    for mentionable in [false, true] {
+        assert_eq!(
+            wiring::ping_verdict(Ping::Everyone, Some(reach(mentionable, false, true))),
+            PingVerdict::Sounds
+        );
+        assert_eq!(
+            wiring::ping_verdict(Ping::Everyone, Some(reach(mentionable, true, true))),
+            PingVerdict::Sounds
+        );
+        assert_eq!(
+            wiring::ping_verdict(Ping::Everyone, Some(reach(mentionable, true, false))),
+            PingVerdict::BlockedByChannel
+        );
+        assert_eq!(
+            wiring::ping_verdict(Ping::Everyone, Some(reach(mentionable, false, false))),
+            PingVerdict::Silent
+        );
+    }
+}
+
+#[test]
+fn an_unreadable_reach_is_unchecked() {
+    assert_eq!(
+        wiring::ping_verdict(Ping::Role(RoleId::new(456)), None),
+        PingVerdict::Unchecked
+    );
+    assert_eq!(
+        wiring::ping_verdict(Ping::Everyone, None),
+        PingVerdict::Unchecked
+    );
+}
+
+#[test]
+fn only_a_create_refuses_and_only_for_a_channel_override() {
+    assert_eq!(
+        wiring::setup_ping(true, PingVerdict::BlockedByChannel),
+        SetupPing::Refuse
+    );
+    assert_eq!(
+        wiring::setup_ping(false, PingVerdict::BlockedByChannel),
+        SetupPing::Warn
+    );
+    for creating in [true, false] {
+        assert_eq!(
+            wiring::setup_ping(creating, PingVerdict::Silent),
+            SetupPing::Warn
+        );
+        assert_eq!(
+            wiring::setup_ping(creating, PingVerdict::Unchecked),
+            SetupPing::Warn
+        );
+        assert_eq!(
+            wiring::setup_ping(creating, PingVerdict::Sounds),
+            SetupPing::Proceed
+        );
+    }
+}
+
+#[test]
+fn a_ping_is_heard_only_when_discord_lists_it() {
+    let role = RoleId::new(456);
+    let other = RoleId::new(789);
+    assert!(wiring::ping_heard(None, &[], false));
+    assert!(wiring::ping_heard(None, &[role], true));
+    assert!(wiring::ping_heard(
+        Some(Ping::Role(role)),
+        &[other, role],
+        false
+    ));
+    assert!(!wiring::ping_heard(Some(Ping::Role(role)), &[other], true));
+    assert!(!wiring::ping_heard(Some(Ping::Role(role)), &[], true));
+    assert!(wiring::ping_heard(Some(Ping::Everyone), &[], true));
+    assert!(!wiring::ping_heard(Some(Ping::Everyone), &[role], false));
 }

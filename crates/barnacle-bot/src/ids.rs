@@ -50,3 +50,19 @@ pub struct Place {
     pub guild: GuildId,
     pub channel: ChannelId,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Ping {
+    Everyone,
+    Role(RoleId),
+}
+
+impl Ping {
+    pub const fn of(guild: GuildId, role: RoleId) -> Ping {
+        if role.get() == guild.get() {
+            Ping::Everyone
+        } else {
+            Ping::Role(role)
+        }
+    }
+}

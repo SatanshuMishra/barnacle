@@ -14,6 +14,7 @@ use barnacle_bot::attendance::TickReport;
 use barnacle_bot::attendance_store::Season;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
+use barnacle_bot::ids::Ping;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::schedule::Hour;
 use barnacle_bot::schedule::Night;
@@ -23,6 +24,7 @@ use barnacle_bot::solves::Ranking;
 use barnacle_bot::solves::Standing;
 use barnacle_bot::text;
 use barnacle_bot::text::Refusal;
+use barnacle_bot::wiring::PingVerdict;
 use barnacle_catalog::Nation;
 use barnacle_catalog::ShipClass;
 use barnacle_guess::Hint;
@@ -255,6 +257,10 @@ fn every_refusal() -> Vec<Refusal> {
         Refusal::NotAHub,
         Refusal::CategoryAndTopLevel,
         Refusal::HubNothingToChange,
+        Refusal::PingBlockedByChannel {
+            ping: Ping::Everyone,
+            channel: ChannelId::new(123),
+        },
     ]
 }
 
@@ -283,10 +289,11 @@ fn variant(refusal: &Refusal) -> usize {
         Refusal::NotAHub => 20,
         Refusal::CategoryAndTopLevel => 21,
         Refusal::HubNothingToChange => 22,
+        Refusal::PingBlockedByChannel { .. } => 23,
     }
 }
 
-const REFUSAL_VARIANTS: usize = 23;
+const REFUSAL_VARIANTS: usize = 24;
 
 #[test]
 fn every_refusal_code_is_unique_and_snake_case() {
@@ -783,7 +790,10 @@ fn an_ended_season_says_the_answers_are_kept() {
 
 #[test]
 fn a_season_line_names_its_ping_role() {
-    assert_eq!(text::pings_line(Some(RoleId::new(123))), " Pings <@&123>.");
+    assert_eq!(
+        text::pings_line(Some(Ping::Role(RoleId::new(123)))),
+        " Pings <@&123>."
+    );
     assert_eq!(text::pings_line(None), "");
     let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
     assert_eq!(
@@ -791,6 +801,68 @@ fn a_season_line_names_its_ping_role() {
         "<#123> Season 35: Komodo Dragon, 2026-09-16 to 2026-11-05. 23 nights ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>). Pings <@&456>."
     );
     assert!(!text::season_line(&komodo, 23, Some(1_790_811_000)).contains("Pings"));
+}
+
+#[test]
+fn a_silent_ping_warning_names_the_ping_the_cause_and_the_fix() {
+    let role = Ping::Role(RoleId::new(456));
+    let channel = ChannelId::new(123);
+    assert_eq!(
+        text::silent_ping_warning(role, PingVerdict::Sounds, channel),
+        None
+    );
+    assert_eq!(
+        text::silent_ping_warning(Ping::Everyone, PingVerdict::Sounds, channel),
+        None
+    );
+    let silent = text::silent_ping_warning(role, PingVerdict::Silent, channel).unwrap();
+    for wanted in [
+        "<@&456>",
+        "<#123>",
+        "mentionable",
+        "Mention @everyone, @here, and All Roles",
+    ] {
+        assert!(silent.contains(wanted), "{silent}");
+    }
+    let everyone = text::silent_ping_warning(Ping::Everyone, PingVerdict::Silent, channel).unwrap();
+    assert!(everyone.contains("@everyone"), "{everyone}");
+    assert!(
+        everyone.contains("Mention @everyone, @here, and All Roles"),
+        "{everyone}"
+    );
+    assert!(!everyone.contains("mentionable"), "{everyone}");
+    assert!(!everyone.contains("<@&"), "{everyone}");
+    let blocked = text::silent_ping_warning(role, PingVerdict::BlockedByChannel, channel).unwrap();
+    assert!(blocked.contains("<#123>"), "{blocked}");
+    assert!(blocked.contains("override"), "{blocked}");
+    let unchecked = text::silent_ping_warning(role, PingVerdict::Unchecked, channel).unwrap();
+    assert!(unchecked.contains("could not check"), "{unchecked}");
+    assert!(unchecked.contains("<#123>"), "{unchecked}");
+}
+
+#[test]
+fn a_channel_blocked_ping_refusal_names_the_override() {
+    let refusal = Refusal::PingBlockedByChannel {
+        ping: Ping::Role(RoleId::new(456)),
+        channel: ChannelId::new(123),
+    };
+    assert_eq!(refusal.code(), "ping_blocked_by_channel");
+    let message = refusal.message();
+    for wanted in [
+        "<#123>",
+        "override",
+        "Mention @everyone, @here, and All Roles",
+    ] {
+        assert!(message.contains(wanted), "{message}");
+    }
+}
+
+#[test]
+fn a_season_line_names_everyone_as_plain_text() {
+    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
+    let line = text::season_line(&pinging(&komodo, 1), 23, Some(1_790_811_000));
+    assert!(line.ends_with(" Pings @everyone."), "{line}");
+    assert!(!line.contains("<@&"), "{line}");
 }
 
 fn tags(count: usize) -> Vec<PostTag> {

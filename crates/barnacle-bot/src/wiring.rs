@@ -3,6 +3,7 @@ use barnacle_guess::RoundOptions;
 
 use crate::attendance::Delivery;
 use crate::attendance::Target;
+use crate::ids::Ping;
 use crate::ids::RoleId;
 use crate::schedule::Hour;
 use crate::schedule::Night;
@@ -179,16 +180,84 @@ fn parse_choice(text: &str) -> Option<bool> {
     }
 }
 
-pub fn ping_content(ping: Option<RoleId>) -> String {
+pub fn ping_content(ping: Option<Ping>) -> String {
     match ping {
-        Some(role) => format!("<@&{role}>"),
+        Some(Ping::Everyone) => "@everyone".to_owned(),
+        Some(Ping::Role(role)) => format!("<@&{role}>"),
         None => String::new(),
     }
 }
 
-pub fn ping_allowance(delivery: Delivery, ping: Option<RoleId>) -> Vec<RoleId> {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PingAllowance {
+    pub everyone: bool,
+    pub roles: Vec<RoleId>,
+}
+
+pub fn ping_allowance(delivery: Delivery, ping: Option<Ping>) -> PingAllowance {
     match (delivery, ping) {
-        (Delivery::New, Some(role)) => vec![role],
-        (Delivery::New, None) | (Delivery::Redraw, _) => Vec::new(),
+        (Delivery::New, Some(Ping::Everyone)) => PingAllowance {
+            everyone: true,
+            roles: Vec::new(),
+        },
+        (Delivery::New, Some(Ping::Role(role))) => PingAllowance {
+            everyone: false,
+            roles: vec![role],
+        },
+        (Delivery::New, None) | (Delivery::Redraw, _) => PingAllowance::default(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PingReach {
+    pub role_mentionable: bool,
+    pub server_grant: bool,
+    pub channel_grant: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PingVerdict {
+    Sounds,
+    BlockedByChannel,
+    Silent,
+    Unchecked,
+}
+
+pub fn ping_verdict(ping: Ping, reach: Option<PingReach>) -> PingVerdict {
+    let Some(reach) = reach else {
+        return PingVerdict::Unchecked;
+    };
+    let mentionable = matches!(ping, Ping::Role(_)) && reach.role_mentionable;
+    if mentionable || reach.channel_grant {
+        PingVerdict::Sounds
+    } else if reach.server_grant {
+        PingVerdict::BlockedByChannel
+    } else {
+        PingVerdict::Silent
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupPing {
+    Proceed,
+    Warn,
+    Refuse,
+}
+
+pub fn setup_ping(creating: bool, verdict: PingVerdict) -> SetupPing {
+    match verdict {
+        PingVerdict::Sounds => SetupPing::Proceed,
+        PingVerdict::BlockedByChannel if creating => SetupPing::Refuse,
+        PingVerdict::BlockedByChannel | PingVerdict::Silent | PingVerdict::Unchecked => {
+            SetupPing::Warn
+        }
+    }
+}
+
+pub fn ping_heard(ping: Option<Ping>, mention_roles: &[RoleId], mention_everyone: bool) -> bool {
+    match ping {
+        None => true,
+        Some(Ping::Role(role)) => mention_roles.contains(&role),
+        Some(Ping::Everyone) => mention_everyone,
     }
 }

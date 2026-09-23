@@ -8,6 +8,9 @@ use rand::seq::IndexedRandom;
 
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
+use crate::ids::Ping;
+use crate::wiring::PingReach;
+use crate::wiring::PingVerdict;
 
 const REFERENCE_ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const REFERENCE_LENGTH: usize = 8;
@@ -587,4 +590,94 @@ pub fn refused_because(
 
 pub fn record(event: &'static str, summary: &str, scope: &Scope) {
     scoped_event!(tracing::Level::INFO, event, "success", summary, scope,);
+}
+
+macro_rules! ping_checked_event {
+    ($level:expr, $outcome:expr, $ping:expr, $verdict:expr, $reach:expr, $scope:expr) => {
+        scoped_event!(
+            $level,
+            "signup.ping.checked",
+            $outcome,
+            "a season's ping was checked",
+            $scope,
+            "barnacle.ping" = $ping.as_str(),
+            "barnacle.ping.verdict" = $verdict,
+            "barnacle.ping.mentionable" = $reach.map(|reach| reach.role_mentionable),
+            "barnacle.ping.server_grant" = $reach.map(|reach| reach.server_grant),
+            "barnacle.ping.channel_grant" = $reach.map(|reach| reach.channel_grant),
+        )
+    };
+}
+
+pub fn ping_checked(
+    ping: Ping,
+    verdict: PingVerdict,
+    reach: Option<PingReach>,
+    refused: bool,
+    scope: &Scope,
+) {
+    let named = ping_name(ping);
+    let judged = verdict_name(verdict);
+    match (verdict, refused) {
+        (PingVerdict::Sounds, _) => {
+            ping_checked_event!(tracing::Level::INFO, "success", named, judged, reach, scope)
+        }
+        (_, true) => {
+            ping_checked_event!(tracing::Level::WARN, "refused", named, judged, reach, scope)
+        }
+        (_, false) => {
+            ping_checked_event!(tracing::Level::WARN, "failure", named, judged, reach, scope)
+        }
+    }
+}
+
+pub fn ping_published(summary: &str, ping: Ping, heard: bool, scope: &Scope) {
+    scoped_event!(
+        tracing::Level::INFO,
+        "signup.post.published",
+        "success",
+        summary,
+        scope,
+        "barnacle.ping" = ping_name(ping).as_str(),
+        "barnacle.ping.heard" = heard,
+    );
+}
+
+pub fn click_recorded(target: &str, choice: &str, scope: &Scope) {
+    scoped_event!(
+        tracing::Level::INFO,
+        "signup.click.recorded",
+        "success",
+        "a sign-up click was recorded",
+        scope,
+        "barnacle.signup.target" = target,
+        "barnacle.signup.choice" = choice,
+    );
+}
+
+pub fn ping_silent(ping: Ping, scope: &Scope) {
+    scoped_event!(
+        tracing::Level::WARN,
+        "signup.ping.silent",
+        "failure",
+        "Discord did not register a sign-up post's ping, so nobody was notified",
+        scope,
+        "barnacle.ping" = ping_name(ping).as_str(),
+    );
+}
+
+fn ping_name(ping: Ping) -> String {
+    match ping {
+        Ping::Everyone => "everyone".to_owned(),
+        Ping::Role(role) => role.to_string(),
+    }
+}
+
+fn verdict_name(verdict: PingVerdict) -> &'static str {
+    match verdict {
+        PingVerdict::Sounds => "sounds",
+        PingVerdict::BlockedByChannel => "blocked_by_channel",
+        PingVerdict::Silent => "silent",
+        PingVerdict::Unchecked => "unchecked",
+    }
 }
