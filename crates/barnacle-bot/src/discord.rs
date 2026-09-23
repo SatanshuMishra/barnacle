@@ -33,6 +33,7 @@ use crate::voice_store::VoiceStore;
 
 pub use announcer::DiscordAnnouncer;
 pub use board::DiscordBoard;
+pub use board::allowed_mentions;
 pub use rooms::DiscordRooms;
 
 const MEMBER_LOOKUPS_AT_ONCE: usize = 5;

@@ -1,7 +1,13 @@
+use barnacle_bot::attendance::Delivery;
 use barnacle_bot::discord::Data;
 use barnacle_bot::discord::Error;
+use barnacle_bot::discord::allowed_mentions;
 use barnacle_bot::discord::command_list;
 use barnacle_bot::discord::command_list_for;
+use barnacle_bot::ids::Ping;
+use barnacle_bot::ids::RoleId;
+use barnacle_bot::wiring::ping_allowance;
+use poise::serenity_prelude as serenity;
 
 const CLAN: u64 = 111_111_111_111_111_111;
 const REHEARSAL: u64 = 222_222_222_222_222_222;
@@ -55,5 +61,39 @@ fn every_server_is_sent_the_voice_commands() {
         names(&command_list(true))
             .iter()
             .any(|name| name == "voice")
+    );
+}
+
+#[test]
+fn only_a_first_post_asks_discord_to_ping_everyone() {
+    assert_eq!(
+        allowed_mentions(ping_allowance(Delivery::New, &[Ping::Everyone])),
+        serenity::CreateAllowedMentions::new().everyone(true)
+    );
+    assert_eq!(
+        allowed_mentions(ping_allowance(Delivery::Redraw, &[Ping::Everyone])),
+        serenity::CreateAllowedMentions::new()
+    );
+    assert_eq!(
+        allowed_mentions(ping_allowance(
+            Delivery::New,
+            &[Ping::Role(RoleId::new(123))]
+        )),
+        serenity::CreateAllowedMentions::new().roles([serenity::RoleId::new(123)])
+    );
+    assert_eq!(
+        allowed_mentions(ping_allowance(
+            Delivery::Redraw,
+            &[Ping::Role(RoleId::new(123))]
+        )),
+        serenity::CreateAllowedMentions::new()
+    );
+    assert_eq!(
+        allowed_mentions(ping_allowance(
+            Delivery::New,
+            &[Ping::Role(RoleId::new(123)), Ping::Role(RoleId::new(456))]
+        )),
+        serenity::CreateAllowedMentions::new()
+            .roles([serenity::RoleId::new(123), serenity::RoleId::new(456)])
     );
 }
