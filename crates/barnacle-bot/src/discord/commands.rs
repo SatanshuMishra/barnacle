@@ -365,6 +365,40 @@ struct CheckedPing {
     ping: Ping,
     verdict: PingVerdict,
     setup: SetupPing,
+    reach: Option<PingReach>,
+    place: Place,
+}
+
+fn judge_ping(
+    ctx: Context<'_>,
+    ping: Ping,
+    place: Place,
+    channel_granted: Option<serenity::Permissions>,
+    creating: bool,
+) -> CheckedPing {
+    let reach = ping_reach(ctx, ping, place.guild, channel_granted);
+    let verdict = wiring::ping_verdict(ping, reach);
+    CheckedPing {
+        ping,
+        verdict,
+        setup: wiring::setup_ping(creating, verdict),
+        reach,
+        place,
+    }
+}
+
+fn log_ping_check(ctx: Context<'_>, checked: Option<CheckedPing>, refused: bool) {
+    if let Some(checked) = checked {
+        failure::ping_checked(
+            checked.ping,
+            checked.verdict,
+            checked.reach,
+            refused,
+            &Scope::of_command(ctx)
+                .guild(checked.place.guild)
+                .channel(checked.place.channel),
+        );
+    }
 }
 
 fn check_ping(
@@ -374,23 +408,9 @@ fn check_ping(
     channel_granted: Option<serenity::Permissions>,
     creating: bool,
 ) -> CheckedPing {
-    let reach = ping_reach(ctx, ping, place.guild, channel_granted);
-    let verdict = wiring::ping_verdict(ping, reach);
-    let setup = wiring::setup_ping(creating, verdict);
-    failure::ping_checked(
-        ping,
-        verdict,
-        reach,
-        setup == SetupPing::Refuse,
-        &Scope::of_command(ctx)
-            .guild(place.guild)
-            .channel(place.channel),
-    );
-    CheckedPing {
-        ping,
-        verdict,
-        setup,
-    }
+    let checked = judge_ping(ctx, ping, place, channel_granted, creating);
+    log_ping_check(ctx, Some(checked), false);
+    checked
 }
 
 fn season_ping(season: &Season) -> Option<Ping> {
@@ -415,6 +435,7 @@ async fn refuse_blocked_ping(
 ) -> Result<bool, Error> {
     match checked {
         Some(checked) if checked.setup == SetupPing::Refuse => {
+            log_ping_check(ctx, Some(checked), true);
             refuse(
                 ctx,
                 text::Refusal::PingBlockedByChannel {
@@ -781,7 +802,7 @@ async fn season_start(
     };
     let ping_role = ping_role.map(|role| RoleId::new(role.get()));
     let checked = ping_role.map(|role| {
-        check_ping(
+        judge_ping(
             ctx,
             Ping::of(place.guild, role),
             place,
@@ -804,11 +825,18 @@ async fn season_start(
     };
     match ctx.data().signups.store().create_season(&new).await? {
         CreateOutcome::Created(season) => {
+            log_ping_check(ctx, checked, false);
             let started = text::season_started(&season, nights_left, next_post_at(range, now_unix));
             private(ctx, warned(ping_warning(checked, place.channel), started)).await
         }
-        CreateOutcome::NumberTaken => refuse(ctx, text::Refusal::SeasonNumberTaken(number)).await,
-        CreateOutcome::Overlaps(other) => refuse(ctx, text::Refusal::SeasonOverlaps(other)).await,
+        CreateOutcome::NumberTaken => {
+            log_ping_check(ctx, checked, true);
+            refuse(ctx, text::Refusal::SeasonNumberTaken(number)).await
+        }
+        CreateOutcome::Overlaps(other) => {
+            log_ping_check(ctx, checked, true);
+            refuse(ctx, text::Refusal::SeasonOverlaps(other)).await
+        }
     }
 }
 
@@ -1153,7 +1181,7 @@ async fn rehearse_start(
     };
     let ping_role = ping_role.map(|role| RoleId::new(role.get()));
     let checked = ping_role.map(|role| {
-        check_ping(
+        judge_ping(
             ctx,
             Ping::of(place.guild, role),
             place,
@@ -1176,12 +1204,19 @@ async fn rehearse_start(
     };
     match ctx.data().signups.store().create_season(&new).await? {
         CreateOutcome::Created(season) => {
+            log_ping_check(ctx, checked, false);
             let started =
                 text::rehearsal_started(&season, nights_left, next_post_at(range, now_unix));
             private(ctx, warned(ping_warning(checked, place.channel), started)).await
         }
-        CreateOutcome::NumberTaken => refuse(ctx, text::Refusal::SeasonNumberTaken(number)).await,
-        CreateOutcome::Overlaps(other) => refuse(ctx, text::Refusal::SeasonOverlaps(other)).await,
+        CreateOutcome::NumberTaken => {
+            log_ping_check(ctx, checked, true);
+            refuse(ctx, text::Refusal::SeasonNumberTaken(number)).await
+        }
+        CreateOutcome::Overlaps(other) => {
+            log_ping_check(ctx, checked, true);
+            refuse(ctx, text::Refusal::SeasonOverlaps(other)).await
+        }
     }
 }
 
