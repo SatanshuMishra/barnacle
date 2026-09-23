@@ -776,7 +776,6 @@ impl<B: Board> Signups<B> {
         let night = post.night;
         let previous = post.message;
         let scope = post_scope(&season, night).message(previous);
-        self.forget(previous);
         let view = match self.view(&season, night, instant).await {
             Ok(view) => view,
             Err(error) => {
@@ -794,6 +793,7 @@ impl<B: Board> Signups<B> {
                 &scope,
             );
         }
+        self.forget(previous);
         let tag = PostTag {
             season: season.id,
             night,
