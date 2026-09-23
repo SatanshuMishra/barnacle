@@ -2210,6 +2210,7 @@ async fn a_repost_pings_only_when_asked() {
             &signups,
             RepostPing::Again {
                 checked: vec![CREWMATES],
+                channel: CHANNEL,
             },
         )
         .await,
@@ -2415,6 +2416,7 @@ async fn a_repost_with_changed_pings_is_refused() {
             &signups,
             RepostPing::Again {
                 checked: vec![RoleId::new(999)],
+                channel: CHANNEL,
             },
         )
         .await,
@@ -2422,6 +2424,26 @@ async fn a_repost_with_changed_pings_is_refused() {
     );
     assert!(board.deletes().is_empty());
     assert_eq!(board.sends().len(), 1);
+}
+
+#[tokio::test]
+async fn a_repost_whose_season_moved_after_its_check_is_refused() {
+    let board = FakeBoard::new();
+    let (signups, _season, _store, _old) = posted(board.clone(), &pinging_proposal()).await;
+    let sends = board.sends().len();
+    assert_eq!(
+        repost(
+            &signups,
+            RepostPing::Again {
+                checked: vec![CREWMATES],
+                channel: OTHER_CHANNEL,
+            },
+        )
+        .await,
+        RepostOutcome::PingsChanged
+    );
+    assert!(board.deletes().is_empty());
+    assert_eq!(board.sends().len(), sends);
 }
 
 #[tokio::test]

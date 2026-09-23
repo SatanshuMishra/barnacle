@@ -364,7 +364,7 @@ impl Refusal {
                 "ping_again pings the season's roles in your name, so you need to be able to ping them yourself: hold {MENTION_PERMISSION} in the season's channel, or every role has to allow anyone to mention it. You can still repost without ping_again."
             ),
             Refusal::RepostPingsChanged => {
-                "The season's ping roles changed while reposting, so nothing was reposted. Run the command again."
+                "The season's ping roles or channel changed while reposting, so nothing was reposted. Run the command again."
                     .to_owned()
             }
             Refusal::RepostSuperseded => {

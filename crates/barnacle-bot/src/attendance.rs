@@ -156,7 +156,10 @@ pub enum ClickOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepostPing {
     Quiet,
-    Again { checked: Vec<RoleId> },
+    Again {
+        checked: Vec<RoleId>,
+        channel: ChannelId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -756,8 +759,8 @@ impl<B: Board> Signups<B> {
                 );
             }
         };
-        if let RepostPing::Again { checked } = &ping
-            && *checked != season.ping_roles
+        if let RepostPing::Again { checked, channel } = &ping
+            && (*checked != season.ping_roles || *channel != season.channel)
         {
             return RepostOutcome::PingsChanged;
         }

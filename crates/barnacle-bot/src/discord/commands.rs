@@ -1140,6 +1140,7 @@ async fn season_repost(
     let ping = if pinging_again {
         RepostPing::Again {
             checked: season.ping_roles.clone(),
+            channel: season.channel,
         }
     } else {
         RepostPing::Quiet
