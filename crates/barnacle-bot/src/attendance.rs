@@ -710,7 +710,15 @@ impl<B: Board> Signups<B> {
         }
         let current = match self.store.post(season.id, click.night).await {
             Ok(Some(post)) if post.state != PostState::Removed => post.message,
-            Ok(_) | Err(_) => click.message,
+            Ok(_) => click.message,
+            Err(error) => {
+                post_failed(
+                    "a sign-up post could not be looked up to redraw it after a click",
+                    &error,
+                    &post_scope(&season, click.night).message(click.message),
+                );
+                click.message
+            }
         };
         self.redraw(&season, click.night, current, now_unix).await;
         failure::click_recorded(
