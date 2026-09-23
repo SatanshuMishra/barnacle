@@ -14,6 +14,7 @@ use barnacle_bot::attendance::Sent;
 use barnacle_bot::attendance::SignupView;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
+use barnacle_bot::ids::Ping;
 use barnacle_bot::ids::Place;
 use barnacle_bot::solves::SolveRecord;
 use barnacle_bot::solves::SolveStore;
@@ -232,7 +233,9 @@ struct BoardState {
     fail_deletes_in: Mutex<Vec<ChannelId>>,
     report_gone: AtomicBool,
     unheard_pings: AtomicBool,
+    unheard_only: Mutex<Vec<Ping>>,
     gate: Semaphore,
+    send_gate: Mutex<Option<Arc<Semaphore>>>,
 }
 
 #[derive(Clone)]
@@ -259,13 +262,25 @@ impl FakeBoard {
                 fail_deletes_in: Mutex::new(Vec::new()),
                 report_gone: AtomicBool::new(false),
                 unheard_pings: AtomicBool::new(false),
+                unheard_only: Mutex::new(Vec::new()),
                 gate: Semaphore::new(0),
+                send_gate: Mutex::new(None),
             }),
         }
     }
 
     pub fn open_edits(&self) {
         self.state.gate.close();
+    }
+
+    pub fn gate_sends(&self) {
+        *self.state.send_gate.lock().unwrap() = Some(Arc::new(Semaphore::new(0)));
+    }
+
+    pub fn open_sends(&self) {
+        if let Some(gate) = self.state.send_gate.lock().unwrap().take() {
+            gate.close();
+        }
     }
 
     pub fn fail_sends(&self, fail: bool) {
@@ -290,6 +305,10 @@ impl FakeBoard {
 
     pub fn unheard_pings(&self, unheard: bool) {
         self.state.unheard_pings.store(unheard, SeqCst);
+    }
+
+    pub fn unheard_only(&self, pings: Vec<Ping>) {
+        *self.state.unheard_only.lock().unwrap() = pings;
     }
 
     pub fn plant(&self, tag: PostTag, message: Snowflake) {
@@ -358,7 +377,7 @@ impl FakeBoard {
                     view,
                     delivery: Delivery::New,
                     ..
-                } if view.ping.is_some() => Some(view),
+                } if !view.pings.is_empty() => Some(view),
                 _ => None,
             })
             .collect()
@@ -387,12 +406,23 @@ impl Board for FakeBoard {
             view: view.clone(),
             delivery,
         });
+        let gate = self.state.send_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            let _held = gate.acquire().await;
+        }
         if self.state.fail_sends.load(SeqCst) {
             return Err(BoardError("the fake board refuses every send".into()));
         }
+        let only = self.state.unheard_only.lock().unwrap().clone();
+        let unheard = view
+            .pings
+            .iter()
+            .copied()
+            .filter(|ping| self.state.unheard_pings.load(SeqCst) || only.contains(ping))
+            .collect();
         Ok(Sent {
             message: Snowflake::new(self.state.next_message.fetch_add(1, SeqCst)),
-            ping_heard: !self.state.unheard_pings.load(SeqCst),
+            unheard,
         })
     }
 

@@ -22,8 +22,10 @@ use crate::failure::Scope;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::Ping;
+use crate::ids::RoleId;
 use crate::schedule::Hour;
 use crate::schedule::Night;
+use crate::schedule::Range;
 
 #[derive(Debug, thiserror::Error)]
 #[error("the Discord call failed")]
@@ -85,16 +87,16 @@ pub struct SignupView {
     pub codename: Option<String>,
     pub night: Night,
     pub open: bool,
-    pub ping: Option<Ping>,
+    pub pings: Vec<Ping>,
     pub hours: [HourTally; 4],
     pub rows: Vec<RosterRow>,
     pub hidden: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sent {
     pub message: Snowflake,
-    pub ping_heard: bool,
+    pub unheard: Vec<Ping>,
 }
 
 pub trait Board: Send + Sync + 'static {
@@ -148,6 +150,35 @@ pub enum ClickOutcome {
     Recorded,
     Closed { start_unix: i64 },
     UnknownSeason,
+    Failed(Failure),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepostPing {
+    Quiet,
+    Again {
+        checked: Vec<RoleId>,
+        channel: ChannelId,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepostOutcome {
+    Reposted {
+        night: Night,
+        previous: Snowflake,
+        message: Snowflake,
+        adopted: bool,
+        pinged: Vec<Ping>,
+        unheard: Vec<Ping>,
+    },
+    NotFound,
+    NothingOpen {
+        next_post_at: Option<i64>,
+        nights_left: usize,
+    },
+    PingsChanged,
+    Superseded,
     Failed(Failure),
 }
 
@@ -527,28 +558,30 @@ impl<B: Board> Signups<B> {
                     match self.board.send_post(season.channel, &view, delivery).await {
                         Ok(sent) => {
                             let scope = scope.message(sent.message);
-                            let ping = view.ping.filter(|_| delivery == Delivery::New);
-                            if let Some(ping) = ping
-                                && !sent.ping_heard
-                            {
-                                failure::ping_silent(ping, &scope);
+                            let pings = match delivery {
+                                Delivery::New => view.pings.clone(),
+                                Delivery::Redraw => Vec::new(),
+                            };
+                            if !pings.is_empty() && !sent.unheard.is_empty() {
+                                failure::ping_silent(&pings, &sent.unheard, &scope);
                             }
                             if self
                                 .record(season.id, night, sent.message, now_ms, &scope)
                                 .await
                             {
-                                match ping {
-                                    Some(ping) => failure::ping_published(
-                                        "a sign-up post was published",
-                                        ping,
-                                        sent.ping_heard,
-                                        &scope,
-                                    ),
-                                    None => failure::record(
+                                if pings.is_empty() {
+                                    failure::record(
                                         "signup.post.published",
                                         "a sign-up post was published",
                                         &scope,
-                                    ),
+                                    );
+                                } else {
+                                    failure::ping_published(
+                                        "a sign-up post was published",
+                                        &pings,
+                                        sent.unheard.is_empty(),
+                                        &scope,
+                                    );
                                 }
                                 report.posted.push(tag);
                             } else {
@@ -580,6 +613,7 @@ impl<B: Board> Signups<B> {
         scope: ClearScope,
         _now_unix: i64,
     ) -> PostsReport {
+        let _beating = self.beats.lock().await;
         let posts = match self.store.posts(season.id).await {
             Ok(posts) => posts,
             Err(error) => {
@@ -677,8 +711,19 @@ impl<B: Board> Signups<B> {
         {
             return ClickOutcome::Failed(Failure::from_error(&error));
         }
-        self.redraw(&season, click.night, click.message, now_unix)
-            .await;
+        let current = match self.store.post(season.id, click.night).await {
+            Ok(Some(post)) if post.state != PostState::Removed => post.message,
+            Ok(_) => click.message,
+            Err(error) => {
+                post_failed(
+                    "a sign-up post could not be looked up to redraw it after a click",
+                    &error,
+                    &post_scope(&season, click.night).message(click.message),
+                );
+                click.message
+            }
+        };
+        self.redraw(&season, click.night, current, now_unix).await;
         failure::click_recorded(
             &target_name(click.target),
             choice_name(click.attending),
@@ -691,6 +736,169 @@ impl<B: Board> Signups<B> {
                 .user(click.user),
         );
         ClickOutcome::Recorded
+    }
+
+    pub async fn repost(
+        self: &Arc<Self>,
+        guild: GuildId,
+        number: u32,
+        ping: RepostPing,
+        now_unix: i64,
+        now_ms: u64,
+    ) -> RepostOutcome {
+        let _beating = self.beats.lock().await;
+        let scope = Scope::default().guild(guild);
+        let season = match self.store.live_season(guild, number).await {
+            Ok(Some(season)) => season,
+            Ok(None) => return RepostOutcome::NotFound,
+            Err(error) => {
+                return repost_failed(
+                    "a season could not be read to repost its sign-up post",
+                    &error,
+                    &scope,
+                );
+            }
+        };
+        if let RepostPing::Again { checked, channel } = &ping
+            && (*checked != season.ping_roles || *channel != season.channel)
+        {
+            return RepostOutcome::PingsChanged;
+        }
+        let (instant, _) = self.rehearsal_instant(guild, now_unix, now_ms).await;
+        let posts = match self.store.posts(season.id).await {
+            Ok(posts) => posts,
+            Err(error) => {
+                return repost_failed(
+                    "a season's sign-up posts could not be read to repost one",
+                    &error,
+                    &season_scope(&season),
+                );
+            }
+        };
+        let Some(post) = posts
+            .iter()
+            .find(|post| post.state == PostState::Open && instant < post.night.start_unix())
+        else {
+            return RepostOutcome::NothingOpen {
+                next_post_at: next_post_at(season.range, instant),
+                nights_left: season.range.nights_left(instant),
+            };
+        };
+        let night = post.night;
+        let previous = post.message;
+        let scope = post_scope(&season, night).message(previous);
+        let view = match self.view(&season, night, instant).await {
+            Ok(view) => view,
+            Err(error) => {
+                return repost_failed(
+                    "the roster for a reposted sign-up post could not be read",
+                    &error,
+                    &scope,
+                );
+            }
+        };
+        if let Err(error) = self.board.delete_post(season.channel, previous).await {
+            return repost_failed(
+                "a sign-up post could not be deleted to repost it",
+                &error,
+                &scope,
+            );
+        }
+        self.forget(previous);
+        let tag = PostTag {
+            season: season.id,
+            night,
+        };
+        let scope = post_scope(&season, night);
+        let (message, adopted, pinged, unheard) = match self
+            .board
+            .find_post(season.channel, tag)
+            .await
+        {
+            Ok(Some(message)) => (message, true, Vec::new(), Vec::new()),
+            Ok(None) => {
+                let delivery = match ping {
+                    RepostPing::Again { .. } => Delivery::New,
+                    RepostPing::Quiet => Delivery::Redraw,
+                };
+                match self.board.send_post(season.channel, &view, delivery).await {
+                    Ok(sent) => {
+                        let pinged = match delivery {
+                            Delivery::New => view.pings.clone(),
+                            Delivery::Redraw => Vec::new(),
+                        };
+                        let unheard = if pinged.is_empty() {
+                            Vec::new()
+                        } else {
+                            sent.unheard
+                        };
+                        (sent.message, false, pinged, unheard)
+                    }
+                    Err(error) => {
+                        return repost_failed(
+                            "a reposted sign-up post could not be sent",
+                            &error,
+                            &scope,
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                return repost_failed(
+                    "the channel could not be searched for a sign-up post left by an earlier repost",
+                    &error,
+                    &scope,
+                );
+            }
+        };
+        let scope = scope.message(message);
+        match self
+            .store
+            .replace_post_message(season.id, night, previous, message)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                self.discard(&season, message, &scope).await;
+                return RepostOutcome::Superseded;
+            }
+            Err(error) => {
+                let outcome =
+                    repost_failed("a reposted sign-up post could not be saved", &error, &scope);
+                self.discard(&season, message, &scope).await;
+                return outcome;
+            }
+        }
+        if !unheard.is_empty() {
+            failure::ping_silent(&pinged, &unheard, &scope);
+        }
+        failure::post_reposted(
+            previous,
+            matches!(ping, RepostPing::Again { .. }),
+            adopted,
+            &pinged,
+            unheard.is_empty(),
+            &scope,
+        );
+        self.redraw(&season, night, message, instant).await;
+        RepostOutcome::Reposted {
+            night,
+            previous,
+            message,
+            adopted,
+            pinged,
+            unheard,
+        }
+    }
+
+    async fn discard(&self, season: &Season, message: Snowflake, scope: &Scope) {
+        if let Err(error) = self.board.delete_post(season.channel, message).await {
+            post_failed(
+                "a reposted sign-up post that could not be kept could not be deleted",
+                &error,
+                scope,
+            );
+        }
     }
 
     pub async fn view(
@@ -822,6 +1030,14 @@ impl<B: Board> Signups<B> {
     }
 }
 
+pub fn next_post_at(range: Range, now_unix: i64) -> Option<i64> {
+    range
+        .due_night(now_unix)
+        .is_none()
+        .then(|| range.next_night(now_unix).map(Night::post_at_unix))
+        .flatten()
+}
+
 pub fn next_moment(seasons: &[Season], posts: &[(i64, Vec<Post>)], now_unix: i64) -> Option<i64> {
     seasons
         .iter()
@@ -871,6 +1087,16 @@ fn post_failed(summary: &str, error: &(dyn std::error::Error + 'static), scope: 
     );
 }
 
+fn repost_failed(
+    summary: &str,
+    error: &(dyn std::error::Error + 'static),
+    scope: &Scope,
+) -> RepostOutcome {
+    let failure = Failure::from_error(error);
+    failure::report("signup.post.failed", summary, &failure, scope);
+    RepostOutcome::Failed(failure)
+}
+
 fn target_name(target: Target) -> String {
     match target {
         Target::All => "all".to_owned(),
@@ -908,7 +1134,11 @@ fn build_view(season: &Season, night: Night, now_unix: i64, marks: &[Mark]) -> S
         codename: season.codename.clone(),
         night,
         open: now_unix < night.start_unix(),
-        ping: season.ping_role.map(|role| Ping::of(season.guild, role)),
+        pings: season
+            .ping_roles
+            .iter()
+            .map(|role| Ping::of(season.guild, *role))
+            .collect(),
         hours: std::array::from_fn(|index| tally(Hour::ALL[index], marks)),
         rows: rows.into_iter().take(ROSTER_LIMIT).collect(),
         hidden,

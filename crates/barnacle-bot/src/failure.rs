@@ -631,15 +631,38 @@ pub fn ping_checked(
     }
 }
 
-pub fn ping_published(summary: &str, ping: Ping, heard: bool, scope: &Scope) {
+pub fn ping_published(summary: &str, pings: &[Ping], heard: bool, scope: &Scope) {
     scoped_event!(
         tracing::Level::INFO,
         "signup.post.published",
         "success",
         summary,
         scope,
-        "barnacle.ping" = ping_name(ping).as_str(),
+        "barnacle.ping" = ping_names(pings).as_str(),
         "barnacle.ping.heard" = heard,
+    );
+}
+
+pub fn post_reposted(
+    previous: Snowflake,
+    again: bool,
+    adopted: bool,
+    pinged: &[Ping],
+    heard: bool,
+    scope: &Scope,
+) {
+    let named = (!pinged.is_empty()).then(|| ping_names(pinged));
+    scoped_event!(
+        tracing::Level::INFO,
+        "signup.post.reposted",
+        "success",
+        "a sign-up post was reposted",
+        scope,
+        "barnacle.message.previous" = tracing::field::display(previous.get()),
+        "barnacle.ping.again" = again,
+        "barnacle.post.adopted" = adopted,
+        "barnacle.ping" = named.as_deref(),
+        "barnacle.ping.heard" = named.as_ref().map(|_| heard),
     );
 }
 
@@ -655,15 +678,25 @@ pub fn click_recorded(target: &str, choice: &str, scope: &Scope) {
     );
 }
 
-pub fn ping_silent(ping: Ping, scope: &Scope) {
+pub fn ping_silent(pings: &[Ping], unheard: &[Ping], scope: &Scope) {
     scoped_event!(
         tracing::Level::WARN,
         "signup.ping.silent",
         "failure",
         "Discord did not register a sign-up post's ping, so nobody was notified",
         scope,
-        "barnacle.ping" = ping_name(ping).as_str(),
+        "barnacle.ping" = ping_names(pings).as_str(),
+        "barnacle.ping.unheard" = ping_names(unheard).as_str(),
     );
+}
+
+fn ping_names(pings: &[Ping]) -> String {
+    pings
+        .iter()
+        .copied()
+        .map(ping_name)
+        .collect::<Vec<String>>()
+        .join(",")
 }
 
 fn ping_name(ping: Ping) -> String {

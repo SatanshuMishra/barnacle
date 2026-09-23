@@ -25,6 +25,9 @@ pub const MIGRATION: &str = include_str!("../../../../migrations/0001_guess_solv
 pub const CB_MIGRATION: &str = include_str!("../../../../migrations/0002_cb_attendance.sql");
 pub const CB_CONTROLS: &str = include_str!("../../../../migrations/0003_cb_season_controls.sql");
 pub const CB_HARNESS: &str = include_str!("../../../../migrations/0004_cb_rehearsal_harness.sql");
+pub const CB_PING_ROLES: &str = include_str!("../../../../migrations/0006_cb_ping_roles.sql");
+pub const CB_PING_ROLES_DOWN: &str =
+    include_str!("../../../../migrations/0006_cb_ping_roles.down.sql");
 const CLI_DIRECTIVE: &str = ".bail on\n";
 pub const BUILD: u32 = 13187581;
 
@@ -120,6 +123,10 @@ pub async fn attendance_pool() -> SqlitePool {
         .await
         .unwrap();
     sqlx::raw_sql(CB_HARNESS.trim_start_matches(CLI_DIRECTIVE))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(CB_PING_ROLES.trim_start_matches(CLI_DIRECTIVE))
         .execute(&pool)
         .await
         .unwrap();

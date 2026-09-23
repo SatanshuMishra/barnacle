@@ -3,6 +3,7 @@ use barnacle_guess::RoundOptions;
 
 use crate::attendance::Delivery;
 use crate::attendance::Target;
+use crate::ids::GuildId;
 use crate::ids::Ping;
 use crate::ids::RoleId;
 use crate::schedule::Hour;
@@ -180,12 +181,42 @@ fn parse_choice(text: &str) -> Option<bool> {
     }
 }
 
-pub fn ping_content(ping: Option<Ping>) -> String {
-    match ping {
-        Some(Ping::Everyone) => "@everyone".to_owned(),
-        Some(Ping::Role(role)) => format!("<@&{role}>"),
-        None => String::new(),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PingChoiceProblem {
+    MixedEveryone,
+}
+
+pub fn ping_choice(
+    guild: GuildId,
+    given: [Option<RoleId>; 5],
+) -> Result<Vec<RoleId>, PingChoiceProblem> {
+    let roles = given
+        .into_iter()
+        .flatten()
+        .fold(Vec::new(), |kept: Vec<RoleId>, role| {
+            if kept.contains(&role) {
+                kept
+            } else {
+                kept.into_iter().chain(std::iter::once(role)).collect()
+            }
+        });
+    let everyone = RoleId::new(guild.get());
+    if roles.len() > 1 && roles.contains(&everyone) {
+        Err(PingChoiceProblem::MixedEveryone)
+    } else {
+        Ok(roles)
     }
+}
+
+pub fn ping_content(pings: &[Ping]) -> String {
+    pings
+        .iter()
+        .map(|ping| match ping {
+            Ping::Everyone => "@everyone".to_owned(),
+            Ping::Role(role) => format!("<@&{role}>"),
+        })
+        .collect::<Vec<String>>()
+        .join(" ")
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -194,17 +225,19 @@ pub struct PingAllowance {
     pub roles: Vec<RoleId>,
 }
 
-pub fn ping_allowance(delivery: Delivery, ping: Option<Ping>) -> PingAllowance {
-    match (delivery, ping) {
-        (Delivery::New, Some(Ping::Everyone)) => PingAllowance {
-            everyone: true,
-            roles: Vec::new(),
+pub fn ping_allowance(delivery: Delivery, pings: &[Ping]) -> PingAllowance {
+    match delivery {
+        Delivery::New => PingAllowance {
+            everyone: pings.contains(&Ping::Everyone),
+            roles: pings
+                .iter()
+                .filter_map(|ping| match ping {
+                    Ping::Role(role) => Some(*role),
+                    Ping::Everyone => None,
+                })
+                .collect(),
         },
-        (Delivery::New, Some(Ping::Role(role))) => PingAllowance {
-            everyone: false,
-            roles: vec![role],
-        },
-        (Delivery::New, None) | (Delivery::Redraw, _) => PingAllowance::default(),
+        Delivery::Redraw => PingAllowance::default(),
     }
 }
 
@@ -254,10 +287,33 @@ pub fn setup_ping(creating: bool, verdict: PingVerdict) -> SetupPing {
     }
 }
 
-pub fn ping_heard(ping: Option<Ping>, mention_roles: &[RoleId], mention_everyone: bool) -> bool {
-    match ping {
-        None => true,
-        Some(Ping::Role(role)) => mention_roles.contains(&role),
-        Some(Ping::Everyone) => mention_everyone,
+pub fn unheard_pings(
+    pings: &[Ping],
+    mention_roles: &[RoleId],
+    mention_everyone: bool,
+) -> Vec<Ping> {
+    pings
+        .iter()
+        .copied()
+        .filter(|ping| match ping {
+            Ping::Role(role) => !mention_roles.contains(role),
+            Ping::Everyone => !mention_everyone,
+        })
+        .collect()
+}
+
+pub fn may_ping_again(
+    pings: &[Ping],
+    person_mentions_everyone: Option<bool>,
+    mentionable: &[bool],
+) -> bool {
+    match person_mentions_everyone {
+        None => false,
+        Some(true) => true,
+        Some(false) => {
+            pings.len() == mentionable.len()
+                && pings.iter().all(|ping| matches!(ping, Ping::Role(_)))
+                && mentionable.iter().all(|mentionable| *mentionable)
+        }
     }
 }

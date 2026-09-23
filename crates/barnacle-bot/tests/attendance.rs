@@ -6,10 +6,13 @@ use barnacle_bot::attendance::Cell;
 use barnacle_bot::attendance::ClearScope;
 use barnacle_bot::attendance::Click;
 use barnacle_bot::attendance::ClickOutcome;
+use barnacle_bot::attendance::Delivery;
 use barnacle_bot::attendance::PostTag;
 use barnacle_bot::attendance::PostsReport;
 use barnacle_bot::attendance::PurgeReport;
 use barnacle_bot::attendance::ROSTER_LIMIT;
+use barnacle_bot::attendance::RepostOutcome;
+use barnacle_bot::attendance::RepostPing;
 use barnacle_bot::attendance::Signups;
 use barnacle_bot::attendance::Target;
 use barnacle_bot::attendance::TickReport;
@@ -35,6 +38,7 @@ use barnacle_bot::schedule::parse_day;
 use barnacle_guess::Snowflake;
 use barnacle_guess::UserId;
 use common::attendance_pool;
+use common::fakes::BoardCall;
 use common::fakes::FakeBoard;
 use sqlx::sqlite::SqlitePool;
 
@@ -49,6 +53,8 @@ const MANAGER: UserId = UserId::new(100);
 const AKI: UserId = UserId::new(200);
 const BOREALIS: UserId = UserId::new(300);
 const CREWMATES: RoleId = RoleId::new(4242);
+const RESERVES: RoleId = RoleId::new(4343);
+const TRIALS: RoleId = RoleId::new(4444);
 
 const REAL_NOW: i64 = 1_789_473_600;
 const FIRST_POST_AT: i64 = 1_789_515_000;
@@ -92,7 +98,7 @@ fn proposal() -> NewSeason {
         .unwrap(),
         created_by: MANAGER,
         created_at_ms: millis(FIRST_POST_AT),
-        ping_role: None,
+        ping_roles: Vec::new(),
     }
 }
 
@@ -951,7 +957,7 @@ async fn refresh_posts_edits_and_never_sends() {
         &store,
         &SeasonChange {
             codename: Some(Some("Blue Whale".to_owned())),
-            ping_role: Some(Some(CREWMATES)),
+            ping_roles: Some(vec![CREWMATES]),
             ..SeasonChange::default()
         },
     )
@@ -967,7 +973,7 @@ async fn refresh_posts_edits_and_never_sends() {
     let drawn = board.edits();
     assert_eq!(drawn.len(), 1);
     assert_eq!(drawn[0].codename.as_deref(), Some("Blue Whale"));
-    assert_eq!(drawn[0].ping, Some(Ping::Role(CREWMATES)));
+    assert_eq!(drawn[0].pings, vec![Ping::Role(CREWMATES)]);
     assert_eq!(board.sends().len(), 1);
     signups
         .clear_posts(&after, ClearScope::All, FIRST_POST_AT)
@@ -1052,40 +1058,40 @@ async fn an_ended_season_is_never_posted_again() {
 async fn the_view_carries_the_ping_role() {
     let board = FakeBoard::new();
     let pinging = NewSeason {
-        ping_role: Some(CREWMATES),
+        ping_roles: vec![CREWMATES],
         ..proposal()
     };
     let (signups, season, _store) = ready_from(board.clone(), &pinging).await;
     signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
     assert_eq!(
-        board.sends().first().unwrap().ping,
-        Some(Ping::Role(CREWMATES))
+        board.sends().first().unwrap().pings,
+        vec![Ping::Role(CREWMATES)]
     );
     assert_eq!(
         signups
             .view(&season, first_night(), FIRST_POST_AT)
             .await
             .unwrap()
-            .ping,
-        Some(Ping::Role(CREWMATES))
+            .pings,
+        vec![Ping::Role(CREWMATES)]
     );
     let plain = FakeBoard::new();
     let (quiet, season, _store) = ready(plain.clone()).await;
     quiet.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
-    assert_eq!(plain.sends().first().unwrap().ping, None);
+    assert_eq!(plain.sends().first().unwrap().pings, Vec::new());
     assert_eq!(
         quiet
             .view(&season, first_night(), FIRST_POST_AT)
             .await
             .unwrap()
-            .ping,
-        None
+            .pings,
+        Vec::new()
     );
 }
 
 fn pinging_proposal() -> NewSeason {
     NewSeason {
-        ping_role: Some(CREWMATES),
+        ping_roles: vec![CREWMATES],
         ..proposal()
     }
 }
@@ -1950,7 +1956,7 @@ async fn a_post_that_cannot_be_removed_is_logged_once() {
 async fn an_everyone_ping_is_written_as_everyone() {
     let board = FakeBoard::new();
     let everyone = NewSeason {
-        ping_role: Some(RoleId::new(GUILD.get())),
+        ping_roles: vec![RoleId::new(GUILD.get())],
         ..proposal()
     };
     let (signups, _season, _store) = ready_from(board.clone(), &everyone).await;
@@ -1958,7 +1964,7 @@ async fn an_everyone_ping_is_written_as_everyone() {
     let sent = board.sends();
     let view = sent.first().expect("the first night's post was sent");
     assert_eq!(
-        barnacle_bot::wiring::ping_content(view.ping),
+        barnacle_bot::wiring::ping_content(&view.pings),
         "@everyone",
         "a season pinging its server's own @everyone role must write the literal @everyone, never <@&server id>"
     );
@@ -2021,6 +2027,50 @@ async fn a_re_sent_post_never_logs_a_silent_ping() {
 }
 
 #[tokio::test]
+async fn a_first_post_pings_every_role_once() {
+    let board = FakeBoard::new();
+    let three = NewSeason {
+        ping_roles: vec![CREWMATES, RESERVES, TRIALS],
+        ..proposal()
+    };
+    let (signups, _season, _store) = ready_from(board.clone(), &three).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let pinging = board.pinging_sends();
+    assert_eq!(pinging.len(), 1);
+    assert_eq!(
+        pinging[0].pings,
+        vec![
+            Ping::Role(CREWMATES),
+            Ping::Role(RESERVES),
+            Ping::Role(TRIALS)
+        ]
+    );
+    signups
+        .tick(FIRST_POST_AT + 60, millis(FIRST_POST_AT + 60))
+        .await;
+    assert_eq!(board.sends().len(), 1);
+}
+
+#[tokio::test]
+async fn a_partly_heard_ping_logs_only_the_missed_roles() {
+    let logs = common::logs::capture();
+    let board = FakeBoard::new();
+    board.unheard_only(vec![Ping::Role(RESERVES)]);
+    let two = NewSeason {
+        ping_roles: vec![CREWMATES, RESERVES],
+        ..proposal()
+    };
+    let (signups, _season, _store) = ready_from(board.clone(), &two).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let silent = only(logs.named("signup.ping.silent"));
+    assert_eq!(silent["barnacle.ping"], "4242,4343");
+    assert_eq!(silent["barnacle.ping.unheard"], "4343");
+    let published = only(logs.named("signup.post.published"));
+    assert_eq!(published["barnacle.ping"], "4242,4343");
+    assert_eq!(published["barnacle.ping.heard"], false);
+}
+
+#[tokio::test]
 async fn a_recorded_click_logs_who_chose_what() {
     let board = FakeBoard::new();
     let (signups, season, store) = ready(board.clone()).await;
@@ -2049,4 +2099,368 @@ async fn a_recorded_click_logs_who_chose_what() {
     assert_eq!(event["discord.message.id"], message.get().to_string());
     assert_eq!(event["barnacle.signup.target"], "2");
     assert_eq!(event["barnacle.signup.choice"], "nope");
+}
+
+const REPOST_AT: i64 = FIRST_POST_AT + 600;
+
+async fn posted(
+    board: FakeBoard,
+    new: &NewSeason,
+) -> (Arc<Signups<FakeBoard>>, Season, Attendance, Snowflake) {
+    let (signups, season, store) = ready_from(board, new).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let message = message_for(&store, &season, first_night()).await;
+    (signups, season, store, message)
+}
+
+async fn repost(signups: &Arc<Signups<FakeBoard>>, ping: RepostPing) -> RepostOutcome {
+    signups
+        .repost(GUILD, 35, ping, REPOST_AT, millis(REPOST_AT))
+        .await
+}
+
+fn reposted(outcome: RepostOutcome) -> (Snowflake, Snowflake, bool) {
+    match outcome {
+        RepostOutcome::Reposted {
+            previous,
+            message,
+            adopted,
+            ..
+        } => (previous, message, adopted),
+        other => panic!("expected a repost, got {other:?}"),
+    }
+}
+
+fn last_delivery(board: &FakeBoard) -> Delivery {
+    board
+        .calls()
+        .into_iter()
+        .rev()
+        .find_map(|call| match call {
+            BoardCall::Sent { delivery, .. } => Some(delivery),
+            _ => None,
+        })
+        .expect("a post was sent")
+}
+
+#[tokio::test]
+async fn a_repost_keeps_the_answers_and_the_open_state() {
+    let board = FakeBoard::new();
+    let (signups, season, store, message) = posted(board.clone(), &proposal()).await;
+    for user in [AKI, BOREALIS] {
+        assert_eq!(
+            signups
+                .click(
+                    press(&season, message, user, Target::All),
+                    FIRST_POST_AT,
+                    millis(FIRST_POST_AT)
+                )
+                .await,
+            ClickOutcome::Recorded
+        );
+    }
+    let before = signups
+        .view(&season, first_night(), REPOST_AT)
+        .await
+        .unwrap();
+    assert_eq!(before.rows.len(), 2);
+    reposted(repost(&signups, RepostPing::Quiet).await);
+    let sent = board.sends();
+    assert_eq!(sent.len(), 2);
+    let after = sent.last().unwrap();
+    assert_eq!(after.rows, before.rows);
+    assert_eq!(after.hours, before.hours);
+    assert_eq!(
+        state_of(&store, &season, first_night()).await,
+        PostState::Open
+    );
+}
+
+#[tokio::test]
+async fn a_repost_deletes_the_old_post_and_records_the_new_one() {
+    let board = FakeBoard::new();
+    let (signups, season, store, old) = posted(board.clone(), &proposal()).await;
+    let (previous, message, adopted) = reposted(repost(&signups, RepostPing::Quiet).await);
+    assert_eq!(previous, old);
+    assert_ne!(message, old);
+    assert!(!adopted);
+    assert_eq!(board.deletes(), vec![old]);
+    assert_eq!(message_for(&store, &season, first_night()).await, message);
+}
+
+#[tokio::test]
+async fn a_repost_of_a_vanished_post_sends_a_new_one() {
+    let board = FakeBoard::new();
+    let (signups, season, store, _old) = posted(board.clone(), &proposal()).await;
+    board.report_gone(true);
+    let (_, message, _) = reposted(repost(&signups, RepostPing::Quiet).await);
+    assert_eq!(board.sends().len(), 2);
+    assert_eq!(message_for(&store, &season, first_night()).await, message);
+}
+
+#[tokio::test]
+async fn a_repost_pings_only_when_asked() {
+    let board = FakeBoard::new();
+    let (signups, _season, _store, _old) = posted(board.clone(), &pinging_proposal()).await;
+    reposted(repost(&signups, RepostPing::Quiet).await);
+    assert_eq!(last_delivery(&board), Delivery::Redraw);
+    assert_eq!(board.pinging_sends().len(), 1);
+    reposted(
+        repost(
+            &signups,
+            RepostPing::Again {
+                checked: vec![CREWMATES],
+                channel: CHANNEL,
+            },
+        )
+        .await,
+    );
+    assert_eq!(last_delivery(&board), Delivery::New);
+    assert_eq!(board.pinging_sends().len(), 2);
+}
+
+#[tokio::test]
+async fn only_an_open_post_is_reposted() {
+    let board = FakeBoard::new();
+    let (signups, season, store) = ready(board.clone()).await;
+    assert_eq!(
+        signups
+            .repost(GUILD, 35, RepostPing::Quiet, REAL_NOW, millis(REAL_NOW))
+            .await,
+        RepostOutcome::NothingOpen {
+            next_post_at: Some(FIRST_POST_AT),
+            nights_left: season.range.nights_left(REAL_NOW),
+        }
+    );
+    assert!(board.calls().is_empty());
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    signups.tick(FIRST_START, millis(FIRST_START)).await;
+    let first = message_for(&store, &season, first_night()).await;
+    let second = message_for(&store, &season, second_night()).await;
+    assert_eq!(
+        state_of(&store, &season, first_night()).await,
+        PostState::Closed
+    );
+    let outcome = signups
+        .repost(
+            GUILD,
+            35,
+            RepostPing::Quiet,
+            FIRST_START,
+            millis(FIRST_START),
+        )
+        .await;
+    let RepostOutcome::Reposted {
+        night, previous, ..
+    } = outcome
+    else {
+        panic!("expected a repost, got {outcome:?}");
+    };
+    assert_eq!(night, second_night());
+    assert_eq!(previous, second);
+    assert!(!board.deletes().contains(&first));
+    assert_eq!(message_for(&store, &season, first_night()).await, first);
+    assert_eq!(
+        state_of(&store, &season, first_night()).await,
+        PostState::Closed
+    );
+}
+
+#[tokio::test]
+async fn a_tick_after_a_repost_sends_nothing_new() {
+    let board = FakeBoard::new();
+    let (signups, _season, _store, _old) = posted(board.clone(), &proposal()).await;
+    reposted(repost(&signups, RepostPing::Quiet).await);
+    assert_eq!(board.sends().len(), 2);
+    let report = signups.tick(REPOST_AT + 60, millis(REPOST_AT + 60)).await;
+    assert!(report.posted.is_empty());
+    assert!(report.adopted.is_empty());
+    assert_eq!(board.sends().len(), 2);
+}
+
+#[tokio::test]
+async fn a_click_on_the_old_post_lands_on_the_new_one() {
+    let board = FakeBoard::new();
+    let (signups, season, _store, old) = posted(board.clone(), &proposal()).await;
+    let (_, message, _) = reposted(repost(&signups, RepostPing::Quiet).await);
+    assert_eq!(
+        signups
+            .click(
+                press(&season, old, AKI, Target::All),
+                REPOST_AT,
+                millis(REPOST_AT)
+            )
+            .await,
+        ClickOutcome::Recorded
+    );
+    let edited: Vec<(Snowflake, usize)> = board
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            BoardCall::Edited { message, view, .. } => Some((message, view.rows.len())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(edited.last(), Some(&(message, 1)));
+    assert!(edited.iter().all(|(edited, _)| *edited != old));
+}
+
+#[tokio::test]
+async fn a_repost_adopts_a_post_left_by_a_failed_attempt() {
+    let board = FakeBoard::new();
+    let (signups, season, store, _old) = posted(board.clone(), &proposal()).await;
+    let left = Snowflake::new(777);
+    board.plant(tag(&season, first_night()), left);
+    board.report_gone(true);
+    let (_, message, adopted) = reposted(repost(&signups, RepostPing::Quiet).await);
+    assert!(adopted);
+    assert_eq!(message, left);
+    assert_eq!(board.sends().len(), 1);
+    assert_eq!(message_for(&store, &season, first_night()).await, left);
+}
+
+#[tokio::test]
+async fn a_failed_send_after_the_delete_can_be_retried() {
+    let board = FakeBoard::new();
+    let (signups, season, store, old) = posted(board.clone(), &proposal()).await;
+    board.fail_sends(true);
+    assert!(matches!(
+        repost(&signups, RepostPing::Quiet).await,
+        RepostOutcome::Failed(_)
+    ));
+    assert_eq!(message_for(&store, &season, first_night()).await, old);
+    board.fail_sends(false);
+    board.report_gone(true);
+    let (previous, message, _) = reposted(repost(&signups, RepostPing::Quiet).await);
+    assert_eq!(previous, old);
+    assert_eq!(message_for(&store, &season, first_night()).await, message);
+}
+
+#[tokio::test]
+async fn a_repost_whose_post_was_cleared_meanwhile_deletes_its_new_post() {
+    let board = FakeBoard::new();
+    let (signups, season, store, old) = posted(board.clone(), &proposal()).await;
+    board.gate_sends();
+    let reposting = {
+        let signups = Arc::clone(&signups);
+        tokio::spawn(async move { repost(&signups, RepostPing::Quiet).await })
+    };
+    while board.sends().len() < 2 {
+        tokio::task::yield_now().await;
+    }
+    store
+        .set_post_state(season.id, first_night(), PostState::Removed)
+        .await
+        .unwrap();
+    board.open_sends();
+    assert_eq!(reposting.await.unwrap(), RepostOutcome::Superseded);
+    let deleted = board.deletes();
+    let discarded = *deleted.last().unwrap();
+    assert_ne!(discarded, old);
+    assert_eq!(
+        deleted
+            .iter()
+            .filter(|message| **message == discarded)
+            .count(),
+        1
+    );
+    let post = store.post(season.id, first_night()).await.unwrap().unwrap();
+    assert_eq!(post.message, old);
+    assert_eq!(post.state, PostState::Removed);
+}
+
+#[tokio::test]
+async fn a_clear_racing_a_repost_leaves_no_post_behind() {
+    let board = FakeBoard::new();
+    let (signups, season, store, old) = posted(board.clone(), &proposal()).await;
+    board.gate_sends();
+    let reposting = {
+        let signups = Arc::clone(&signups);
+        tokio::spawn(async move { repost(&signups, RepostPing::Quiet).await })
+    };
+    while board.sends().len() < 2 {
+        tokio::task::yield_now().await;
+    }
+    let clearing = {
+        let signups = Arc::clone(&signups);
+        let season = season.clone();
+        tokio::spawn(async move {
+            signups
+                .clear_posts(&season, ClearScope::All, REPOST_AT)
+                .await
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(
+        !clearing.is_finished(),
+        "a clear must wait for a repost that is still sending"
+    );
+    board.open_sends();
+    let RepostOutcome::Reposted { message, .. } = reposting.await.unwrap() else {
+        panic!("the repost should finish before the clear starts");
+    };
+    assert_eq!(clearing.await.unwrap().failures, 0);
+    assert_ne!(message, old);
+    assert!(board.deletes().contains(&message));
+    let post = store.post(season.id, first_night()).await.unwrap().unwrap();
+    assert_eq!(post.message, message);
+    assert_eq!(post.state, PostState::Removed);
+}
+
+#[tokio::test]
+async fn a_repost_with_changed_pings_is_refused() {
+    let board = FakeBoard::new();
+    let (signups, _season, _store, _old) = posted(board.clone(), &pinging_proposal()).await;
+    assert_eq!(
+        repost(
+            &signups,
+            RepostPing::Again {
+                checked: vec![RoleId::new(999)],
+                channel: CHANNEL,
+            },
+        )
+        .await,
+        RepostOutcome::PingsChanged
+    );
+    assert!(board.deletes().is_empty());
+    assert_eq!(board.sends().len(), 1);
+}
+
+#[tokio::test]
+async fn a_repost_whose_season_moved_after_its_check_is_refused() {
+    let board = FakeBoard::new();
+    let (signups, _season, _store, _old) = posted(board.clone(), &pinging_proposal()).await;
+    let sends = board.sends().len();
+    assert_eq!(
+        repost(
+            &signups,
+            RepostPing::Again {
+                checked: vec![CREWMATES],
+                channel: OTHER_CHANNEL,
+            },
+        )
+        .await,
+        RepostOutcome::PingsChanged
+    );
+    assert!(board.deletes().is_empty());
+    assert_eq!(board.sends().len(), sends);
+}
+
+#[tokio::test]
+async fn a_repost_logs_both_messages() {
+    let board = FakeBoard::new();
+    let (signups, season, _store, old) = posted(board.clone(), &proposal()).await;
+    let logs = common::logs::capture();
+    let (_, message, _) = reposted(repost(&signups, RepostPing::Quiet).await);
+    let event = only(logs.named("signup.post.reposted"));
+    assert_eq!(event["level"], "INFO");
+    assert_eq!(event["event.outcome"], "success");
+    assert_eq!(event["discord.message.id"], message.get().to_string());
+    assert_eq!(event["barnacle.message.previous"], old.get().to_string());
+    assert_eq!(event["barnacle.season.id"], season.id.to_string());
+    assert_eq!(event["barnacle.night"], "2026-09-16");
+    assert_eq!(event["barnacle.ping.again"], false);
+    assert_eq!(event["barnacle.post.adopted"], false);
+    assert!(event.get("barnacle.ping").is_none());
+    assert!(logs.named("signup.post.published").is_empty());
 }
