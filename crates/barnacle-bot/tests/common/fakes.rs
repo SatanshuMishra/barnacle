@@ -10,6 +10,7 @@ use barnacle_bot::attendance::BoardError;
 use barnacle_bot::attendance::Delivery;
 use barnacle_bot::attendance::PostTag;
 use barnacle_bot::attendance::Removal;
+use barnacle_bot::attendance::Sent;
 use barnacle_bot::attendance::SignupView;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
@@ -230,6 +231,7 @@ struct BoardState {
     fail_deletes: AtomicBool,
     fail_deletes_in: Mutex<Vec<ChannelId>>,
     report_gone: AtomicBool,
+    unheard_pings: AtomicBool,
     gate: Semaphore,
 }
 
@@ -256,6 +258,7 @@ impl FakeBoard {
                 fail_deletes: AtomicBool::new(false),
                 fail_deletes_in: Mutex::new(Vec::new()),
                 report_gone: AtomicBool::new(false),
+                unheard_pings: AtomicBool::new(false),
                 gate: Semaphore::new(0),
             }),
         }
@@ -283,6 +286,10 @@ impl FakeBoard {
 
     pub fn report_gone(&self, gone: bool) {
         self.state.report_gone.store(gone, SeqCst);
+    }
+
+    pub fn unheard_pings(&self, unheard: bool) {
+        self.state.unheard_pings.store(unheard, SeqCst);
     }
 
     pub fn plant(&self, tag: PostTag, message: Snowflake) {
@@ -374,7 +381,7 @@ impl Board for FakeBoard {
         channel: ChannelId,
         view: &SignupView,
         delivery: Delivery,
-    ) -> Result<Snowflake, BoardError> {
+    ) -> Result<Sent, BoardError> {
         self.record(BoardCall::Sent {
             channel,
             view: view.clone(),
@@ -383,7 +390,10 @@ impl Board for FakeBoard {
         if self.state.fail_sends.load(SeqCst) {
             return Err(BoardError("the fake board refuses every send".into()));
         }
-        Ok(Snowflake::new(self.state.next_message.fetch_add(1, SeqCst)))
+        Ok(Sent {
+            message: Snowflake::new(self.state.next_message.fetch_add(1, SeqCst)),
+            ping_heard: !self.state.unheard_pings.load(SeqCst),
+        })
     }
 
     async fn find_post(

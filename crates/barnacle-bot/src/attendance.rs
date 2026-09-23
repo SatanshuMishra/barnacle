@@ -21,7 +21,7 @@ use crate::failure::Failure;
 use crate::failure::Scope;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
-use crate::ids::RoleId;
+use crate::ids::Ping;
 use crate::schedule::Hour;
 use crate::schedule::Night;
 
@@ -85,10 +85,16 @@ pub struct SignupView {
     pub codename: Option<String>,
     pub night: Night,
     pub open: bool,
-    pub ping: Option<RoleId>,
+    pub ping: Option<Ping>,
     pub hours: [HourTally; 4],
     pub rows: Vec<RosterRow>,
     pub hidden: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sent {
+    pub message: Snowflake,
+    pub ping_heard: bool,
 }
 
 pub trait Board: Send + Sync + 'static {
@@ -97,7 +103,7 @@ pub trait Board: Send + Sync + 'static {
         channel: ChannelId,
         view: &SignupView,
         delivery: Delivery,
-    ) -> impl Future<Output = Result<Snowflake, BoardError>> + Send;
+    ) -> impl Future<Output = Result<Sent, BoardError>> + Send;
 
     fn find_post(
         &self,
@@ -519,14 +525,31 @@ impl<B: Board> Signups<B> {
                         }
                     };
                     match self.board.send_post(season.channel, &view, delivery).await {
-                        Ok(message) => {
-                            let scope = scope.message(message);
-                            if self.record(season.id, night, message, now_ms, &scope).await {
-                                failure::record(
-                                    "signup.post.published",
-                                    "a sign-up post was published",
-                                    &scope,
-                                );
+                        Ok(sent) => {
+                            let scope = scope.message(sent.message);
+                            let ping = view.ping.filter(|_| delivery == Delivery::New);
+                            if let Some(ping) = ping
+                                && !sent.ping_heard
+                            {
+                                failure::ping_silent(ping, &scope);
+                            }
+                            if self
+                                .record(season.id, night, sent.message, now_ms, &scope)
+                                .await
+                            {
+                                match ping {
+                                    Some(ping) => failure::ping_published(
+                                        "a sign-up post was published",
+                                        ping,
+                                        sent.ping_heard,
+                                        &scope,
+                                    ),
+                                    None => failure::record(
+                                        "signup.post.published",
+                                        "a sign-up post was published",
+                                        &scope,
+                                    ),
+                                }
                                 report.posted.push(tag);
                             } else {
                                 report.failures += 1;
@@ -656,6 +679,17 @@ impl<B: Board> Signups<B> {
         }
         self.redraw(&season, click.night, click.message, now_unix)
             .await;
+        failure::click_recorded(
+            &target_name(click.target),
+            choice_name(click.attending),
+            &Scope::default()
+                .guild(season.guild)
+                .channel(click.channel)
+                .season(season.id)
+                .night(click.night.label())
+                .message(click.message)
+                .user(click.user),
+        );
         ClickOutcome::Recorded
     }
 
@@ -837,6 +871,17 @@ fn post_failed(summary: &str, error: &(dyn std::error::Error + 'static), scope: 
     );
 }
 
+fn target_name(target: Target) -> String {
+    match target {
+        Target::All => "all".to_owned(),
+        Target::One(hour) => hour.get().to_string(),
+    }
+}
+
+fn choice_name(attending: bool) -> &'static str {
+    if attending { "attend" } else { "nope" }
+}
+
 fn season_scope(season: &Season) -> Scope {
     Scope::default()
         .guild(season.guild)
@@ -863,7 +908,7 @@ fn build_view(season: &Season, night: Night, now_unix: i64, marks: &[Mark]) -> S
         codename: season.codename.clone(),
         night,
         open: now_unix < night.start_unix(),
-        ping: season.ping_role,
+        ping: season.ping_role.map(|role| Ping::of(season.guild, role)),
         hours: std::array::from_fn(|index| tally(Hour::ALL[index], marks)),
         rows: rows.into_iter().take(ROSTER_LIMIT).collect(),
         hidden,

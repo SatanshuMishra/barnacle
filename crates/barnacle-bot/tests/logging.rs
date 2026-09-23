@@ -10,10 +10,14 @@ use barnacle_bot::failure::Kind;
 use barnacle_bot::failure::Scope;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
+use barnacle_bot::ids::Ping;
+use barnacle_bot::ids::RoleId;
 use barnacle_bot::logging;
 use barnacle_bot::logging::LogFormat;
 use barnacle_bot::logging::LogSettings;
 use barnacle_bot::logging::LogSettingsError;
+use barnacle_bot::wiring::PingReach;
+use barnacle_bot::wiring::PingVerdict;
 use barnacle_guess::Snowflake;
 use barnacle_guess::UserId;
 
@@ -304,6 +308,71 @@ fn records_are_info_events_with_a_success_outcome() {
     assert_eq!(event["barnacle.round.number"], 7);
     assert!(event.get("error.type").is_none());
     assert!(event.get("barnacle.refusal.reason").is_none());
+}
+
+#[test]
+fn a_ping_check_event_carries_the_verdict_and_its_inputs() {
+    let logs = common::logs::capture();
+    let reach = PingReach {
+        role_mentionable: false,
+        server_grant: true,
+        channel_grant: false,
+    };
+    let scope = Scope::default()
+        .guild(GuildId::new(GUILD))
+        .channel(ChannelId::new(CHANNEL))
+        .user(UserId::new(USER))
+        .command("cb season start");
+    failure::ping_checked(
+        Ping::Role(RoleId::new(456)),
+        PingVerdict::Silent,
+        Some(reach),
+        false,
+        &scope,
+    );
+    let event = only(logs.named("signup.ping.checked"));
+    assert_eq!(event["level"], "WARN");
+    assert_eq!(event["event.outcome"], "failure");
+    assert_eq!(event["barnacle.ping"], "456");
+    assert_eq!(event["barnacle.ping.verdict"], "silent");
+    assert_eq!(event["barnacle.ping.mentionable"], false);
+    assert_eq!(event["barnacle.ping.server_grant"], true);
+    assert_eq!(event["barnacle.ping.channel_grant"], false);
+    assert_eq!(event["discord.guild.id"], GUILD.to_string());
+    assert_eq!(event["discord.channel.id"], CHANNEL.to_string());
+    assert_eq!(event["discord.command.name"], "cb season start");
+    let logs = common::logs::capture();
+    failure::ping_checked(
+        Ping::Role(RoleId::new(456)),
+        PingVerdict::Sounds,
+        Some(reach),
+        false,
+        &scope,
+    );
+    let event = only(logs.named("signup.ping.checked"));
+    assert_eq!(event["level"], "INFO");
+    assert_eq!(event["event.outcome"], "success");
+    assert_eq!(event["barnacle.ping.verdict"], "sounds");
+    let logs = common::logs::capture();
+    failure::ping_checked(Ping::Everyone, PingVerdict::Unchecked, None, false, &scope);
+    let event = only(logs.named("signup.ping.checked"));
+    assert_eq!(event["barnacle.ping"], "everyone");
+    assert_eq!(event["barnacle.ping.verdict"], "unchecked");
+    assert!(event.get("barnacle.ping.mentionable").is_none());
+    assert!(event.get("barnacle.ping.server_grant").is_none());
+    assert!(event.get("barnacle.ping.channel_grant").is_none());
+    let logs = common::logs::capture();
+    failure::ping_checked(
+        Ping::Everyone,
+        PingVerdict::BlockedByChannel,
+        Some(reach),
+        true,
+        &scope,
+    );
+    let event = only(logs.named("signup.ping.checked"));
+    assert_eq!(event["level"], "WARN");
+    assert_eq!(event["event.outcome"], "refused");
+    assert_eq!(event["barnacle.ping.verdict"], "blocked_by_channel");
 }
 
 #[test]

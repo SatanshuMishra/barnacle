@@ -21,12 +21,13 @@ use crate::attendance::TickReport;
 use crate::attendance_store::Season;
 use crate::failure::join_names;
 use crate::ids::ChannelId;
-use crate::ids::RoleId;
+use crate::ids::Ping;
 use crate::schedule::Hour;
 use crate::schedule::Night;
 use crate::solves::Ranking;
 use crate::solves::Standing;
 use crate::voice_text;
+use crate::wiring::PingVerdict;
 
 pub const EMBED_COLOUR: u32 = 0x2E6F6B;
 pub const ROUND_TITLE: &str = "Name that ship";
@@ -69,6 +70,9 @@ const RESET_BLOCKED_HEAD: &str =
     "Some sign-up posts could not be removed, so no season or answer was deleted.";
 const RESET_BLOCKED_TAIL: &str =
     "Check that the bot can manage messages here, then run this again.";
+
+const MENTION_PERMISSION: &str = "Mention @everyone, @here, and All Roles";
+const MENTIONABLE_SETTING: &str = "Allow anyone to @mention this role";
 
 const NOTHING_AHEAD: &str = "Nothing further will post.";
 const NOTHING_HAPPENED: &str = "Nothing happened.";
@@ -210,6 +214,10 @@ pub enum Refusal {
     NotAHub,
     CategoryAndTopLevel,
     HubNothingToChange,
+    PingBlockedByChannel {
+        ping: Ping,
+        channel: ChannelId,
+    },
 }
 
 impl Refusal {
@@ -238,6 +246,7 @@ impl Refusal {
             Refusal::NotAHub => "not_a_hub",
             Refusal::CategoryAndTopLevel => "category_and_top_level",
             Refusal::HubNothingToChange => "hub_nothing_to_change",
+            Refusal::PingBlockedByChannel { .. } => "ping_blocked_by_channel",
         }
     }
 
@@ -319,6 +328,9 @@ impl Refusal {
             Refusal::HubNothingToChange => {
                 "Nothing to change. Give a new name, room_name, category or top_level.".to_owned()
             }
+            Refusal::PingBlockedByChannel { ping, channel } => {
+                ping_blocked_by_channel(*ping, *channel)
+            }
         }
     }
 }
@@ -332,6 +344,15 @@ fn missing_bot_permissions(names: &[&str], channel: Option<ChannelId>) -> String
         "Barnacle needs {} in {place}. A server admin can grant {} to Barnacle's role or in {whose} channel's permissions, then run the command again.",
         join_names(names),
         them(names.len())
+    )
+}
+
+fn ping_blocked_by_channel(ping: Ping, channel: ChannelId) -> String {
+    format!(
+        "{} would not be pinged in <#{}>: Barnacle holds {MENTION_PERMISSION} in the server, but a permission override in that channel removes it. A server admin can allow {MENTION_PERMISSION} for Barnacle in that channel's permissions{}, then run the command again.",
+        ping_mention(ping),
+        channel.get(),
+        mentionable_alternative(ping)
     )
 }
 
@@ -495,7 +516,7 @@ pub fn season_line(season: &Season, nights_left: usize, post_at_unix: Option<i64
         season.range.last_day(),
         nights_ahead(nights_left),
         post_time(post_at_unix),
-        pings_line(season.ping_role)
+        pings_line(season.ping_role.map(|role| Ping::of(season.guild, role)))
     )
 }
 
@@ -670,10 +691,53 @@ pub fn reset_done(purge: &PurgeReport) -> String {
     }])
 }
 
-pub fn pings_line(ping: Option<RoleId>) -> String {
+pub fn pings_line(ping: Option<Ping>) -> String {
     match ping {
-        Some(role) => format!(" Pings <@&{role}>."),
+        Some(Ping::Everyone) => " Pings @everyone.".to_owned(),
+        Some(Ping::Role(role)) => format!(" Pings <@&{role}>."),
         None => String::new(),
+    }
+}
+
+pub fn silent_ping_warning(ping: Ping, verdict: PingVerdict, channel: ChannelId) -> Option<String> {
+    let mention = ping_mention(ping);
+    let place = format!("<#{}>", channel.get());
+    match verdict {
+        PingVerdict::Sounds => None,
+        PingVerdict::Silent => Some(match ping {
+            Ping::Everyone => format!(
+                "{mention} will not be pinged in {place}: Barnacle lacks {MENTION_PERMISSION} there. A server admin can grant {MENTION_PERMISSION} to Barnacle in that channel."
+            ),
+            Ping::Role(_) => format!(
+                "{mention} will not be pinged in {place}: the role is not mentionable and Barnacle lacks {MENTION_PERMISSION} there. A server admin can turn on the role's {MENTIONABLE_SETTING} setting, or grant {MENTION_PERMISSION} to Barnacle in that channel."
+            ),
+        }),
+        PingVerdict::BlockedByChannel => Some(format!(
+            "{mention} will not be pinged in {place}: Barnacle holds {MENTION_PERMISSION} in the server, but a permission override in that channel removes it. A server admin can allow {MENTION_PERMISSION} for Barnacle in that channel's permissions{}.",
+            mentionable_alternative(ping)
+        )),
+        PingVerdict::Unchecked => Some(match ping {
+            Ping::Everyone => format!(
+                "Barnacle could not check whether {mention} will be pinged in {place}. Check that Barnacle holds {MENTION_PERMISSION} in that channel."
+            ),
+            Ping::Role(_) => format!(
+                "Barnacle could not check whether {mention} will be pinged in {place}. Check that the role's {MENTIONABLE_SETTING} setting is on, or that Barnacle holds {MENTION_PERMISSION} in that channel."
+            ),
+        }),
+    }
+}
+
+fn ping_mention(ping: Ping) -> String {
+    match ping {
+        Ping::Everyone => "@everyone".to_owned(),
+        Ping::Role(role) => format!("<@&{role}>"),
+    }
+}
+
+fn mentionable_alternative(ping: Ping) -> String {
+    match ping {
+        Ping::Everyone => String::new(),
+        Ping::Role(_) => format!(", or turn on the role's {MENTIONABLE_SETTING} setting"),
     }
 }
 

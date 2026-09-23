@@ -75,7 +75,7 @@ libraries it uses, such as serenity, carry no `event.name`.
 | Service | `service.started`, `service.failed`, `startup.failed`, `commands.registered` |
 | Commands | `command.completed`, `command.refused`, `command.failed` |
 | Interactions and gateway events | `interaction.refused`, `interaction.failed`, `interaction.reply_failed`, `event.failed` |
-| Clan Battle sign-ups | `signup.post.published`, `signup.post.closed`, `signup.post.removed`, `signup.post.failed`, `signup.tick.completed`, `signup.tick.failed` |
+| Clan Battle sign-ups | `signup.post.published`, `signup.post.closed`, `signup.post.removed`, `signup.post.failed`, `signup.tick.completed`, `signup.tick.failed`, `signup.ping.checked`, `signup.ping.silent`, `signup.click.recorded` |
 | Rehearsal | `rehearsal.clock.cleared`, `rehearsal.clock.clear_failed` |
 | Silhouette game | `guess.round.started`, `guess.round.ended`, `guess.post.failed`, `guess.solve.failed` |
 | Join to Create voice | `voice.room.opened`, `voice.room.refused`, `voice.room.open_failed`, `voice.room.abandoned`, `voice.room.closed`, `voice.room.close_failed`, `voice.room.forgotten`, `voice.hub.forgotten`, `voice.notice.failed`, `voice.state.failed`, `voice.sweep.completed`, `voice.sweep.failed` |
@@ -175,6 +175,53 @@ A context field that is not known is left out of the line, never written as
 | `barnacle.failures` | number |
 | `barnacle.cleared` | number |
 | `barnacle.guilds` | number |
+
+### On `signup.ping.checked`
+
+`/cb season start`, `/rehearse start`, `/cb season edit` and `/cb season move`
+each write one `signup.ping.checked` whenever the season has, or would have, a
+ping. The line carries the command's context with the channel the season posts
+to. It is `INFO` with outcome `success` when the ping will sound, and `WARN`
+otherwise: outcome `refused` when the command refused because of it, and
+`failure` when the command went ahead with a warning.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `barnacle.ping` | string | `everyone`, or the role ID |
+| `barnacle.ping.verdict` | string: `sounds`, `blocked_by_channel`, `silent` or `unchecked` | Whether the ping will notify anyone in that channel. `blocked_by_channel` means Barnacle holds Mention @everyone, @here, and All Roles in the server but a channel override removes it; `unchecked` means Barnacle could not read what it needed to decide |
+| `barnacle.ping.mentionable` | boolean | Whether the role allows anyone to mention it; always false for `everyone` |
+| `barnacle.ping.server_grant` | boolean | Whether Barnacle holds Mention @everyone, @here, and All Roles, or Administrator, in the server |
+| `barnacle.ping.channel_grant` | boolean | Whether Barnacle holds it in the channel |
+
+The three boolean fields are left out when the verdict is `unchecked`.
+
+### On `signup.post.published` and `signup.ping.silent`
+
+When a night's first post carries a ping, its `signup.post.published` line also
+carries the ping and whether Discord registered it. A post re-sent after its
+season moved, or adopted from the channel, carries neither field.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `barnacle.ping` | string | `everyone`, or the role ID |
+| `barnacle.ping.heard` | boolean | Whether Discord's reply to the send lists the role among the message's mentioned roles, or, for `everyone`, marks the message as mentioning everyone |
+
+When `barnacle.ping.heard` is false, Barnacle also writes a `WARN`
+`signup.ping.silent` line with outcome `failure`, the post's context (server,
+channel, season, night and message) and `barnacle.ping`. The post still counts
+as published.
+
+### On `signup.click.recorded`
+
+Every sign-up click Barnacle records writes one `INFO` `signup.click.recorded`
+line with outcome `success`. It carries the server, channel, season, night,
+message and the user ID of whoever clicked. Refused and failed clicks are logged
+as before, as `interaction.refused` or `interaction.failed`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `barnacle.signup.target` | string: `all`, or `1` to `4` | The hour the click answered for, or `all` for every hour of the night |
+| `barnacle.signup.choice` | string: `attend` or `nope` | The answer given |
 
 ### On `service.started`
 

@@ -26,6 +26,7 @@ use barnacle_bot::attendance_store::SeasonChange;
 use barnacle_bot::failure::Kind;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
+use barnacle_bot::ids::Ping;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::schedule::Hour;
 use barnacle_bot::schedule::Night;
@@ -966,7 +967,7 @@ async fn refresh_posts_edits_and_never_sends() {
     let drawn = board.edits();
     assert_eq!(drawn.len(), 1);
     assert_eq!(drawn[0].codename.as_deref(), Some("Blue Whale"));
-    assert_eq!(drawn[0].ping, Some(CREWMATES));
+    assert_eq!(drawn[0].ping, Some(Ping::Role(CREWMATES)));
     assert_eq!(board.sends().len(), 1);
     signups
         .clear_posts(&after, ClearScope::All, FIRST_POST_AT)
@@ -1056,14 +1057,17 @@ async fn the_view_carries_the_ping_role() {
     };
     let (signups, season, _store) = ready_from(board.clone(), &pinging).await;
     signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
-    assert_eq!(board.sends().first().unwrap().ping, Some(CREWMATES));
+    assert_eq!(
+        board.sends().first().unwrap().ping,
+        Some(Ping::Role(CREWMATES))
+    );
     assert_eq!(
         signups
             .view(&season, first_night(), FIRST_POST_AT)
             .await
             .unwrap()
             .ping,
-        Some(CREWMATES)
+        Some(Ping::Role(CREWMATES))
     );
     let plain = FakeBoard::new();
     let (quiet, season, _store) = ready(plain.clone()).await;
@@ -1940,4 +1944,109 @@ async fn a_post_that_cannot_be_removed_is_logged_once() {
     assert_eq!(event["message"], "a sign-up post could not be removed");
     assert_eq!(event["discord.message.id"], message.get().to_string());
     assert_eq!(event["barnacle.season.id"], season.id.to_string());
+}
+
+#[tokio::test]
+async fn an_everyone_ping_is_written_as_everyone() {
+    let board = FakeBoard::new();
+    let everyone = NewSeason {
+        ping_role: Some(RoleId::new(GUILD.get())),
+        ..proposal()
+    };
+    let (signups, _season, _store) = ready_from(board.clone(), &everyone).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let sent = board.sends();
+    let view = sent.first().expect("the first night's post was sent");
+    assert_eq!(
+        barnacle_bot::wiring::ping_content(view.ping),
+        "@everyone",
+        "a season pinging its server's own @everyone role must write the literal @everyone, never <@&server id>"
+    );
+}
+
+#[tokio::test]
+async fn a_ping_discord_did_not_register_logs_a_warning() {
+    let logs = common::logs::capture();
+    let board = FakeBoard::new();
+    board.unheard_pings(true);
+    let (signups, season, store) = ready_from(board.clone(), &pinging_proposal()).await;
+    let report = signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    assert_eq!(report.posted, vec![tag(&season, first_night())]);
+    let message = message_for(&store, &season, first_night()).await;
+    let silent = only(logs.named("signup.ping.silent"));
+    assert_eq!(silent["level"], "WARN");
+    assert_eq!(silent["event.outcome"], "failure");
+    assert_eq!(silent["barnacle.season.id"], season.id.to_string());
+    assert_eq!(silent["barnacle.night"], "2026-09-16");
+    assert_eq!(silent["discord.message.id"], message.get().to_string());
+    assert_eq!(silent["barnacle.ping"], CREWMATES.get().to_string());
+    let published = only(logs.named("signup.post.published"));
+    assert_eq!(published["barnacle.ping.heard"], false);
+    assert_eq!(published["discord.message.id"], message.get().to_string());
+}
+
+#[tokio::test]
+async fn a_published_post_names_its_ping_and_that_it_was_heard() {
+    let logs = common::logs::capture();
+    let board = FakeBoard::new();
+    let (signups, _season, _store) = ready_from(board.clone(), &pinging_proposal()).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let published = only(logs.named("signup.post.published"));
+    assert_eq!(published["barnacle.ping"], CREWMATES.get().to_string());
+    assert_eq!(published["barnacle.ping.heard"], true);
+    assert!(logs.named("signup.ping.silent").is_empty());
+}
+
+#[tokio::test]
+async fn a_re_sent_post_never_logs_a_silent_ping() {
+    let logs = common::logs::capture();
+    let board = FakeBoard::new();
+    board.unheard_pings(true);
+    let (signups, season, _store) = ready_from(board.clone(), &pinging_proposal()).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    assert_eq!(logs.named("signup.ping.silent").len(), 1);
+    let cleared = signups
+        .clear_posts(&season, ClearScope::All, FIRST_POST_AT)
+        .await;
+    assert_eq!(cleared.failures, 0);
+    let logs = common::logs::capture();
+    let report = signups
+        .tick(FIRST_POST_AT + 60, millis(FIRST_POST_AT + 60))
+        .await;
+    assert_eq!(report.posted, vec![tag(&season, first_night())]);
+    assert!(logs.named("signup.ping.silent").is_empty());
+    let published = only(logs.named("signup.post.published"));
+    assert!(published.get("barnacle.ping").is_none());
+    assert!(published.get("barnacle.ping.heard").is_none());
+}
+
+#[tokio::test]
+async fn a_recorded_click_logs_who_chose_what() {
+    let board = FakeBoard::new();
+    let (signups, season, store) = ready(board.clone()).await;
+    signups.tick(FIRST_POST_AT, millis(FIRST_POST_AT)).await;
+    let message = message_for(&store, &season, first_night()).await;
+    let logs = common::logs::capture();
+    let outcome = signups
+        .click(
+            Click {
+                attending: false,
+                ..press(&season, message, AKI, Target::One(Hour::new(2).unwrap()))
+            },
+            FIRST_POST_AT,
+            millis(FIRST_POST_AT),
+        )
+        .await;
+    assert_eq!(outcome, ClickOutcome::Recorded);
+    let event = only(logs.named("signup.click.recorded"));
+    assert_eq!(event["level"], "INFO");
+    assert_eq!(event["event.outcome"], "success");
+    assert_eq!(event["discord.user.id"], AKI.get().to_string());
+    assert_eq!(event["discord.guild.id"], GUILD.get().to_string());
+    assert_eq!(event["discord.channel.id"], CHANNEL.get().to_string());
+    assert_eq!(event["barnacle.season.id"], season.id.to_string());
+    assert_eq!(event["barnacle.night"], "2026-09-16");
+    assert_eq!(event["discord.message.id"], message.get().to_string());
+    assert_eq!(event["barnacle.signup.target"], "2");
+    assert_eq!(event["barnacle.signup.choice"], "nope");
 }
