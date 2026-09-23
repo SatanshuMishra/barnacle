@@ -67,25 +67,33 @@ fn every_server_is_sent_the_voice_commands() {
 #[test]
 fn only_a_first_post_asks_discord_to_ping_everyone() {
     assert_eq!(
-        allowed_mentions(ping_allowance(Delivery::New, Some(Ping::Everyone))),
+        allowed_mentions(ping_allowance(Delivery::New, &[Ping::Everyone])),
         serenity::CreateAllowedMentions::new().everyone(true)
     );
     assert_eq!(
-        allowed_mentions(ping_allowance(Delivery::Redraw, Some(Ping::Everyone))),
+        allowed_mentions(ping_allowance(Delivery::Redraw, &[Ping::Everyone])),
         serenity::CreateAllowedMentions::new()
     );
     assert_eq!(
         allowed_mentions(ping_allowance(
             Delivery::New,
-            Some(Ping::Role(RoleId::new(123)))
+            &[Ping::Role(RoleId::new(123))]
         )),
         serenity::CreateAllowedMentions::new().roles([serenity::RoleId::new(123)])
     );
     assert_eq!(
         allowed_mentions(ping_allowance(
             Delivery::Redraw,
-            Some(Ping::Role(RoleId::new(123)))
+            &[Ping::Role(RoleId::new(123))]
         )),
         serenity::CreateAllowedMentions::new()
+    );
+    assert_eq!(
+        allowed_mentions(ping_allowance(
+            Delivery::New,
+            &[Ping::Role(RoleId::new(123)), Ping::Role(RoleId::new(456))]
+        )),
+        serenity::CreateAllowedMentions::new()
+            .roles([serenity::RoleId::new(123), serenity::RoleId::new(456)])
     );
 }

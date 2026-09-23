@@ -78,7 +78,15 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 
     It adds two tables without touching the others, and carries the same run-once guard.
 
-11. Put the bot's token where the bot can find it. Copy `env.example` to `.env` and fill in the one value:
+11. Move each season's ping role into its own table once, so a season can ping up to five roles. This rebuilds `cb_seasons`, so back the database up first as above, then, with the bot stopped:
+
+    ```bash
+    sqlite3 data/barnacle.sqlite3 < migrations/0006_cb_ping_roles.sql
+    ```
+
+    Every season keeps the role it already pinged. The file carries the same run-once guard.
+
+12. Put the bot's token where the bot can find it. Copy `env.example` to `.env` and fill in the one value:
 
     ```bash
     cp env.example .env && chmod 600 .env
@@ -86,7 +94,7 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 
     `.env` is ignored by git. A `DISCORD_TOKEN` already exported in your shell wins over the file, so you can override it for one run without editing anything.
 
-12. Start the bot:
+13. Start the bot:
 
     ```bash
     cargo run --release -p barnacle-bot
@@ -108,6 +116,7 @@ For Clan Battle sign-ups, the same database also stores each player's Discord us
 - `migrations/0002_cb_attendance.down.sql` removes every season, post and answer. Back the file up before running it.
 - `migrations/0003_cb_season_controls.down.sql` also loses every ping role and every ended marker. It refuses to run once two seasons in the same server share a number, which is what happens as soon as a number is reused after a season ended; resolve those rows first. Back the file up before running it.
 - `migrations/0004_cb_rehearsal_harness.down.sql` drops the rehearsal clock table and the column that marks a season as nightly. Run it only after every rehearsal season has been reset, because a nightly season read back without that column would be treated as an ordinary one.
+- `migrations/0006_cb_ping_roles.down.sql` puts one ping role back on each season and keeps only its first; the others are lost. Back the file up before running it.
 
 For Join to Create, the same database stores the server and channel IDs of each Join to Create channel together with the user ID of the admin who created it, and for each open room the user ID of the member it was opened for, until the room closes.
 
@@ -119,13 +128,14 @@ Create a channel that only the bot can post in, and run `/cb season start` there
 
 CB nights run 23:30-03:30 UTC on Wednesday, Thursday, Saturday and Sunday. For each night, the bot posts the sign-up message 24 hours ahead, closes it when the night starts, and deletes it 30 minutes after it ends. The bot has to be running for each of these steps: if it is down when a night's start passes, that night gets no sign-up post.
 
-`/cb season start` takes an optional role to ping when a sign-up post goes up. A night is pinged once, the first time its post appears, and never again: not when the post is updated, and not when it is posted afresh after a move. Picking @everyone pings the whole server, once per night like any role. A role marked mentionable in Discord needs no extra bot permission. Any other role, and @everyone, also need the bot to hold Mention @everyone, @here, and All Roles in that channel, or the ping is silent. A ping that cannot sound is refused at `/cb season start` and `/rehearse start` when a permission override on the channel is what blocks it, and otherwise warned about in the reply to those commands and to `/cb season edit` and `/cb season move`. Each night's first post also logs whether Discord registered its ping, and logs a `signup.ping.silent` warning when it did not.
+`/cb season start` takes up to five roles to ping when a sign-up post goes up: `ping_role`, then `ping_role_2` to `ping_role_5`. The post pings them in that order, and a role given twice is pinged once. @everyone has to be picked on its own; picking it together with named roles is refused, because it already reaches every member. A night is pinged once, the first time its post appears, and never again: not when the post is updated, and not when it is posted afresh after a move. Picking @everyone pings the whole server, once per night like any role. A role marked mentionable in Discord needs no extra bot permission. Any other role, and @everyone, also need the bot to hold Mention @everyone, @here, and All Roles in that channel, or the ping is silent. Each role is checked on its own. A ping that cannot sound is refused at `/cb season start` and `/rehearse start` when a permission override on the channel is what blocks it, and otherwise warned about in the reply to those commands and to `/cb season edit` and `/cb season move`. Each night's first post also logs whether Discord registered its pings, and logs a `signup.ping.silent` warning naming any it did not.
 
 A season's dates have to sit within six months either side of today. Seasons run two to four months and are announced a week or two ahead, so anything wider is a typo.
 
-Three commands change a season once it is running:
-- `/cb season edit` changes a season's number, dates, codename or ping role. Its sign-up post is redrawn where it already stands; it does not move channel and does not ping again.
+Four commands change a season once it is running:
+- `/cb season edit` changes a season's number, dates, codename or ping roles. Giving any of `ping_role` to `ping_role_5` replaces every role the season pinged with the ones given, and `clear_ping_role:true` stops it pinging any role; giving both is refused. Its sign-up post is redrawn where it already stands; it does not move channel and does not ping again.
 - `/cb season move` is run in the channel the season should post in from now on. It removes the season's posts from the old channel and posts them there instead. If any of the old posts cannot be removed, nothing moves and the season stays where it is.
+- `/cb season repost number:<n>` sends the season's open sign-up post again at the bottom of its channel, for when an admin deleted it by accident or it has scrolled out of sight. It deletes the old post if it is still there, sends the same night's post with every answer kept, and records the new post in the old one's place. Only a post still open for answers is reposted; with none open, the reply says when the next one goes up. `ping_again` is false by default, so a repost pings nobody. `ping_again:true` pings the season's roles once more, and is refused when the season has no ping role, or when the person running it could not ping those roles themselves: they need Mention @everyone, @here, and All Roles in the season's channel, or every role has to be mentionable. Like `/cb season start`, a repost with `ping_again:true` checks each role against the bot's own permissions, opens its reply with a warning for any role that cannot sound, and logs each check.
 - `/cb season end` stops a season at once: every sign-up post it still has is deleted from Discord and nothing more posts. If any post cannot be deleted, the season keeps running so you can fix the bot's permissions and run it again. Every answer already given stays in the database, and the season's number is free to reuse.
 
 ### Rehearsing in a throwaway server
@@ -145,7 +155,7 @@ Three commands exist only in a server the section names. The bot registers a com
 
 Taking a server out of `[rehearsal]` while leaving it in `commands.guilds` removes the commands on the next start. Removing it from `commands.guilds` as well does not: the bot never writes to a server it is not told about, so that server keeps the list it was last given until you clear its commands by hand. Take it out of `[rehearsal]`, start the bot once, and only then remove it from `commands.guilds`.
 
-- `/rehearse start` sets up a rehearsal season that posts in this channel. It takes the season number, an optional codename and ping role, and how many nights to run: three by default, seven at most. The nights start tomorrow, so the first post goes up a genuine 24 hours before its night rather than retroactively. Everything else is what `/cb season start` checks: a text channel, the bot's permissions there, the six-month window on the dates, and the number and overlap rules. Starting a rehearsal also resets that server's clock, so a fresh rehearsal always begins from the real time.
+- `/rehearse start` sets up a rehearsal season that posts in this channel. It takes the season number, an optional codename, up to five ping roles as `/cb season start` does, and how many nights to run: three by default, seven at most. The nights start tomorrow, so the first post goes up a genuine 24 hours before its night rather than retroactively. Everything else is what `/cb season start` checks: a text channel, the bot's permissions there, the six-month window on the dates, and the number and overlap rules. Starting a rehearsal also resets that server's clock, so a fresh rehearsal always begins from the real time.
 - `/rehearse next` moves the server's clock to the next moment at which the timer would post, close or remove a sign-up, runs that beat, and says what it did. Once the last night's post has been removed it replies that nothing is waiting.
 - `/rehearse reset` deletes every Clan Battle season, sign-up post and answer in that server, including seasons that have already ended, and clears the server's clock offset. If any post cannot be removed from Discord, no season and no answer is deleted, and the reply says how many posts had already been cleared before it stopped. The silhouette game's rounds and solves are left alone.
 

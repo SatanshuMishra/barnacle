@@ -75,7 +75,7 @@ libraries it uses, such as serenity, carry no `event.name`.
 | Service | `service.started`, `service.failed`, `startup.failed`, `commands.registered` |
 | Commands | `command.completed`, `command.refused`, `command.failed` |
 | Interactions and gateway events | `interaction.refused`, `interaction.failed`, `interaction.reply_failed`, `event.failed` |
-| Clan Battle sign-ups | `signup.post.published`, `signup.post.closed`, `signup.post.removed`, `signup.post.failed`, `signup.tick.completed`, `signup.tick.failed`, `signup.ping.checked`, `signup.ping.silent`, `signup.click.recorded` |
+| Clan Battle sign-ups | `signup.post.published`, `signup.post.reposted`, `signup.post.closed`, `signup.post.removed`, `signup.post.failed`, `signup.tick.completed`, `signup.tick.failed`, `signup.ping.checked`, `signup.ping.silent`, `signup.click.recorded` |
 | Rehearsal | `rehearsal.clock.cleared`, `rehearsal.clock.clear_failed` |
 | Silhouette game | `guess.round.started`, `guess.round.ended`, `guess.post.failed`, `guess.solve.failed` |
 | Join to Create voice | `voice.room.opened`, `voice.room.refused`, `voice.room.open_failed`, `voice.room.abandoned`, `voice.room.closed`, `voice.room.close_failed`, `voice.room.forgotten`, `voice.hub.forgotten`, `voice.notice.failed`, `voice.state.failed`, `voice.sweep.completed`, `voice.sweep.failed` |
@@ -179,8 +179,10 @@ A context field that is not known is left out of the line, never written as
 ### On `signup.ping.checked`
 
 `/cb season start`, `/rehearse start`, `/cb season edit` and `/cb season move`
-each write one `signup.ping.checked` whenever the season has, or would have, a
-ping. The line carries the command's context with the channel the season posts
+each write one `signup.ping.checked` for every ping the season has, or would
+have, so a season with three ping roles writes three lines. `/cb season repost`
+writes them too when it is given `ping_again:true`, once its outcome is known,
+including when it fails after the post may already have pinged. The line carries the command's context with the channel the season posts
 to. It is `INFO` with outcome `success` when the ping will sound, and `WARN`
 otherwise: outcome `refused` when the command refused because of it, and
 `failure` when the command went ahead with a warning.
@@ -197,19 +199,43 @@ The three boolean fields are left out when the verdict is `unchecked`.
 
 ### On `signup.post.published` and `signup.ping.silent`
 
-When a night's first post carries a ping, its `signup.post.published` line also
-carries the ping and whether Discord registered it. A post re-sent after its
-season moved, or adopted from the channel, carries neither field.
+When a night's first post carries pings, its `signup.post.published` line also
+carries the pings and whether Discord registered every one of them. A post
+re-sent after its season moved, or adopted from the channel, carries neither
+field.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `barnacle.ping` | string | `everyone`, or the role ID |
-| `barnacle.ping.heard` | boolean | Whether Discord's reply to the send lists the role among the message's mentioned roles, or, for `everyone`, marks the message as mentioning everyone |
+| `barnacle.ping` | string | The pings in the season's order, joined with `,`: `everyone`, or role IDs such as `4242,4343`. One ping reads as a single value |
+| `barnacle.ping.heard` | boolean | Whether Discord's reply to the send lists every role among the message's mentioned roles, or, for `everyone`, marks the message as mentioning everyone |
 
 When `barnacle.ping.heard` is false, Barnacle also writes a `WARN`
 `signup.ping.silent` line with outcome `failure`, the post's context (server,
-channel, season, night and message) and `barnacle.ping`. The post still counts
-as published.
+channel, season, night and message), `barnacle.ping` and the field below. The
+post still counts as published.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `barnacle.ping.unheard` | string | The pings Discord did not register, in the same form as `barnacle.ping` |
+
+### On `signup.post.reposted`
+
+`/cb season repost` writes one `INFO` `signup.post.reposted` line with outcome
+`success` when it has put a night's open post back at the bottom of its channel.
+It carries the post's context (server, channel, season, night) with
+`discord.message.id` set to the new message. A repost never writes
+`signup.post.published`, and a repost that fails writes `signup.post.failed`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `barnacle.message.previous` | string | The ID of the message the repost replaced |
+| `barnacle.ping.again` | boolean | Whether the repost was asked to ping the season's roles again |
+| `barnacle.post.adopted` | boolean | Whether the repost found a post left by an earlier attempt in the channel and kept it instead of sending one |
+| `barnacle.ping` | string | Only when the new post was sent with the season's pings: the pings, in the same form as on `signup.post.published` |
+| `barnacle.ping.heard` | boolean | Only alongside `barnacle.ping`: whether Discord registered every ping |
+
+When a ping sent by a repost is not registered, Barnacle also writes
+`signup.ping.silent` as it does for a first post.
 
 ### On `signup.click.recorded`
 
