@@ -1193,7 +1193,10 @@ async fn season_repost(
             log_ping_checks(ctx, &checked, true);
             refuse(ctx, text::Refusal::RepostSuperseded).await
         }
-        RepostOutcome::Failed(failure) => fail(ctx, failure).await,
+        RepostOutcome::Failed(failure) => {
+            log_ping_checks(ctx, &checked, false);
+            fail(ctx, failure).await
+        }
     }
 }
 
