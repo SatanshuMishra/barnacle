@@ -180,7 +180,9 @@ A context field that is not known is left out of the line, never written as
 
 `/cb season start`, `/rehearse start`, `/cb season edit` and `/cb season move`
 each write one `signup.ping.checked` for every ping the season has, or would
-have, so a season with three ping roles writes three lines. The line carries the command's context with the channel the season posts
+have, so a season with three ping roles writes three lines. `/cb season repost`
+writes them too when it is given `ping_again:true`, once its outcome is known,
+including when it fails after the post may already have pinged. The line carries the command's context with the channel the season posts
 to. It is `INFO` with outcome `success` when the ping will sound, and `WARN`
 otherwise: outcome `refused` when the command refused because of it, and
 `failure` when the command went ahead with a warning.
