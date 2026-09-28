@@ -30,6 +30,8 @@ use barnacle_catalog::ShipClass;
 use barnacle_guess::Hint;
 use barnacle_guess::Reveal;
 use barnacle_guess::RoundOptions;
+use barnacle_guess::SeriesLength;
+use barnacle_guess::Tally;
 use barnacle_guess::Timing;
 use barnacle_guess::UserId;
 use common::index;
@@ -271,6 +273,7 @@ fn every_refusal() -> Vec<Refusal> {
         Refusal::RepostPingNotAllowed,
         Refusal::RepostPingsChanged,
         Refusal::RepostSuperseded,
+        Refusal::SeriesRoundsOutOfRange,
     ]
 }
 
@@ -306,10 +309,11 @@ fn variant(refusal: &Refusal) -> usize {
         Refusal::RepostPingNotAllowed => 27,
         Refusal::RepostPingsChanged => 28,
         Refusal::RepostSuperseded => 29,
+        Refusal::SeriesRoundsOutOfRange => 30,
     }
 }
 
-const REFUSAL_VARIANTS: usize = 30;
+const REFUSAL_VARIANTS: usize = 31;
 
 #[test]
 fn every_refusal_code_is_unique_and_snake_case() {
@@ -447,11 +451,221 @@ fn every_refusal_says_what_to_do_next() {
         Refusal::HubNothingToChange.message(),
         "Nothing to change. Give a new name, room_name, category or top_level."
     );
+    assert_eq!(
+        Refusal::SeriesRoundsOutOfRange.message(),
+        "A series is 2 to 20 rounds."
+    );
     assert!(
         every_refusal()
             .iter()
             .all(|refusal| !refusal.message().contains("Reference")),
         "a refusal of bad input carries no reference"
+    );
+}
+
+fn rounds(count: u32) -> SeriesLength {
+    SeriesLength::new(count).unwrap()
+}
+
+fn aki_and_bo() -> Tally {
+    Tally::default()
+        .won(UserId::new(1), Duration::from_millis(3_100))
+        .won(UserId::new(2), Duration::from_millis(2_500))
+        .won(UserId::new(1), Duration::from_millis(4_000))
+}
+
+#[test]
+fn series_standings_list_wins_then_fastest_times() {
+    assert_eq!(
+        text::series_standings(&aki_and_bo(), 3, rounds(10)),
+        "**Standings after round 3 of 10**\n\
+         **Most rounds won**\n\
+         1. <@1>: 2 wins\n\
+         2. <@2>: 1 win\n\
+         **Fastest time**\n\
+         1. <@2>: 2.500 s\n\
+         2. <@1>: 3.100 s"
+    );
+    assert_eq!(
+        text::series_standings(&Tally::default(), 3, rounds(10)),
+        "**Standings after round 3 of 10**\nNobody has won a round in this series yet."
+    );
+}
+
+#[test]
+fn a_full_series_ending_with_twenty_players_fits_one_message() {
+    let tally = (0..20).fold(Tally::default(), |tally, player| {
+        tally.won(
+            UserId::new(1_000_000_000_000_000_000 + player),
+            Duration::from_millis(29_999 - player),
+        )
+    });
+    let long_ship = Reveal {
+        index: index("PASA997"),
+        name: "Almirante Almirante Almirante Almirante Almirante Almirante".to_owned(),
+        tier: tier(11),
+        nation: Nation::new("Pan_America"),
+        class: ShipClass::AircraftCarrier,
+    };
+    let result = text::win(&long_ship, Duration::from_millis(29_999), Some(true));
+    let checked = text::series_message(&[
+        &result,
+        &text::series_standings(&tally, 20, rounds(20)),
+        text::SERIES_CHECK,
+    ]);
+    let expired = text::series_message(&[
+        &result,
+        text::SERIES_EXPIRED,
+        &text::series_overview(&tally, 20, rounds(20)),
+    ]);
+    for message in [checked, expired] {
+        assert_eq!(message.matches("<@").count(), 40, "{message}");
+        assert!(
+            message.encode_utf16().count() < text::MESSAGE_CONTENT_LIMIT,
+            "{} characters",
+            message.encode_utf16().count()
+        );
+    }
+}
+
+#[test]
+fn series_countdown_check_and_overview_read_as_specified() {
+    assert_eq!(
+        text::series_intro(&RoundOptions::default(), rounds(10), 5),
+        "Silhouette series: 10 rounds, tiers VI-XI.\nRound 1 of 10 starts in 5 seconds."
+    );
+    assert_eq!(
+        text::series_intro(&RoundOptions::default(), rounds(10), 3),
+        "Silhouette series: 10 rounds, tiers VI-XI.\nRound 1 of 10 starts in 3..."
+    );
+    assert_eq!(
+        text::series_intro(
+            &RoundOptions::new(Some(tier(8)), Some(tier(8)), Some(true)),
+            rounds(2),
+            5
+        ),
+        "Silhouette series: 2 rounds, tier VIII. Ships that were never built are left out.\nRound 1 of 2 starts in 5 seconds."
+    );
+    assert_eq!(
+        [5, 3, 2, 1].map(|remaining| text::series_countdown(2, rounds(10), remaining)),
+        [
+            "Round 2 of 10 starts in 5 seconds.",
+            "Round 2 of 10 starts in 3...",
+            "Round 2 of 10 starts in 2...",
+            "Round 2 of 10 starts in 1...",
+        ]
+    );
+    assert_eq!(text::series_round_label(4, rounds(10)), "Round 4 of 10");
+    assert_eq!(text::SERIES_FIELD, "Series");
+    assert_eq!(
+        text::SERIES_CHECK,
+        "Are you still playing? Press Yes within 10 seconds to keep the series going."
+    );
+    assert_eq!(
+        text::SERIES_EXPIRED,
+        "Nobody answered, so the series ended."
+    );
+    assert_eq!(
+        text::skipped(UserId::new(42), &warspite()),
+        "<@42> skipped this round. It was **Warspite**, tier VI battleship, U.K."
+    );
+    assert_eq!(
+        text::series_ended(UserId::new(42), &warspite()),
+        "<@42> ended the series. It was **Warspite**, tier VI battleship, U.K."
+    );
+    assert_eq!(
+        text::series_overview(&Tally::default(), 4, rounds(10)),
+        "**Series over after 4 of 10 rounds.**\nNobody won a round in this series."
+    );
+    assert_eq!(
+        text::series_overview(&aki_and_bo(), 10, rounds(10)),
+        "**Series over after 10 of 10 rounds.**\n\
+         **Most rounds won**\n\
+         1. <@1>: 2 wins\n\
+         2. <@2>: 1 win\n\
+         **Fastest time**\n\
+         1. <@2>: 2.500 s\n\
+         2. <@1>: 3.100 s"
+    );
+    assert_eq!(
+        text::series_message(&[&text::timed_out(&yamato()), "", text::SERIES_CHECK]),
+        "Nobody named it. It was **Yamato**, tier X battleship, Japan.\n\nAre you still playing? Press Yes within 10 seconds to keep the series going."
+    );
+}
+
+#[test]
+fn the_updates_setup_reply_names_the_channel_ping_and_any_warning() {
+    let channel = ChannelId::new(123);
+    let role = Some(Ping::Role(RoleId::new(456)));
+    assert_eq!(
+        text::updates_setup_reply(channel, role, Some(PingVerdict::Sounds)),
+        "Barnacle update posts will go to <#123> and ping <@&456>."
+    );
+    assert_eq!(
+        text::updates_setup_reply(channel, None, None),
+        "Barnacle update posts will go to <#123> and ping nobody."
+    );
+    assert_eq!(
+        text::updates_setup_reply(channel, Some(Ping::Everyone), Some(PingVerdict::Sounds)),
+        "Barnacle update posts will go to <#123> and ping @everyone."
+    );
+    for verdict in [PingVerdict::Silent, PingVerdict::BlockedByChannel] {
+        let reply = text::updates_setup_reply(channel, role, Some(verdict));
+        assert!(
+            reply.starts_with("Barnacle update posts will go to <#123> and ping <@&456>. "),
+            "{reply}"
+        );
+        assert!(reply.contains("will not be pinged"), "{reply}");
+    }
+    let unchecked = text::updates_setup_reply(channel, role, Some(PingVerdict::Unchecked));
+    assert!(unchecked.contains("could not check"), "{unchecked}");
+}
+
+#[test]
+fn the_announce_preview_names_the_channel_ping_and_any_warning() {
+    let channel = ChannelId::new(123);
+    let role = Some(Ping::Role(RoleId::new(456)));
+    assert_eq!(
+        text::announce_preview_line(channel, role, Some(PingVerdict::Sounds)),
+        "This will be posted in <#123> and ping <@&456>."
+    );
+    assert_eq!(
+        text::announce_preview_line(channel, None, None),
+        "This will be posted in <#123> and ping nobody."
+    );
+    let silent = text::announce_preview_line(channel, role, Some(PingVerdict::Silent));
+    assert!(
+        silent.starts_with("This will be posted in <#123> and ping <@&456>. "),
+        "{silent}"
+    );
+    assert!(silent.contains("will not be pinged"), "{silent}");
+    assert_eq!(
+        text::announce_preview_line(channel, role, Some(PingVerdict::BlockedByChannel)),
+        text::updates_setup_reply(channel, role, Some(PingVerdict::BlockedByChannel)).replacen(
+            "Barnacle update posts will go to <#123>",
+            "This will be posted in <#123>",
+            1
+        )
+    );
+}
+
+#[test]
+fn announcement_replies_name_the_version_and_what_to_do() {
+    assert_eq!(
+        text::UPDATES_NOT_SET_UP,
+        "This server has no updates channel yet. Someone with Manage Server can set one with /updates setup."
+    );
+    assert_eq!(
+        text::updates_already_sent("0.2.0"),
+        "This server already got the notes for Barnacle 0.2.0."
+    );
+    assert_eq!(
+        text::announce_version_changed("0.2.1"),
+        "Barnacle has been updated to 0.2.1 since this preview, so nothing was posted. Run /announce again."
+    );
+    assert_eq!(
+        text::announce_posted(ChannelId::new(123)),
+        "Posted in <#123>."
     );
 }
 

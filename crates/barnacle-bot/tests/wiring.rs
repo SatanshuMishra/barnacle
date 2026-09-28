@@ -15,10 +15,12 @@ use barnacle_bot::wiring::PingAllowance;
 use barnacle_bot::wiring::PingChoiceProblem;
 use barnacle_bot::wiring::PingReach;
 use barnacle_bot::wiring::PingVerdict;
+use barnacle_bot::wiring::SeriesClick;
 use barnacle_bot::wiring::SetupPing;
 use barnacle_bot::wiring::SignupClick;
 use barnacle_bot::wiring::SortChoice;
 use barnacle_guess::RoundOptions;
+use barnacle_guess::SeriesLength;
 use common::tier;
 
 #[test]
@@ -38,6 +40,40 @@ fn command_options_become_round_options() {
 }
 
 #[test]
+fn series_options_become_a_series_length() {
+    assert_eq!(
+        wiring::series_request(None, None, None, None),
+        Some((RoundOptions::default(), SeriesLength::default()))
+    );
+    assert_eq!(
+        wiring::series_request(None, None, None, None).map(|(_, length)| length.get()),
+        Some(10)
+    );
+    assert_eq!(
+        wiring::series_request(Some(9), Some(4), Some(true), Some(7)),
+        Some((
+            wiring::round_options(Some(9), Some(4), Some(true)),
+            SeriesLength::new(7).unwrap()
+        ))
+    );
+    assert_eq!(
+        wiring::series_request(Some(0), Some(12), None, Some(2)).map(|(options, _)| options),
+        Some(wiring::round_options(Some(0), Some(12), None))
+    );
+    assert_eq!(
+        wiring::series_request(None, None, None, Some(20)).map(|(_, length)| length.get()),
+        Some(20)
+    );
+    for rounds in [1, 21, 0, -3, i64::MAX] {
+        assert_eq!(
+            wiring::series_request(None, None, None, Some(rounds)),
+            None,
+            "{rounds}"
+        );
+    }
+}
+
+#[test]
 fn a_cancel_button_id_carries_its_round_number() {
     assert_eq!(
         wiring::round_number(&wiring::cancel_button_id(42)),
@@ -46,6 +82,98 @@ fn a_cancel_button_id_carries_its_round_number() {
     assert_eq!(wiring::round_number(wiring::ENDED_BUTTON_ID), None);
     assert_eq!(wiring::round_number("other-button:42"), None);
     assert_eq!(wiring::round_number("barnacle-cancel:-1"), None);
+}
+
+#[test]
+fn series_button_ids_round_trip_and_fit_discords_limit() {
+    for number in [0, 42, u64::MAX] {
+        let built = [
+            (wiring::skip_button_id(number), SeriesClick::Skip(number)),
+            (
+                wiring::end_series_button_id(number),
+                SeriesClick::End(number),
+            ),
+            (
+                wiring::still_playing_button_id(number),
+                SeriesClick::StillPlaying(number),
+            ),
+        ];
+        for (id, click) in built {
+            assert_eq!(wiring::series_click(&id), Some(click), "{id}");
+            assert_eq!(wiring::round_number(&id), None, "{id}");
+            assert!(id.chars().count() <= BUTTON_ID_LIMIT, "{id}");
+        }
+    }
+    assert_eq!(wiring::skip_button_id(7), "barnacle-skip:7");
+    assert_eq!(wiring::end_series_button_id(7), "barnacle-end:7");
+    assert_eq!(wiring::still_playing_button_id(7), "barnacle-still:7");
+    for id in [
+        wiring::ENDED_SKIP_BUTTON_ID,
+        wiring::ENDED_END_BUTTON_ID,
+        wiring::ENDED_BUTTON_ID,
+        &wiring::cancel_button_id(5),
+        &wiring::signup_button_id(3, night(), Target::All, true),
+        "barnacle-skip:",
+        "barnacle-skip:-1",
+        "barnacle-end:five",
+        "barnacle-still:5:6",
+        "other-button:5",
+    ] {
+        assert_eq!(wiring::series_click(id), None, "{id}");
+    }
+}
+
+#[test]
+fn an_announce_button_id_carries_its_version() {
+    assert_eq!(
+        wiring::announce_button_id("0.2.0"),
+        "barnacle-announce:0.2.0"
+    );
+    assert_eq!(
+        wiring::announce_version(&wiring::announce_button_id("0.2.0")),
+        Some("0.2.0".to_owned())
+    );
+    let long = "1234567890.1234567890.1234567890";
+    assert_eq!(long.len(), 32);
+    let id = wiring::announce_button_id(long);
+    assert!(id.chars().count() <= BUTTON_ID_LIMIT, "{id}");
+    assert_eq!(wiring::announce_version(&id), Some(long.to_owned()));
+    for other in [
+        wiring::skip_button_id(5),
+        wiring::end_series_button_id(5),
+        wiring::still_playing_button_id(5),
+        wiring::ENDED_SKIP_BUTTON_ID.to_owned(),
+        wiring::cancel_button_id(5),
+        wiring::ENDED_BUTTON_ID.to_owned(),
+        wiring::signup_button_id(3, night(), Target::All, true),
+        "barnacle-announce:".to_owned(),
+    ] {
+        assert_eq!(wiring::announce_version(&other), None, "{other}");
+    }
+}
+
+#[test]
+fn an_updates_channel_needs_three_permissions() {
+    let full = ChannelAccess {
+        view_channel: true,
+        send_messages: true,
+        embed_links: true,
+        attach_files: false,
+        read_message_history: false,
+        in_thread: false,
+    };
+    assert!(wiring::missing_update_permissions(full).is_empty());
+    assert_eq!(
+        wiring::missing_update_permissions(ChannelAccess::default()),
+        ["View Channel", "Send Messages", "Embed Links"]
+    );
+    assert_eq!(
+        wiring::missing_update_permissions(ChannelAccess {
+            embed_links: false,
+            ..full
+        }),
+        ["Embed Links"]
+    );
 }
 
 #[test]

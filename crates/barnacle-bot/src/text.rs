@@ -7,6 +7,9 @@ use barnacle_catalog::Tier;
 use barnacle_guess::Hint;
 use barnacle_guess::Reveal;
 use barnacle_guess::RoundOptions;
+use barnacle_guess::SeriesLength;
+use barnacle_guess::SeriesStanding;
+use barnacle_guess::Tally;
 use barnacle_guess::Timing;
 use barnacle_guess::UserId;
 use jiff::civil::Date;
@@ -26,6 +29,8 @@ use crate::schedule::Hour;
 use crate::schedule::Night;
 use crate::solves::Ranking;
 use crate::solves::Standing;
+use crate::table::COUNTDOWN_SECONDS;
+use crate::table::Ending;
 use crate::voice_text;
 use crate::wiring::PingVerdict;
 
@@ -38,6 +43,18 @@ pub const CANCEL_LABEL: &str = "Cancel";
 pub const CANCEL_REFUSED: &str =
     "Only the player who started this round, or someone who can manage messages, can end it.";
 pub const ROUND_OVER: &str = "That round has already ended.";
+pub const SERIES_FIELD: &str = "Series";
+pub const SERIES_CHECK: &str =
+    "Are you still playing? Press Yes within 10 seconds to keep the series going.";
+pub const SERIES_EXPIRED: &str = "Nobody answered, so the series ended.";
+pub const SKIP_LABEL: &str = "Skip";
+pub const END_SERIES_LABEL: &str = "End series";
+pub const STILL_PLAYING_LABEL: &str = "Yes";
+pub const SERIES_REFUSED: &str =
+    "Only the player who started this series, or someone who can manage messages, can do that.";
+pub const UPDATES_NOT_SET_UP: &str = "This server has no updates channel yet. Someone with Manage Server can set one with /updates setup.";
+pub const ANNOUNCE_OWNERS_ONLY: &str = "Only the owner of Barnacle can post its update notes.";
+pub const SEND_LABEL: &str = "Send";
 pub const SOMETHING_WENT_WRONG: &str = "Something went wrong. Nothing was changed.";
 pub const ROUNDS_WON: &str = "Rounds won here";
 pub const BEST_TIME: &str = "Best time here";
@@ -73,6 +90,12 @@ const RESET_BLOCKED_TAIL: &str =
 
 const MENTION_PERMISSION: &str = "Mention @everyone, @here, and All Roles";
 const MENTIONABLE_SETTING: &str = "Allow anyone to @mention this role";
+
+const HISTORICAL_SERIES: &str = "Ships that were never built are left out.";
+const MOST_ROUNDS_WON: &str = "**Most rounds won**";
+const FASTEST_TIME: &str = "**Fastest time**";
+const NO_SERIES_WINS_YET: &str = "Nobody has won a round in this series yet.";
+const NO_SERIES_WINS: &str = "Nobody won a round in this series.";
 
 const NOTHING_AHEAD: &str = "Nothing further will post.";
 const NOTHING_HAPPENED: &str = "Nothing happened.";
@@ -170,18 +193,124 @@ pub fn win(reveal: &Reveal, elapsed: Duration, personal_best: Option<bool>) -> S
 }
 
 pub fn timed_out(reveal: &Reveal) -> String {
-    format!(
-        "Nobody named it. {}",
-        sentence(&format!("It was {}", ship_line(reveal)))
-    )
+    format!("Nobody named it. {}", it_was(reveal))
 }
 
 pub fn cancelled(by: UserId, reveal: &Reveal) -> String {
-    format!(
-        "<@{}> ended the round. {}",
-        by.get(),
-        sentence(&format!("It was {}", ship_line(reveal)))
+    acted(by, "ended the round", reveal)
+}
+
+pub fn skipped(by: UserId, reveal: &Reveal) -> String {
+    acted(by, "skipped this round", reveal)
+}
+
+pub fn series_ended(by: UserId, reveal: &Reveal) -> String {
+    acted(by, "ended the series", reveal)
+}
+
+pub fn ending_result(ending: &Ending) -> String {
+    match ending {
+        Ending::Solved {
+            solve,
+            reveal,
+            personal_best,
+            ..
+        } => win(reveal, solve.elapsed, *personal_best),
+        Ending::TimedOut { reveal } => timed_out(reveal),
+        Ending::Cancelled { by, reveal } => cancelled(*by, reveal),
+    }
+}
+
+fn acted(by: UserId, action: &str, reveal: &Reveal) -> String {
+    format!("<@{}> {action}. {}", by.get(), it_was(reveal))
+}
+
+fn it_was(reveal: &Reveal) -> String {
+    sentence(&format!("It was {}", ship_line(reveal)))
+}
+
+pub fn series_intro(options: &RoundOptions, length: SeriesLength, remaining: u32) -> String {
+    let settings = format!(
+        "Silhouette series: {} rounds, {}.",
+        length.get(),
+        tiers_phrase(options)
+    );
+    let settings = if options.historical() {
+        format!("{settings} {HISTORICAL_SERIES}")
+    } else {
+        settings
+    };
+    format!("{settings}\n{}", series_countdown(1, length, remaining))
+}
+
+pub fn series_countdown(round: u32, length: SeriesLength, remaining: u32) -> String {
+    let label = series_round_label(round, length);
+    match remaining {
+        COUNTDOWN_SECONDS => format!("{label} starts in {remaining} seconds."),
+        remaining => format!("{label} starts in {remaining}..."),
+    }
+}
+
+pub fn series_round_label(round: u32, length: SeriesLength) -> String {
+    format!("Round {round} of {}", length.get())
+}
+
+pub fn series_standings(tally: &Tally, round: u32, length: SeriesLength) -> String {
+    series_summary(
+        format!("**Standings after round {round} of {}**", length.get()),
+        tally,
+        NO_SERIES_WINS_YET,
     )
+}
+
+pub fn series_overview(tally: &Tally, played: u32, length: SeriesLength) -> String {
+    series_summary(
+        format!("**Series over after {played} of {} rounds.**", length.get()),
+        tally,
+        NO_SERIES_WINS,
+    )
+}
+
+pub fn series_message(parts: &[&str]) -> String {
+    join_filled(parts, "\n\n")
+}
+
+fn series_summary(heading: String, tally: &Tally, nobody: &str) -> String {
+    let lists = if tally.is_empty() {
+        vec![nobody.to_owned()]
+    } else {
+        std::iter::once(MOST_ROUNDS_WON.to_owned())
+            .chain(series_list(&tally.by_wins(), |standing| {
+                wins(u64::from(standing.wins))
+            }))
+            .chain(std::iter::once(FASTEST_TIME.to_owned()))
+            .chain(series_list(&tally.by_time(), |standing| {
+                seconds(standing.best)
+            }))
+            .collect()
+    };
+    std::iter::once(heading)
+        .chain(lists)
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
+fn series_list(
+    standings: &[SeriesStanding],
+    value: impl Fn(&SeriesStanding) -> String,
+) -> Vec<String> {
+    standings
+        .iter()
+        .enumerate()
+        .map(|(rank, standing)| {
+            format!(
+                "{}. <@{}>: {}",
+                rank + 1,
+                standing.user.get(),
+                value(standing)
+            )
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,6 +357,7 @@ pub enum Refusal {
     RepostPingNotAllowed,
     RepostPingsChanged,
     RepostSuperseded,
+    SeriesRoundsOutOfRange,
 }
 
 impl Refusal {
@@ -263,6 +393,7 @@ impl Refusal {
             Refusal::RepostPingNotAllowed => "repost_ping_not_allowed",
             Refusal::RepostPingsChanged => "repost_pings_changed",
             Refusal::RepostSuperseded => "repost_superseded",
+            Refusal::SeriesRoundsOutOfRange => "series_rounds_out_of_range",
         }
     }
 
@@ -371,6 +502,11 @@ impl Refusal {
                 "The sign-up post changed while it was being reposted, so nothing was reposted. Check the season with /cb season show, then run the command again if it is still needed."
                     .to_owned()
             }
+            Refusal::SeriesRoundsOutOfRange => format!(
+                "A series is {} to {} rounds.",
+                SeriesLength::MIN,
+                SeriesLength::MAX
+            ),
         }
     }
 }
@@ -407,17 +543,21 @@ fn nothing_to_repost(number: u32, next_post_at: Option<i64>, nights_left: usize)
 }
 
 fn empty_pool(options: &RoundOptions) -> String {
-    let tiers = if options.spans_several_tiers() {
-        format!("tiers {}", tier_range(options))
-    } else {
-        format!("tier {}", tier_range(options))
-    };
+    let tiers = tiers_phrase(options);
     if options.historical() {
         format!(
             "No ships fit {tiers} with paper ships excluded. Try a wider range with min_tier and max_tier, or leave historical off."
         )
     } else {
         format!("No ships fit {tiers}. Try a wider range with min_tier and max_tier.")
+    }
+}
+
+fn tiers_phrase(options: &RoundOptions) -> String {
+    if options.spans_several_tiers() {
+        format!("tiers {}", tier_range(options))
+    } else {
+        format!("tier {}", tier_range(options))
     }
 }
 
@@ -446,15 +586,19 @@ pub fn leaderboard_title(ranking: Ranking) -> &'static str {
 
 pub fn standing_line(rank: usize, name: &str, standing: &Standing) -> String {
     let name: String = name.chars().take(NAME_LIMIT).collect();
-    let wins = match standing.wins {
-        1 => "1 win".to_owned(),
-        wins => format!("{wins} wins"),
-    };
     format!(
-        "**{rank}.** {} · {wins} · best {}",
+        "**{rank}.** {} · {} · best {}",
         escape(&name),
+        wins(standing.wins),
         seconds(standing.best)
     )
+}
+
+fn wins(count: u64) -> String {
+    match count {
+        1 => "1 win".to_owned(),
+        count => format!("{count} wins"),
+    }
 }
 
 pub fn leaderboard_pages(lines: &[String]) -> Vec<String> {
@@ -775,6 +919,70 @@ pub fn pings_line(pings: &[Ping]) -> String {
     }
 }
 
+pub fn updates_setup_reply(
+    channel: ChannelId,
+    ping: Option<Ping>,
+    verdict: Option<PingVerdict>,
+) -> String {
+    with_ping_warning(
+        format!(
+            "Barnacle update posts will go to <#{}> and ping {}.",
+            channel.get(),
+            ping_target(ping)
+        ),
+        channel,
+        ping,
+        verdict,
+    )
+}
+
+pub fn announce_preview_line(
+    channel: ChannelId,
+    ping: Option<Ping>,
+    verdict: Option<PingVerdict>,
+) -> String {
+    with_ping_warning(
+        format!(
+            "This will be posted in <#{}> and ping {}.",
+            channel.get(),
+            ping_target(ping)
+        ),
+        channel,
+        ping,
+        verdict,
+    )
+}
+
+pub fn updates_already_sent(version: &str) -> String {
+    format!("This server already got the notes for Barnacle {version}.")
+}
+
+pub fn announce_version_changed(running: &str) -> String {
+    format!(
+        "Barnacle has been updated to {running} since this preview, so nothing was posted. Run /announce again."
+    )
+}
+
+pub fn announce_posted(channel: ChannelId) -> String {
+    format!("Posted in <#{}>.", channel.get())
+}
+
+fn ping_target(ping: Option<Ping>) -> String {
+    ping.map_or_else(|| "nobody".to_owned(), ping_mention)
+}
+
+fn with_ping_warning(
+    line: String,
+    channel: ChannelId,
+    ping: Option<Ping>,
+    verdict: Option<PingVerdict>,
+) -> String {
+    let warning = ping
+        .zip(verdict)
+        .and_then(|(ping, verdict)| ping_warning(ping, verdict, channel));
+    sentences(&[line, warning.unwrap_or_default()])
+}
+
 pub fn silent_ping_warning(checked: &[(Ping, PingVerdict)], channel: ChannelId) -> Option<String> {
     let warnings: Vec<String> = checked
         .iter()
@@ -969,12 +1177,16 @@ fn was_verb(count: usize) -> &'static str {
 }
 
 fn sentences(parts: &[String]) -> String {
+    join_filled(parts, " ")
+}
+
+fn join_filled(parts: &[impl AsRef<str>], separator: &str) -> String {
     parts
         .iter()
+        .map(AsRef::as_ref)
         .filter(|part| !part.is_empty())
-        .cloned()
-        .collect::<Vec<String>>()
-        .join(" ")
+        .collect::<Vec<&str>>()
+        .join(separator)
 }
 
 fn discord_length(text: &str) -> usize {

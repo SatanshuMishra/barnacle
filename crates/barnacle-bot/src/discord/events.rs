@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use barnacle_guess::Guess;
 use barnacle_guess::Snowflake;
 use barnacle_guess::UserId;
@@ -19,11 +21,14 @@ use crate::ids::GuildId;
 use crate::ids::Place;
 use crate::table::CancelOutcome;
 use crate::text;
+use crate::updates::SendOutcome;
 use crate::wiring;
+use crate::wiring::SeriesClick;
 use crate::wiring::SignupClick;
 
 const BUTTON_FAILED: &str = "That button did not work";
 const SIGNUP_FAILED: &str = "Your sign-up was not saved";
+const ANNOUNCE_FAILED: &str = "The update notes were not posted";
 const COMMANDS_OUT_OF_DATE: &str = "Discord's copy of Barnacle's commands is out of date; it refreshes the next time Barnacle starts.";
 
 pub async fn handle(
@@ -52,7 +57,13 @@ pub async fn handle(
         serenity::FullEvent::InteractionCreate {
             interaction: serenity::Interaction::Component(component),
         } => {
-            clicked(data, framework.serenity_context, component).await;
+            clicked(
+                data,
+                framework.serenity_context,
+                component,
+                &framework.options.owners,
+            )
+            .await;
             Ok(())
         }
         serenity::FullEvent::VoiceStateUpdate { old, new } => {
@@ -73,6 +84,7 @@ async fn clicked(
     data: &Data,
     serenity_context: &serenity::Context,
     component: &serenity::ComponentInteraction,
+    owners: &HashSet<serenity::UserId>,
 ) {
     let Some(guild) = component.guild_id.map(|guild| GuildId::new(guild.get())) else {
         return;
@@ -81,7 +93,133 @@ async fn clicked(
         sign_up(data, serenity_context, component, signup, guild).await;
     } else if let Some(number) = wiring::round_number(&component.data.custom_id) {
         cancel(data, serenity_context, component, number, guild).await;
+    } else if let Some(click) = wiring::series_click(&component.data.custom_id) {
+        series_pressed(data, serenity_context, component, click, guild).await;
+    } else if let Some(version) = wiring::announce_version(&component.data.custom_id) {
+        announce_pressed(data, serenity_context, component, &version, guild, owners).await;
     }
+}
+
+async fn announce_pressed(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    component: &serenity::ComponentInteraction,
+    version: &str,
+    guild: GuildId,
+    owners: &HashSet<serenity::UserId>,
+) {
+    let scope = Scope::of_component(component).guild(guild);
+    if !acknowledge(serenity_context, component, &scope).await {
+        return;
+    }
+    let content = if owners.contains(&component.user.id) {
+        announced(data.updates.send(guild, version).await, &scope)
+    } else {
+        failure::refused(
+            "interaction.refused",
+            "a Send click came from someone who does not own Barnacle",
+            "not_an_owner",
+            &scope,
+        );
+        text::ANNOUNCE_OWNERS_ONLY.to_owned()
+    };
+    tell(
+        serenity_context,
+        component,
+        Answer::Followup,
+        &content,
+        &scope,
+    )
+    .await;
+}
+
+fn announced(outcome: SendOutcome, scope: &Scope) -> String {
+    match outcome {
+        SendOutcome::Sent { channel } => {
+            failure::record(
+                "updates.announced",
+                "Barnacle's update notes were posted",
+                &scope.clone().channel(channel),
+            );
+            text::announce_posted(channel)
+        }
+        SendOutcome::NotSetUp => text::UPDATES_NOT_SET_UP.to_owned(),
+        SendOutcome::AlreadySent { version } => text::updates_already_sent(&version),
+        SendOutcome::VersionChanged { running } => text::announce_version_changed(&running),
+        SendOutcome::PostFailed(error) => announce_failed(
+            "Barnacle's update notes could not be posted",
+            &Failure::from_error(&error),
+            scope,
+        ),
+        SendOutcome::Storage(error) => announce_failed(
+            "the record of sent update notes could not be read or saved",
+            &Failure::from_error(&error),
+            scope,
+        ),
+    }
+}
+
+fn announce_failed(summary: &str, failure: &Failure, scope: &Scope) -> String {
+    failure::report("interaction.failed", summary, failure, scope);
+    failure::failed(ANNOUNCE_FAILED, failure)
+}
+
+struct Press {
+    scope: Scope,
+    place: Place,
+    user: UserId,
+    can_manage_messages: bool,
+}
+
+async fn take_press(
+    serenity_context: &serenity::Context,
+    component: &serenity::ComponentInteraction,
+    number: u64,
+    guild: GuildId,
+) -> Option<Press> {
+    let press = Press {
+        scope: Scope {
+            round: u32::try_from(number).ok(),
+            ..Scope::of_component(component).guild(guild)
+        },
+        place: Place {
+            guild,
+            channel: ChannelId::new(component.channel_id.get()),
+        },
+        user: UserId::new(component.user.id.get()),
+        can_manage_messages: component
+            .member
+            .as_ref()
+            .and_then(|member| member.permissions)
+            .is_some_and(|permissions| permissions.manage_messages()),
+    };
+    acknowledge(serenity_context, component, &press.scope)
+        .await
+        .then_some(press)
+}
+
+async fn answer_press(
+    serenity_context: &serenity::Context,
+    component: &serenity::ComponentInteraction,
+    outcome: CancelOutcome,
+    refused: (&'static str, &'static str),
+    summary: &str,
+    scope: &Scope,
+) {
+    let (reason, content) = match outcome {
+        CancelOutcome::Cancelled => return,
+        CancelOutcome::Refused => refused,
+        CancelOutcome::AlreadyOver => ("round_over", text::ROUND_OVER),
+    };
+    failure::refused("interaction.refused", summary, reason, scope);
+    tell(
+        serenity_context,
+        component,
+        Answer::Followup,
+        content,
+        scope,
+    )
+    .await;
 }
 
 async fn cancel(
@@ -91,48 +229,56 @@ async fn cancel(
     number: u64,
     guild: GuildId,
 ) {
-    let scope = Scope {
-        round: u32::try_from(number).ok(),
-        ..Scope::of_component(component).guild(guild)
-    };
-    let place = Place {
-        guild,
-        channel: ChannelId::new(component.channel_id.get()),
-    };
-    let can_manage_messages = component
-        .member
-        .as_ref()
-        .and_then(|member| member.permissions)
-        .is_some_and(|permissions| permissions.manage_messages());
-    if !acknowledge(serenity_context, component, &scope).await {
+    let Some(press) = take_press(serenity_context, component, number, guild).await else {
         return;
-    }
+    };
     let outcome = data
         .table
-        .cancel(
-            place,
-            number,
-            UserId::new(component.user.id.get()),
-            can_manage_messages,
-        )
+        .cancel(press.place, number, press.user, press.can_manage_messages)
         .await;
-    let (reason, content) = match outcome {
-        CancelOutcome::Cancelled => return,
-        CancelOutcome::Refused => ("not_your_round", text::CANCEL_REFUSED),
-        CancelOutcome::AlreadyOver => ("round_over", text::ROUND_OVER),
-    };
-    failure::refused(
-        "interaction.refused",
-        "a cancel click was turned down",
-        reason,
-        &scope,
-    );
-    tell(
+    answer_press(
         serenity_context,
         component,
-        Answer::Followup,
-        content,
-        &scope,
+        outcome,
+        ("not_your_round", text::CANCEL_REFUSED),
+        "a cancel click was turned down",
+        &press.scope,
+    )
+    .await;
+}
+
+async fn series_pressed(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    component: &serenity::ComponentInteraction,
+    click: SeriesClick,
+    guild: GuildId,
+) {
+    let (SeriesClick::Skip(number) | SeriesClick::End(number) | SeriesClick::StillPlaying(number)) =
+        click;
+    let Some(press) = take_press(serenity_context, component, number, guild).await else {
+        return;
+    };
+    let outcome = match click {
+        SeriesClick::Skip(number) => {
+            data.table
+                .skip(press.place, number, press.user, press.can_manage_messages)
+                .await
+        }
+        SeriesClick::End(number) => {
+            data.table
+                .end_series(press.place, number, press.user, press.can_manage_messages)
+                .await
+        }
+        SeriesClick::StillPlaying(series) => data.table.still_playing(press.place, series).await,
+    };
+    answer_press(
+        serenity_context,
+        component,
+        outcome,
+        ("not_your_series", text::SERIES_REFUSED),
+        "a series click was turned down",
+        &press.scope,
     )
     .await;
 }

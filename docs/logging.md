@@ -77,7 +77,8 @@ libraries it uses, such as serenity, carry no `event.name`.
 | Interactions and gateway events | `interaction.refused`, `interaction.failed`, `interaction.reply_failed`, `event.failed` |
 | Clan Battle sign-ups | `signup.post.published`, `signup.post.reposted`, `signup.post.closed`, `signup.post.removed`, `signup.post.failed`, `signup.tick.completed`, `signup.tick.failed`, `signup.ping.checked`, `signup.ping.silent`, `signup.click.recorded` |
 | Rehearsal | `rehearsal.clock.cleared`, `rehearsal.clock.clear_failed` |
-| Silhouette game | `guess.round.started`, `guess.round.ended`, `guess.post.failed`, `guess.solve.failed` |
+| Silhouette game | `guess.round.started`, `guess.round.ended`, `guess.series.started`, `guess.series.ended`, `guess.post.failed`, `guess.solve.failed` |
+| Update announcements | `updates.configured`, `updates.announced` |
 | Join to Create voice | `voice.room.opened`, `voice.room.refused`, `voice.room.open_failed`, `voice.room.abandoned`, `voice.room.closed`, `voice.room.close_failed`, `voice.room.forgotten`, `voice.hub.forgotten`, `voice.notice.failed`, `voice.state.failed`, `voice.sweep.completed`, `voice.sweep.failed` |
 | Container entrypoint | `entrypoint.config.written`, `entrypoint.config.found`, `entrypoint.database.backed_up`, `entrypoint.migration.applying`, `entrypoint.schema.current`, `entrypoint.failed` |
 
