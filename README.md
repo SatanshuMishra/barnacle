@@ -86,7 +86,15 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 
     Every season keeps the role it already pinged. The file carries the same run-once guard.
 
-12. Put the bot's token where the bot can find it. Copy `env.example` to `.env` and fill in the one value:
+12. Add the update announcements table once, with the bot stopped and the database backed up as above:
+
+    ```bash
+    sqlite3 data/barnacle.sqlite3 < migrations/0007_bot_updates.sql
+    ```
+
+    It adds one table without touching the others, and carries the same run-once guard.
+
+13. Put the bot's token where the bot can find it. Copy `env.example` to `.env` and fill in the one value:
 
     ```bash
     cp env.example .env && chmod 600 .env
@@ -94,7 +102,7 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 
     `.env` is ignored by git. A `DISCORD_TOKEN` already exported in your shell wins over the file, so you can override it for one run without editing anything.
 
-13. Start the bot:
+14. Start the bot:
 
     ```bash
     cargo run --release -p barnacle-bot
@@ -121,6 +129,10 @@ For Clan Battle sign-ups, the same database also stores each player's Discord us
 For Join to Create, the same database stores the server and channel IDs of each Join to Create channel together with the user ID of the admin who created it, and for each open room the user ID of the member it was opened for, until the room closes.
 
 - `migrations/0005_voice_rooms.down.sql` removes both tables. Rooms open at that moment are no longer tracked and have to be deleted by hand.
+
+For update announcements, the same database stores each server's updates channel, ping role and last announced version, with no names.
+
+- `migrations/0007_bot_updates.down.sql` removes the table. Every server has to choose its updates channel again, and the next `/announce` there posts the running version's notes again.
 
 ## Clan Battle sign-ups
 

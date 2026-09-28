@@ -27,6 +27,8 @@ use crate::config::ConfigError;
 use crate::lookup::Directory;
 use crate::solves::Solves;
 use crate::solves::SolvesError;
+use crate::updates_store::UpdatesStore;
+use crate::updates_store::UpdatesStoreError;
 use crate::voice_store::VoiceStore;
 use crate::voice_store::VoiceStoreError;
 
@@ -113,6 +115,14 @@ pub enum StartupError {
         #[source]
         source: VoiceStoreError,
     },
+    #[error(
+        "the updates table is missing from {path}; back the file up, then add it with `sqlite3 {path} < migrations/0007_bot_updates.sql`"
+    )]
+    Updates {
+        path: PathBuf,
+        #[source]
+        source: UpdatesStoreError,
+    },
 }
 
 fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
@@ -130,6 +140,7 @@ pub struct Stores {
     pub solves: Solves,
     pub attendance: Attendance,
     pub voice: VoiceStore,
+    pub updates: UpdatesStore,
 }
 
 pub struct Loaded {
@@ -236,9 +247,15 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
     let attendance = Attendance::with_pool(pool.clone())
         .await
         .map_err(|source| attendance_error(path, source))?;
-    let voice = VoiceStore::with_pool(pool)
+    let voice = VoiceStore::with_pool(pool.clone())
         .await
         .map_err(|source| StartupError::VoiceRooms {
+            path: path.to_owned(),
+            source,
+        })?;
+    let updates = UpdatesStore::with_pool(pool)
+        .await
+        .map_err(|source| StartupError::Updates {
             path: path.to_owned(),
             source,
         })?;
@@ -246,6 +263,7 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
         solves,
         attendance,
         voice,
+        updates,
     })
 }
 

@@ -326,3 +326,44 @@ async fn a_database_before_0006_is_told_to_apply_it() {
         layout.config.database.display()
     )));
 }
+
+#[tokio::test]
+async fn a_database_before_0007_is_told_to_apply_it() {
+    let layout = layout(
+        &yamato_catalog(),
+        &["PJSB018", "PJSB019"],
+        &curation_text(""),
+    );
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&layout.config.database)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    for migration in [
+        common::MIGRATION,
+        common::CB_MIGRATION,
+        common::CB_CONTROLS,
+        common::CB_HARNESS,
+        VOICE_ROOMS,
+        common::CB_PING_ROLES,
+    ] {
+        sqlx::raw_sql(migration.trim_start_matches(CLI_DIRECTIVE))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    pool.close().await;
+    let error = startup::open_stores(&layout.config.database)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, StartupError::Updates { .. }));
+    assert!(error.to_string().contains(&format!(
+        "sqlite3 {} < migrations/0007_bot_updates.sql",
+        layout.config.database.display()
+    )));
+}
