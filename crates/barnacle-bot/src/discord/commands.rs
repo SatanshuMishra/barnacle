@@ -16,7 +16,7 @@ use super::announcer::SILHOUETTE_FILE;
 use super::announcer::cancel_row;
 use super::announcer::round_embed;
 use super::announcer::silhouette_attachment;
-use super::herald::release_embed;
+use super::herald::announcement_content;
 use super::rooms::MISSING_PERMISSIONS;
 use super::rooms::UNKNOWN_CHANNEL;
 use super::rooms::refused;
@@ -657,7 +657,12 @@ async fn guess_series(
     };
     let invoker = UserId::new(ctx.author().id.get());
     let intro = poise::CreateReply::default()
-        .content(text::series_intro(&options, length, COUNTDOWN_SECONDS))
+        .content(text::series_intro(
+            &options,
+            length,
+            invoker,
+            COUNTDOWN_SECONDS,
+        ))
         .allowed_mentions(serenity::CreateAllowedMentions::new());
     let outcome = ctx
         .data()
@@ -1665,10 +1670,10 @@ async fn announce(ctx: Context<'_>) -> Result<(), Error> {
     let granted = failure::barnacle_permissions_in(ctx.cache(), guild, channel);
     let verdict = update_ping_verdict(ctx, ping, Place { guild, channel }, granted);
     let release = updates.release();
+    private(ctx, announcement_content(release, ping)).await?;
     ctx.send(
         poise::CreateReply::default()
             .content(text::announce_preview_line(channel, ping, verdict))
-            .embed(release_embed(release))
             .components(vec![send_row(&release.version)])
             .allowed_mentions(serenity::CreateAllowedMentions::new())
             .ephemeral(true),

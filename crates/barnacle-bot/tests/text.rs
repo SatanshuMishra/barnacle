@@ -478,17 +478,17 @@ fn aki_and_bo() -> Tally {
 fn series_standings_list_wins_then_fastest_times() {
     assert_eq!(
         text::series_standings(&aki_and_bo(), 3, rounds(10)),
-        "**Standings after round 3 of 10**\n\
+        "### Standings after round 3 of 10\n\
          **Most rounds won**\n\
-         1. <@1>: 2 wins\n\
-         2. <@2>: 1 win\n\
+         **1.** <@1> · 2 wins\n\
+         **2.** <@2> · 1 win\n\
          **Fastest time**\n\
-         1. <@2>: 2.500 s\n\
-         2. <@1>: 3.100 s"
+         **1.** <@2> · 2.500 s\n\
+         **2.** <@1> · 3.100 s"
     );
     assert_eq!(
         text::series_standings(&Tally::default(), 3, rounds(10)),
-        "**Standings after round 3 of 10**\nNobody has won a round in this series yet."
+        "### Standings after round 3 of 10\nNobody has won a round in this series yet."
     );
 }
 
@@ -509,17 +509,17 @@ fn a_full_series_ending_with_twenty_players_fits_one_message() {
     };
     let result = text::win(&long_ship, Duration::from_millis(29_999), Some(true));
     let checked = text::series_message(&[
-        &result,
         &text::series_standings(&tally, 20, rounds(20)),
         text::SERIES_CHECK,
     ]);
     let expired = text::series_message(&[
-        &result,
         text::SERIES_EXPIRED,
         &text::series_overview(&tally, 20, rounds(20)),
     ]);
-    for message in [checked, expired] {
+    for message in [&checked, &expired] {
         assert_eq!(message.matches("<@").count(), 40, "{message}");
+    }
+    for message in [result, checked, expired] {
         assert!(
             message.encode_utf16().count() < text::MESSAGE_CONTENT_LIMIT,
             "{} characters",
@@ -530,40 +530,46 @@ fn a_full_series_ending_with_twenty_players_fits_one_message() {
 
 #[test]
 fn series_countdown_check_and_overview_read_as_specified() {
+    let header = "## Silhouette series\n**10 rounds** | Tiers **VI-XI**\nStarted by <@100>";
     assert_eq!(
-        text::series_intro(&RoundOptions::default(), rounds(10), 5),
-        "Silhouette series: 10 rounds, tiers VI-XI.\nRound 1 of 10 starts in 5 seconds."
+        text::series_intro(&RoundOptions::default(), rounds(10), UserId::new(100), 5),
+        format!("{header}\n### Round 1 of 10 starts in 5 seconds")
     );
     assert_eq!(
-        text::series_intro(&RoundOptions::default(), rounds(10), 3),
-        "Silhouette series: 10 rounds, tiers VI-XI.\nRound 1 of 10 starts in 3..."
+        text::series_intro(&RoundOptions::default(), rounds(10), UserId::new(100), 3),
+        format!("{header}\n### Round 1 of 10 starts in 3...")
     );
     assert_eq!(
         text::series_intro(
             &RoundOptions::new(Some(tier(8)), Some(tier(8)), Some(true)),
             rounds(2),
+            UserId::new(100),
             5
         ),
-        "Silhouette series: 2 rounds, tier VIII. Ships that were never built are left out.\nRound 1 of 2 starts in 5 seconds."
+        "## Silhouette series\n\
+         **2 rounds** | Tier **VIII**\n\
+         Ships that were never built are left out.\n\
+         Started by <@100>\n\
+         ### Round 1 of 2 starts in 5 seconds"
     );
     assert_eq!(
         [5, 3, 2, 1].map(|remaining| text::series_countdown(2, rounds(10), remaining)),
         [
-            "Round 2 of 10 starts in 5 seconds.",
-            "Round 2 of 10 starts in 3...",
-            "Round 2 of 10 starts in 2...",
-            "Round 2 of 10 starts in 1...",
+            "### Round 2 of 10 starts in 5 seconds",
+            "### Round 2 of 10 starts in 3...",
+            "### Round 2 of 10 starts in 2...",
+            "### Round 2 of 10 starts in 1...",
         ]
     );
     assert_eq!(text::series_round_label(4, rounds(10)), "Round 4 of 10");
     assert_eq!(text::SERIES_FIELD, "Series");
     assert_eq!(
         text::SERIES_CHECK,
-        "Are you still playing? Press Yes within 10 seconds to keep the series going."
+        "### Are you still playing?\nPress **Yes** within 10 seconds to keep the series going."
     );
     assert_eq!(
         text::SERIES_EXPIRED,
-        "Nobody answered, so the series ended."
+        "### Nobody answered, so the series ended."
     );
     assert_eq!(
         text::skipped(UserId::new(42), &warspite()),
@@ -575,21 +581,102 @@ fn series_countdown_check_and_overview_read_as_specified() {
     );
     assert_eq!(
         text::series_overview(&Tally::default(), 4, rounds(10)),
-        "**Series over after 4 of 10 rounds.**\nNobody won a round in this series."
+        "## Series over\n**4 of 10 rounds played**\nNobody won a round in this series."
     );
     assert_eq!(
         text::series_overview(&aki_and_bo(), 10, rounds(10)),
-        "**Series over after 10 of 10 rounds.**\n\
-         **Most rounds won**\n\
-         1. <@1>: 2 wins\n\
-         2. <@2>: 1 win\n\
-         **Fastest time**\n\
-         1. <@2>: 2.500 s\n\
-         2. <@1>: 3.100 s"
+        "## Series over\n\
+         **10 of 10 rounds played**\n\
+         ### Most rounds won\n\
+         **1.** <@1> · 2 wins\n\
+         **2.** <@2> · 1 win\n\
+         ### Fastest time\n\
+         **1.** <@2> · 2.500 s\n\
+         **2.** <@1> · 3.100 s"
     );
     assert_eq!(
         text::series_message(&[&text::timed_out(&yamato()), "", text::SERIES_CHECK]),
-        "Nobody named it. It was **Yamato**, tier X battleship, Japan.\n\nAre you still playing? Press Yes within 10 seconds to keep the series going."
+        "Nobody named it. It was **Yamato**, tier X battleship, Japan.\n### Are you still playing?\nPress **Yes** within 10 seconds to keep the series going."
+    );
+}
+
+#[test]
+fn series_messages_read_as_styled() {
+    let starter = UserId::new(100);
+    assert_eq!(
+        text::series_header(&RoundOptions::default(), rounds(5), starter),
+        "## Silhouette series\n**5 rounds** | Tiers **VI-XI**\nStarted by <@100>"
+    );
+    assert_eq!(
+        text::series_header(
+            &RoundOptions::new(Some(tier(10)), Some(tier(10)), None),
+            rounds(5),
+            starter
+        ),
+        "## Silhouette series\n**5 rounds** | Tier **X**\nStarted by <@100>"
+    );
+    assert_eq!(
+        text::series_header(
+            &RoundOptions::new(None, None, Some(true)),
+            rounds(5),
+            starter
+        ),
+        "## Silhouette series\n\
+         **5 rounds** | Tiers **VI-XI**\n\
+         Ships that were never built are left out.\n\
+         Started by <@100>"
+    );
+    assert_eq!(
+        text::series_intro(&RoundOptions::default(), rounds(5), starter, 3),
+        "## Silhouette series\n\
+         **5 rounds** | Tiers **VI-XI**\n\
+         Started by <@100>\n\
+         ### Round 1 of 5 starts in 3..."
+    );
+    assert_eq!(
+        text::series_countdown(2, rounds(5), 5),
+        "### Round 2 of 5 starts in 5 seconds"
+    );
+    assert_eq!(
+        text::series_countdown(2, rounds(5), 3),
+        "### Round 2 of 5 starts in 3..."
+    );
+    assert_eq!(
+        text::series_standings(&aki_and_bo(), 3, rounds(10)),
+        "### Standings after round 3 of 10\n\
+         **Most rounds won**\n\
+         **1.** <@1> · 2 wins\n\
+         **2.** <@2> · 1 win\n\
+         **Fastest time**\n\
+         **1.** <@2> · 2.500 s\n\
+         **2.** <@1> · 3.100 s"
+    );
+    assert_eq!(
+        text::series_standings(&Tally::default(), 3, rounds(10)),
+        "### Standings after round 3 of 10\nNobody has won a round in this series yet."
+    );
+    assert_eq!(
+        text::series_overview(&aki_and_bo(), 3, rounds(5)),
+        "## Series over\n\
+         **3 of 5 rounds played**\n\
+         ### Most rounds won\n\
+         **1.** <@1> · 2 wins\n\
+         **2.** <@2> · 1 win\n\
+         ### Fastest time\n\
+         **1.** <@2> · 2.500 s\n\
+         **2.** <@1> · 3.100 s"
+    );
+    assert_eq!(
+        text::series_overview(&Tally::default(), 3, rounds(5)),
+        "## Series over\n**3 of 5 rounds played**\nNobody won a round in this series."
+    );
+    assert_eq!(
+        text::SERIES_CHECK,
+        "### Are you still playing?\nPress **Yes** within 10 seconds to keep the series going."
+    );
+    assert_eq!(
+        text::SERIES_EXPIRED,
+        "### Nobody answered, so the series ended."
     );
 }
 

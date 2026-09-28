@@ -23,8 +23,9 @@ needs neither.
 
 An entry has a `version` and three lists, any of which may be left out:
 
-- `new`: one `[[release.new]]` table per feature, with `what` saying what
-  players can now do and `how` saying how to use it.
+- `new`: one `[[release.new]]` table per feature, with `title` naming the
+  feature in a few words, `what` saying what players can now do and `how`
+  saying how to use it.
 - `changed`: one line per thing that now behaves differently.
 - `fixed`: one line per problem that no longer happens.
 
@@ -42,6 +43,34 @@ they will notice, and how to use it. One short sentence per line. Never name
 code, files, commands' internals, error messages or anything a player cannot
 see; name a command only as a player types it, such as /guess-series.
 
+A `title` is the feature's short name as a player would say it, such as Guess
+series: 1 to 40 characters, with no ".", "!" or "?" at the end.
+
+## How the post looks
+
+`/announce` sends the notes as a normal Discord message, not an embed. Any
+role ping comes first on its own line, then:
+
+```text
+# Barnacle Update 0.2.1
+## New
+
+### Guess series
+You can now play a series of 2 to 20 silhouette rounds in a row without starting each one yourself.
+> **How to use:** Type /guess-series, choose how many rounds you want (10 if you leave it out), and answer in chat as usual.
+
+## Changed
+- Hints now appear 5 seconds sooner.
+
+## Fixed
+- The standings no longer list the same player twice.
+
+-# Questions or feedback? Reach out to a server administrator.
+```
+
+Each `new` item gets its own `###` heading from its `title`, with a blank line
+before it. A section with no lines is left out.
+
 ## Rules the tests enforce
 
 `cargo test -p barnacle-bot --test release_notes` fails, naming the version and
@@ -52,14 +81,16 @@ the line, when:
 - a version is not three whole numbers separated by dots, such as 0.2.0;
 - an entry has no `new`, `changed` or `fixed` line at all;
 - a `new` item has no `how`, or an empty one;
+- a `new` item has no `title`, or an empty one;
+- a `title` is longer than 40 characters, ends in ".", "!" or "?", or contains
+  any of the sequences listed below for lines;
 - a line is empty or longer than 120 characters;
 - a line does not end in ".", "!" or "?";
 - a line holds more than one sentence: a ".", "!" or "?" followed by a space
   before the end;
 - a line contains a backtick, `**`, `__`, `::`, `->`, `http`, `.rs`, `.toml`,
   `.sql`, `{` or `}`;
-- the announcement would not fit in one Discord embed: a section over 1024
-  characters, or the whole post over 6000.
+- the post plus the longest ping line is over 2000 characters.
 
 ## Examples
 
@@ -67,6 +98,7 @@ Accepted, because a player knows what changed and what to do:
 
 ```toml
 [[release.new]]
+title = "Guess series"
 what = "You can now play a series of 2 to 20 silhouette rounds in a row without starting each one yourself."
 how = "Type /guess-series, choose how many rounds you want (10 if you leave it out), and answer in chat as usual."
 ```

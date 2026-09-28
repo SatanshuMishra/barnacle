@@ -102,6 +102,12 @@ pub trait Announcer: Send + Sync + 'static {
         round_post: Snowflake,
         content: &str,
         reply_to: Option<Snowflake>,
+    ) -> impl Future<Output = Result<Snowflake, AnnounceError>> + Send;
+
+    fn post_series_message(
+        &self,
+        channel: ChannelId,
+        content: &str,
         still_playing: Option<u64>,
     ) -> impl Future<Output = Result<Snowflake, AnnounceError>> + Send;
 
@@ -110,6 +116,12 @@ pub trait Announcer: Send + Sync + 'static {
         channel: ChannelId,
         message: Snowflake,
         content: &str,
+    ) -> impl Future<Output = Result<(), AnnounceError>> + Send;
+
+    fn delete_series_message(
+        &self,
+        channel: ChannelId,
+        message: Snowflake,
     ) -> impl Future<Output = Result<(), AnnounceError>> + Send;
 }
 
@@ -172,20 +184,17 @@ struct Active {
     series: Option<SeriesRound>,
 }
 
-struct Check {
-    message: Option<Snowflake>,
-    result: String,
-}
-
 struct Series {
     number: u64,
     starter: UserId,
+    opening: Snowflake,
     options: RoundOptions,
     length: SeriesLength,
     played: u32,
     tally: Tally,
     quiet: Quiet,
-    check: Option<Check>,
+    checking: bool,
+    temporary: Option<Snowflake>,
 }
 
 impl Series {
@@ -304,12 +313,14 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
         seat.series = Some(Series {
             number,
             starter: invoker,
+            opening: intro,
             options,
             length,
             played: 0,
             tally: Tally::default(),
             quiet: Quiet::default(),
-            check: None,
+            checking: false,
+            temporary: None,
         });
         drop(seat);
         failure::record(
@@ -318,7 +329,7 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
             &round_scope(place, number),
         );
         self.spawn_count_down(place, number, Some(intro), move |remaining| {
-            text::series_intro(&options, length, remaining)
+            text::series_intro(&options, length, invoker, remaining)
         });
         StartOutcome::Started { number }
     }
@@ -449,32 +460,25 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
             return CancelOutcome::AlreadyOver;
         };
         let mut seat = seat.lock().await;
-        let Some(check) = seat
+        let Some(resumed) = seat
             .series
-            .as_mut()
-            .filter(|current| current.number == series)
-            .and_then(|current| current.check.take())
+            .take_if(|current| current.number == series && current.checking)
+            .map(|current| Series {
+                quiet: Quiet::default(),
+                checking: false,
+                ..current
+            })
         else {
             return CancelOutcome::AlreadyOver;
         };
-        let Some(resumed) = seat.series.take().map(|current| Series {
-            quiet: Quiet::default(),
-            ..current
-        }) else {
-            return CancelOutcome::AlreadyOver;
-        };
-        let content = countdown_content(
-            check.result,
-            resumed.standings(),
-            resumed.played + 1,
-            resumed.length,
-        );
+        let message = resumed.temporary;
+        let content = countdown_content(resumed.standings(), resumed.played + 1, resumed.length);
         seat.series = Some(resumed);
         drop(seat);
-        if let Some(message) = check.message {
+        if let Some(message) = message {
             self.spawn_edit(place, series, message, content(COUNTDOWN_SECONDS));
         }
-        self.spawn_count_down(place, series, check.message, content);
+        self.spawn_count_down(place, series, message, content);
         CancelOutcome::Cancelled
     }
 
@@ -560,7 +564,7 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
         if seat.active.is_some() {
             return;
         }
-        let Some((options, starter, length, position)) = seat
+        let Some((options, starter, opening, length, position)) = seat
             .series
             .as_ref()
             .filter(|current| current.number == series)
@@ -568,6 +572,7 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
                 (
                     current.options,
                     current.starter,
+                    current.opening,
                     current.length,
                     current.played + 1,
                 )
@@ -604,10 +609,23 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
             .await;
         match outcome {
             StartOutcome::Started { .. } => {
+                let temporary = seat.series.as_ref().and_then(|current| current.temporary);
                 seat.series = seat.series.take().map(|current| Series {
                     played: position,
+                    temporary: None,
                     ..current
                 });
+                if let Some(temporary) = temporary {
+                    self.spawn_delete(place, series, temporary);
+                }
+                if position == 1 {
+                    self.spawn_edit(
+                        place,
+                        series,
+                        opening,
+                        text::series_header(&options, length, starter),
+                    );
+                }
             }
             StartOutcome::NoShips(error) => {
                 post_failed(
@@ -615,12 +633,24 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
                     &error,
                     &round_scope(place, series),
                 );
-                close_series(place, &mut seat, SERIES_UNPOSTED);
+                self.close_unposted(place, &mut seat, series);
             }
             StartOutcome::Busy | StartOutcome::PostFailed(()) | StartOutcome::PostTimedOut => {
-                close_series(place, &mut seat, SERIES_UNPOSTED);
+                self.close_unposted(place, &mut seat, series);
             }
         }
+    }
+
+    fn close_unposted(self: &Arc<Self>, place: Place, seat: &mut Seat, series: u64) {
+        let unfinished = seat.series.as_ref().and_then(|current| {
+            current
+                .temporary
+                .map(|temporary| (temporary, current.overview()))
+        });
+        if let Some((temporary, overview)) = unfinished {
+            self.spawn_edit(place, series, temporary, overview);
+        }
+        close_series(place, seat, SERIES_UNPOSTED);
     }
 
     fn draw(&self, options: &RoundOptions, recent: &RecentShips) -> Result<Draw, GameError> {
@@ -705,6 +735,22 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
         .await;
     }
 
+    fn spawn_delete(self: &Arc<Self>, place: Place, series: u64, message: Snowflake) {
+        let table = Arc::clone(self);
+        tokio::spawn(async move { table.delete(place, series, message).await });
+    }
+
+    async fn delete(&self, place: Place, series: u64, message: Snowflake) {
+        let deleting = self.announcer.delete_series_message(place.channel, message);
+        announced(
+            deleting,
+            "a series message could not be deleted",
+            "deleting a series message timed out",
+            &round_scope(place, series).message(message),
+        )
+        .await;
+    }
+
     fn spawn_expiry(self: &Arc<Self>, place: Place, series: u64) {
         let table = Arc::clone(self);
         tokio::spawn(async move {
@@ -721,18 +767,12 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
         let Some((message, content)) = seat
             .series
             .as_ref()
-            .filter(|current| current.number == series)
-            .and_then(|current| {
-                current.check.as_ref().map(|check| {
-                    (
-                        check.message,
-                        text::series_message(&[
-                            &check.result,
-                            text::SERIES_EXPIRED,
-                            &current.overview(),
-                        ]),
-                    )
-                })
+            .filter(|current| current.number == series && current.checking)
+            .map(|current| {
+                (
+                    current.temporary,
+                    text::series_message(&[text::SERIES_EXPIRED, &current.overview()]),
+                )
             })
         else {
             return;
@@ -848,36 +888,42 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
             Ending::Cancelled { by, reveal } => text::skipped(*by, reveal),
             Ending::Solved { .. } | Ending::TimedOut { .. } => text::ending_result(ending),
         };
-        let standings = if over {
-            series.overview()
-        } else {
-            series.standings()
-        };
-        let next = context.position + 1;
-        let tail = if over {
-            String::new()
-        } else if check {
-            text::SERIES_CHECK.to_owned()
-        } else {
-            text::series_countdown(next, series.length, COUNTDOWN_SECONDS)
-        };
-        let content = text::series_message(&[&result, &standings, &tail]);
+        let scope = round_scope(place, active.number);
         let posting = self.announcer.post_series_ending(
             place.channel,
             active.round.posted(),
-            &content,
+            &result,
             ending.winning_message(),
+        );
+        announced(
+            posting,
+            "a series round ending could not be posted",
+            "posting a series round ending timed out",
+            &scope,
+        )
+        .await;
+        let next = context.position + 1;
+        let countdown = countdown_content(series.standings(), next, series.length);
+        let content = if over {
+            series.overview()
+        } else if check {
+            text::series_message(&[&series.standings(), text::SERIES_CHECK])
+        } else {
+            countdown(COUNTDOWN_SECONDS)
+        };
+        let posting = self.announcer.post_series_message(
+            place.channel,
+            &content,
             check.then_some(series.number),
         );
         let posted = announced(
             posting,
-            "a series round ending could not be posted",
-            "posting a series round ending timed out",
-            &round_scope(place, active.number),
+            "a series message could not be posted",
+            "posting a series message timed out",
+            &scope,
         )
         .await;
         let number = series.number;
-        let length = series.length;
         if over {
             seat.series = Some(series);
             let reason = if context.ends_series {
@@ -888,37 +934,28 @@ impl<A: Announcer, S: SolveStore> Table<A, S> {
             close_series(place, seat, reason);
         } else if check {
             seat.series = Some(Series {
-                check: Some(Check {
-                    message: posted,
-                    result,
-                }),
+                checking: true,
+                temporary: posted,
                 ..series
             });
             self.spawn_expiry(place, number);
         } else {
-            seat.series = Some(series);
-            self.spawn_count_down(
-                place,
-                number,
-                posted,
-                countdown_content(result, standings, next, length),
-            );
+            seat.series = Some(Series {
+                temporary: posted,
+                ..series
+            });
+            self.spawn_count_down(place, number, posted, countdown);
         }
     }
 }
 
 fn countdown_content(
-    result: String,
     standings: String,
     next: u32,
     length: SeriesLength,
 ) -> impl Fn(u32) -> String + Send + 'static {
     move |remaining| {
-        text::series_message(&[
-            &result,
-            &standings,
-            &text::series_countdown(next, length, remaining),
-        ])
+        text::series_message(&[&standings, &text::series_countdown(next, length, remaining)])
     }
 }
 

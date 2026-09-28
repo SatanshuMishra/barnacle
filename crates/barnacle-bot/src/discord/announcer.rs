@@ -239,15 +239,10 @@ impl Announcer for DiscordAnnouncer {
         round_post: Snowflake,
         content: &str,
         reply_to: Option<Snowflake>,
-        still_playing: Option<u64>,
     ) -> Result<Snowflake, AnnounceError> {
         let scope = Scope::default().channel(channel).message(round_post);
         let channel = serenity::ChannelId::new(channel.get());
         let message = ending_message(channel, content, reply_to);
-        let message = match still_playing {
-            Some(series) => message.components(vec![still_playing_row(series)]),
-            None => message,
-        };
         let (posted, edited) = self
             .send_and_disable(channel, message, round_post, series_row(None))
             .await;
@@ -260,6 +255,26 @@ impl Announcer for DiscordAnnouncer {
                 &scope,
             );
         }
+        Ok(Snowflake::new(posted.id.get()))
+    }
+
+    async fn post_series_message(
+        &self,
+        channel: ChannelId,
+        content: &str,
+        still_playing: Option<u64>,
+    ) -> Result<Snowflake, AnnounceError> {
+        let message = serenity::CreateMessage::new()
+            .content(content)
+            .allowed_mentions(serenity::CreateAllowedMentions::new());
+        let message = match still_playing {
+            Some(series) => message.components(vec![still_playing_row(series)]),
+            None => message,
+        };
+        let posted = serenity::ChannelId::new(channel.get())
+            .send_message(&self.http, message)
+            .await
+            .map_err(announce_error)?;
         Ok(Snowflake::new(posted.id.get()))
     }
 
@@ -278,5 +293,16 @@ impl Announcer for DiscordAnnouncer {
             .await
             .map_err(announce_error)?;
         Ok(())
+    }
+
+    async fn delete_series_message(
+        &self,
+        channel: ChannelId,
+        message: Snowflake,
+    ) -> Result<(), AnnounceError> {
+        serenity::ChannelId::new(channel.get())
+            .delete_message(&self.http, serenity::MessageId::new(message.get()))
+            .await
+            .map_err(announce_error)
     }
 }

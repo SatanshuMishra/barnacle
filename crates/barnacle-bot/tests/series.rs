@@ -130,7 +130,9 @@ fn round_posts(discord: &FakeDiscord, place: Place) -> Vec<(Duration, u32, u64)>
             } if channel == place.channel => Some((time, round, number)),
             SeriesPosted::Round { .. }
             | SeriesPosted::Ending { .. }
-            | SeriesPosted::Edited { .. } => None,
+            | SeriesPosted::Message { .. }
+            | SeriesPosted::Edited { .. }
+            | SeriesPosted::Deleted { .. } => None,
         })
         .collect()
 }
@@ -149,7 +151,6 @@ struct Ended {
     round_post: Snowflake,
     content: String,
     reply_to: Option<Snowflake>,
-    still_playing: Option<u64>,
 }
 
 fn endings(discord: &FakeDiscord, place: Place) -> Vec<Ended> {
@@ -162,19 +163,88 @@ fn endings(discord: &FakeDiscord, place: Place) -> Vec<Ended> {
                 round_post,
                 content,
                 reply_to,
-                still_playing,
             } if channel == place.channel => Some(Ended {
                 time,
                 round_post,
                 content,
                 reply_to,
+            }),
+            SeriesPosted::Round { .. }
+            | SeriesPosted::Ending { .. }
+            | SeriesPosted::Message { .. }
+            | SeriesPosted::Edited { .. }
+            | SeriesPosted::Deleted { .. } => None,
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Sent {
+    time: Duration,
+    message: Snowflake,
+    content: String,
+    still_playing: Option<u64>,
+}
+
+fn messages(discord: &FakeDiscord, place: Place) -> Vec<Sent> {
+    discord
+        .series_posted()
+        .into_iter()
+        .filter_map(|(time, posted)| match posted {
+            SeriesPosted::Message {
+                channel,
+                message,
+                content,
+                still_playing,
+            } if channel == place.channel => Some(Sent {
+                time,
+                message,
+                content,
                 still_playing,
             }),
             SeriesPosted::Round { .. }
             | SeriesPosted::Ending { .. }
-            | SeriesPosted::Edited { .. } => None,
+            | SeriesPosted::Message { .. }
+            | SeriesPosted::Edited { .. }
+            | SeriesPosted::Deleted { .. } => None,
         })
         .collect()
+}
+
+fn contents(sent: Vec<Sent>) -> Vec<String> {
+    sent.into_iter().map(|sent| sent.content).collect()
+}
+
+fn deletions(discord: &FakeDiscord, place: Place) -> Vec<(usize, Snowflake)> {
+    discord
+        .series_posted()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(position, (_, posted))| match posted {
+            SeriesPosted::Deleted { channel, message } if channel == place.channel => {
+                Some((position, message))
+            }
+            SeriesPosted::Round { .. }
+            | SeriesPosted::Ending { .. }
+            | SeriesPosted::Message { .. }
+            | SeriesPosted::Edited { .. }
+            | SeriesPosted::Deleted { .. } => None,
+        })
+        .collect()
+}
+
+fn round_position(discord: &FakeDiscord, place: Place, wanted: u32) -> usize {
+    discord
+        .series_posted()
+        .into_iter()
+        .position(|(_, posted)| {
+            matches!(
+                posted,
+                SeriesPosted::Round { channel, round, .. }
+                    if channel == place.channel && round == wanted
+            )
+        })
+        .unwrap()
 }
 
 fn edits_of(discord: &FakeDiscord, place: Place, wanted: Snowflake) -> Vec<(Duration, String)> {
@@ -189,17 +259,19 @@ fn edits_of(discord: &FakeDiscord, place: Place, wanted: Snowflake) -> Vec<(Dura
             } if channel == place.channel && message == wanted => Some((time, content)),
             SeriesPosted::Round { .. }
             | SeriesPosted::Ending { .. }
-            | SeriesPosted::Edited { .. } => None,
+            | SeriesPosted::Message { .. }
+            | SeriesPosted::Edited { .. }
+            | SeriesPosted::Deleted { .. } => None,
         })
         .collect()
 }
 
 fn standings_without_winners(round: u32, length: u32) -> String {
-    format!("**Standings after round {round} of {length}**\n{NOBODY_YET}")
+    format!("### Standings after round {round} of {length}\n{NOBODY_YET}")
 }
 
 fn overview_without_winners(played: u32, length: u32) -> String {
-    format!("**Series over after {played} of {length} rounds.**\n{NOBODY}")
+    format!("## Series over\n**{played} of {length} rounds played**\n{NOBODY}")
 }
 
 fn json(value: impl serde::Serialize) -> serde_json::Value {
@@ -218,26 +290,27 @@ async fn a_series_counts_down_five_seconds_before_its_first_round() {
     let origin = Instant::now();
     begun(&table, PLACE, 5).await;
     until(origin, 6_000).await;
-    let settings = "Silhouette series: 5 rounds, tiers VI-XI.";
+    let settings = "## Silhouette series\n**5 rounds** | Tiers **VI-XI**\nStarted by <@100>";
     assert_eq!(
         edits_of(&discord, PLACE, at(0)),
         [
             (
                 seconds(2),
-                format!("{settings}\nRound 1 of 5 starts in 3...")
+                format!("{settings}\n### Round 1 of 5 starts in 3...")
             ),
             (
                 seconds(3),
-                format!("{settings}\nRound 1 of 5 starts in 2...")
+                format!("{settings}\n### Round 1 of 5 starts in 2...")
             ),
             (
                 seconds(4),
-                format!("{settings}\nRound 1 of 5 starts in 1...")
+                format!("{settings}\n### Round 1 of 5 starts in 1...")
             ),
+            (seconds(5), settings.to_owned()),
         ]
     );
     let posted = discord.series_posted();
-    assert_eq!(posted.len(), 4);
+    assert_eq!(posted.len(), 5);
     assert!(matches!(
         &posted[3],
         (time, SeriesPosted::Round { channel, round: 1, length, ship, .. })
@@ -259,14 +332,13 @@ async fn a_won_round_ends_with_standings_and_a_countdown_to_the_next() {
         .hear(PLACE, guess(PLAYER, false, 9_000, "yamato"))
         .await;
     until(origin, 15_000).await;
-    let ending = |line: &str| {
+    let standings = |line: &str| {
         format!(
-            "Correct: **Yamato**, tier X battleship, Japan. Solved in 4.000 s. New personal best.\n\n\
-             **Standings after round 1 of 3**\n\
+            "### Standings after round 1 of 3\n\
              **Most rounds won**\n\
-             1. <@200>: 1 win\n\
+             **1.** <@200> · 1 win\n\
              **Fastest time**\n\
-             1. <@200>: 4.000 s\n\n\
+             **1.** <@200> · 4.000 s\n\
              {line}"
         )
     };
@@ -275,17 +347,28 @@ async fn a_won_round_ends_with_standings_and_a_countdown_to_the_next() {
         [Ended {
             time: millis(9_250),
             round_post: at(5_000),
-            content: ending("Round 2 of 3 starts in 5 seconds."),
+            content: "Correct: **Yamato**, tier X battleship, Japan. Solved in 4.000 s. New personal best."
+                .to_owned(),
             reply_to: Some(at(9_000)),
-            still_playing: None,
         }]
     );
+    let sent = messages(&discord, PLACE);
     assert_eq!(
-        edits_of(&discord, PLACE, at(9_250)),
+        sent.iter()
+            .map(|sent| (sent.time, sent.content.clone(), sent.still_playing))
+            .collect::<Vec<_>>(),
+        [(
+            millis(9_250),
+            standings("### Round 2 of 3 starts in 5 seconds"),
+            None
+        )]
+    );
+    assert_eq!(
+        edits_of(&discord, PLACE, sent[0].message),
         [
-            (millis(11_250), ending("Round 2 of 3 starts in 3...")),
-            (millis(12_250), ending("Round 2 of 3 starts in 2...")),
-            (millis(13_250), ending("Round 2 of 3 starts in 1...")),
+            (millis(11_250), standings("### Round 2 of 3 starts in 3...")),
+            (millis(12_250), standings("### Round 2 of 3 starts in 2...")),
+            (millis(13_250), standings("### Round 2 of 3 starts in 1...")),
         ]
     );
     let posts: Vec<(Duration, u32)> = round_posts(&discord, PLACE)
@@ -314,17 +397,23 @@ async fn the_last_round_ends_with_the_overview_and_frees_the_channel() {
         Ended {
             time: millis(43_250),
             round_post: at(40_000),
-            content: text::series_message(&[
-                &text::win(&yamato(), seconds(3), Some(true)),
-                &text::series_overview(&Tally::default().won(PLAYER, seconds(3)), 2, rounds(2)),
-            ]),
+            content: text::win(&yamato(), seconds(3), Some(true)),
             reply_to: Some(at(43_000)),
-            still_playing: None,
         }
     );
-    assert!(ended[1].content.ends_with(
-        "**Series over after 2 of 2 rounds.**\n**Most rounds won**\n1. <@200>: 1 win\n**Fastest time**\n1. <@200>: 3.000 s"
-    ));
+    let last = messages(&discord, PLACE).pop().unwrap();
+    assert_eq!(
+        (last.time, last.content.as_str(), last.still_playing),
+        (
+            millis(43_250),
+            text::series_overview(&Tally::default().won(PLAYER, seconds(3)), 2, rounds(2)).as_str(),
+            None
+        )
+    );
+    assert_eq!(
+        last.content,
+        "## Series over\n**2 of 2 rounds played**\n### Most rounds won\n**1.** <@200> · 1 win\n### Fastest time\n**1.** <@200> · 3.000 s"
+    );
     assert_eq!(
         discord.series_posted().last().map(|(time, _)| *time),
         Some(millis(43_250))
@@ -404,14 +493,17 @@ async fn skip_ends_only_the_current_round() {
         [Ended {
             time: seconds(6),
             round_post: at(5_000),
-            content: text::series_message(&[
-                "<@100> skipped this round. It was **Yamato**, tier X battleship, Japan.",
-                &standings_without_winners(1, 3),
-                "Round 2 of 3 starts in 5 seconds.",
-            ]),
+            content: "<@100> skipped this round. It was **Yamato**, tier X battleship, Japan."
+                .to_owned(),
             reply_to: None,
-            still_playing: None,
         }]
+    );
+    assert_eq!(
+        contents(messages(&discord, PLACE)),
+        [text::series_message(&[
+            &standings_without_winners(1, 3),
+            "### Round 2 of 3 starts in 5 seconds",
+        ])]
     );
     until(origin, 12_000).await;
     let second = round_number(&discord, PLACE, 2);
@@ -437,12 +529,10 @@ async fn skip_ends_only_the_current_round() {
     assert_eq!(posts, [(seconds(5), 1), (seconds(11), 2), (seconds(17), 3)]);
     let ended = endings(&discord, PLACE);
     assert_eq!(ended.len(), 3);
+    assert_eq!(ended[2].content, text::skipped(STARTER, &yamato()));
     assert_eq!(
-        ended[2].content,
-        text::series_message(&[
-            &text::skipped(STARTER, &yamato()),
-            &overview_without_winners(3, 3),
-        ])
+        contents(messages(&discord, PLACE)).last(),
+        Some(&overview_without_winners(3, 3))
     );
 }
 
@@ -482,23 +572,25 @@ async fn end_series_stops_the_series_and_posts_the_overview() {
         [Ended {
             time: seconds(6),
             round_post: at(5_000),
-            content: text::series_message(&[
-                "<@100> ended the series. It was **Yamato**, tier X battleship, Japan.",
-                &overview_without_winners(1, 5),
-            ]),
+            content: "<@100> ended the series. It was **Yamato**, tier X battleship, Japan."
+                .to_owned(),
             reply_to: None,
-            still_playing: None,
         }]
+    );
+    assert_eq!(
+        contents(messages(&discord, PLACE)),
+        [overview_without_winners(1, 5)]
     );
     assert_eq!(
         endings(&discord, OTHER_PLACE)
             .into_iter()
             .map(|ended| ended.content)
             .collect::<Vec<String>>(),
-        [text::series_message(&[
-            &text::series_ended(OTHER, &yamato()),
-            &overview_without_winners(1, 5),
-        ])]
+        [text::series_ended(OTHER, &yamato())]
+    );
+    assert_eq!(
+        contents(messages(&discord, OTHER_PLACE)),
+        [overview_without_winners(1, 5)]
     );
     assert_eq!(round_posts(&discord, PLACE).len(), 1);
     assert_eq!(round_posts(&discord, OTHER_PLACE).len(), 1);
@@ -533,10 +625,10 @@ async fn three_silent_rounds_ask_and_silence_ends_the_series() {
     let series = begun(&table, PLACE, 10).await;
     until(origin, 106_000).await;
     let ended = endings(&discord, PLACE);
+    let sent = messages(&discord, PLACE);
     assert_eq!(
-        ended
-            .iter()
-            .map(|ended| (ended.time, ended.still_playing))
+        sent.iter()
+            .map(|sent| (sent.time, sent.still_playing))
             .collect::<Vec<_>>(),
         [
             (seconds(35), None),
@@ -544,23 +636,19 @@ async fn three_silent_rounds_ask_and_silence_ends_the_series() {
             (seconds(105), Some(series))
         ]
     );
+    assert_eq!(ended[2].content, text::timed_out(&yamato()));
     assert_eq!(
-        ended[2].content,
-        text::series_message(&[
-            &text::timed_out(&yamato()),
-            &standings_without_winners(3, 10),
-            text::SERIES_CHECK,
-        ])
+        sent[2].content,
+        text::series_message(&[&standings_without_winners(3, 10), text::SERIES_CHECK])
     );
-    assert!(!ended[2].content.contains("starts in"));
+    assert!(!sent[2].content.contains("starts in"));
     until(origin, 300_000).await;
     assert_eq!(
-        edits_of(&discord, PLACE, at(105_000)),
+        edits_of(&discord, PLACE, sent[2].message),
         [(
             seconds(115),
             text::series_message(&[
-                "Nobody named it. It was **Yamato**, tier X battleship, Japan.",
-                "Nobody answered, so the series ended.",
+                "### Nobody answered, so the series ended.",
                 &overview_without_winners(3, 10),
             ])
         )]
@@ -603,13 +691,13 @@ async fn yes_keeps_the_series_going_and_restarts_the_silent_count() {
     until(origin, 250_000).await;
     let countdown = |remaining: u32| {
         text::series_message(&[
-            &text::timed_out(&yamato()),
             &standings_without_winners(3, 10),
             &text::series_countdown(4, rounds(10), remaining),
         ])
     };
+    let sent = messages(&discord, PLACE);
     assert_eq!(
-        edits_of(&discord, PLACE, at(105_000)),
+        edits_of(&discord, PLACE, sent[2].message),
         [
             (seconds(109), countdown(5)),
             (seconds(111), countdown(3)),
@@ -633,9 +721,8 @@ async fn yes_keeps_the_series_going_and_restarts_the_silent_count() {
         ]
     );
     assert_eq!(
-        endings(&discord, PLACE)
-            .into_iter()
-            .map(|ended| ended.still_playing)
+        sent.into_iter()
+            .map(|sent| sent.still_playing)
             .collect::<Vec<_>>(),
         [None, None, Some(series), None, None, Some(series)]
     );
@@ -656,20 +743,20 @@ async fn a_wrong_answer_keeps_a_round_from_being_silent() {
         .hear(OTHER_PLACE, guess(PLAYER, true, 80_000, "musashi"))
         .await;
     until(origin, 106_000).await;
-    let heard = endings(&discord, PLACE);
+    let heard = messages(&discord, PLACE);
     assert_eq!(heard.len(), 3);
     assert_eq!(heard[2].still_playing, None);
     assert!(
         heard[2]
             .content
-            .ends_with("Round 4 of 10 starts in 5 seconds."),
+            .ends_with("### Round 4 of 10 starts in 5 seconds"),
         "{}",
         heard[2].content
     );
     assert_eq!(
-        endings(&discord, OTHER_PLACE)
+        messages(&discord, OTHER_PLACE)
             .into_iter()
-            .map(|ended| ended.still_playing)
+            .map(|sent| sent.still_playing)
             .collect::<Vec<_>>(),
         [None, None, Some(bots_only)]
     );
@@ -691,15 +778,16 @@ async fn the_last_round_never_asks_the_check() {
         Ended {
             time: seconds(105),
             round_post: at(75_000),
-            content: text::series_message(&[
-                &text::timed_out(&yamato()),
-                &overview_without_winners(3, 3),
-            ]),
+            content: text::timed_out(&yamato()),
             reply_to: None,
-            still_playing: None,
         }
     );
-    assert!(edits_of(&discord, PLACE, at(105_000)).is_empty());
+    let last = messages(&discord, PLACE).pop().unwrap();
+    assert_eq!(
+        (last.time, last.content.as_str(), last.still_playing),
+        (seconds(105), overview_without_winners(3, 3).as_str(), None)
+    );
+    assert!(edits_of(&discord, PLACE, last.message).is_empty());
     assert_eq!(round_posts(&discord, PLACE).len(), 3);
 }
 
@@ -721,9 +809,9 @@ async fn a_running_series_keeps_its_channel_busy() {
         );
     }
     assert_eq!(
-        endings(&discord, PLACE)
+        messages(&discord, PLACE)
             .last()
-            .and_then(|ended| ended.still_playing),
+            .and_then(|sent| sent.still_playing),
         Some(series)
     );
     let third = Place {
@@ -813,7 +901,7 @@ async fn a_series_pings_only_the_winner() {
         serenity::CreateAllowedMentions::new()
     );
     let channel = serenity::ChannelId::new(PLACE.channel.get());
-    let standings = "1. <@200>: 1 win\n2. <@300>: 1 win";
+    let standings = "**1.** <@200> · 1 win\n**2.** <@300> · 1 win";
     let winner_reply = json(ending_message(channel, standings, Some(at(8_000))));
     assert_eq!(
         winner_reply["allowed_mentions"],
@@ -851,4 +939,170 @@ async fn a_series_pings_only_the_winner() {
             .collect::<Vec<_>>(),
         [Some(at(8_000)), None]
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rounds_kept_result_carries_no_standings_or_countdown() {
+    let discord = FakeDiscord::new();
+    let table = yamato_table(discord.clone(), FakeStore::default());
+    let origin = Instant::now();
+    begun(&table, PLACE, 3).await;
+    until(origin, 36_000).await;
+    let first_ending = discord
+        .series_posted()
+        .into_iter()
+        .find_map(|(_, posted)| match posted {
+            SeriesPosted::Ending { content, .. } => Some(content),
+            _ => None,
+        })
+        .expect("round 1 ended");
+    assert_eq!(first_ending, text::timed_out(&yamato()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rounds_standings_are_deleted_once_the_next_round_appears() {
+    let discord = FakeDiscord::new();
+    let table = yamato_table(discord.clone(), FakeStore::default());
+    let origin = Instant::now();
+    begun(&table, PLACE, 3).await;
+    until(origin, 120_000).await;
+    let standings: Vec<Sent> = messages(&discord, PLACE)
+        .into_iter()
+        .filter(|sent| sent.content.contains("Standings after round 1 of 3"))
+        .collect();
+    assert_eq!(standings.len(), 1, "{standings:?}");
+    let deleted: Vec<usize> = deletions(&discord, PLACE)
+        .into_iter()
+        .filter(|(_, message)| *message == standings[0].message)
+        .map(|(position, _)| position)
+        .collect();
+    assert_eq!(deleted.len(), 1);
+    assert!(deleted[0] > round_position(&discord, PLACE, 2));
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_opening_keeps_its_header_once_round_one_appears() {
+    let discord = FakeDiscord::new();
+    let table = yamato_table(discord.clone(), FakeStore::default());
+    let origin = Instant::now();
+    begun(&table, PLACE, 3).await;
+    until(origin, 120_000).await;
+    assert_eq!(round_posts(&discord, PLACE)[0].0, seconds(5));
+    assert_eq!(
+        edits_of(&discord, PLACE, at(0)).pop(),
+        Some((
+            seconds(5),
+            text::series_header(&RoundOptions::default(), rounds(3), STARTER)
+        ))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_check_answered_yes_is_deleted_after_the_next_round() {
+    let discord = FakeDiscord::new();
+    let table = yamato_table(discord.clone(), FakeStore::default());
+    let origin = Instant::now();
+    let series = begun(&table, PLACE, 5).await;
+    until(origin, 106_000).await;
+    let check = messages(&discord, PLACE).pop().unwrap();
+    assert_eq!(
+        (check.time, check.content.as_str(), check.still_playing),
+        (
+            seconds(105),
+            text::series_message(&[&standings_without_winners(3, 5), text::SERIES_CHECK]).as_str(),
+            Some(series)
+        )
+    );
+    until(origin, 109_000).await;
+    assert_eq!(
+        table.still_playing(PLACE, series).await,
+        CancelOutcome::Cancelled
+    );
+    until(origin, 200_000).await;
+    let countdown = |remaining: u32| {
+        text::series_message(&[
+            &standings_without_winners(3, 5),
+            &text::series_countdown(4, rounds(5), remaining),
+        ])
+    };
+    assert_eq!(
+        edits_of(&discord, PLACE, check.message),
+        [
+            (seconds(109), countdown(5)),
+            (seconds(111), countdown(3)),
+            (seconds(112), countdown(2)),
+            (seconds(113), countdown(1)),
+        ]
+    );
+    let deleted: Vec<usize> = deletions(&discord, PLACE)
+        .into_iter()
+        .filter(|(_, message)| *message == check.message)
+        .map(|(position, _)| position)
+        .collect();
+    assert_eq!(deleted.len(), 1);
+    assert!(deleted[0] > round_position(&discord, PLACE, 4));
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_expired_check_stays_as_the_final_overview() {
+    let discord = FakeDiscord::new();
+    let table = yamato_table(discord.clone(), FakeStore::default());
+    let origin = Instant::now();
+    let series = begun(&table, PLACE, 5).await;
+    until(origin, 106_000).await;
+    let check = messages(&discord, PLACE).pop().unwrap();
+    assert_eq!(check.still_playing, Some(series));
+    until(origin, 300_000).await;
+    assert_eq!(
+        edits_of(&discord, PLACE, check.message),
+        [(
+            seconds(115),
+            text::series_message(&[text::SERIES_EXPIRED, &overview_without_winners(3, 5)])
+        )]
+    );
+    assert_eq!(round_posts(&discord, PLACE).len(), 3);
+    assert!(
+        deletions(&discord, PLACE)
+            .iter()
+            .all(|(_, message)| *message != check.message)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_last_round_keeps_its_result_and_a_final_overview() {
+    let discord = FakeDiscord::new();
+    let table = yamato_table(discord.clone(), FakeStore::default());
+    let origin = Instant::now();
+    begun(&table, PLACE, 2).await;
+    until(origin, 120_000).await;
+    let ended = endings(&discord, PLACE);
+    assert_eq!(ended.len(), 2);
+    assert_eq!(
+        (ended[1].time, ended[1].content.as_str()),
+        (seconds(70), text::timed_out(&yamato()).as_str())
+    );
+    let sent = messages(&discord, PLACE);
+    assert_eq!(
+        sent.iter()
+            .map(|sent| (sent.time, sent.content.clone()))
+            .collect::<Vec<_>>(),
+        [
+            (
+                seconds(35),
+                text::series_message(&[
+                    &standings_without_winners(1, 2),
+                    &text::series_countdown(2, rounds(2), 5),
+                ])
+            ),
+            (
+                seconds(70),
+                text::series_overview(&Tally::default(), 2, rounds(2))
+            ),
+        ]
+    );
+    let deleted: Vec<Snowflake> = deletions(&discord, PLACE)
+        .into_iter()
+        .map(|(_, message)| message)
+        .collect();
+    assert_eq!(deleted, [sent[0].message]);
 }

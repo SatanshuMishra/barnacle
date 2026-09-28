@@ -3,6 +3,7 @@ use barnacle_bot::release_notes::LineFault;
 use barnacle_bot::release_notes::NoteProblem;
 use barnacle_bot::release_notes::NotesError;
 use barnacle_bot::release_notes::Release;
+use barnacle_bot::release_notes::TitleFault;
 use barnacle_bot::release_notes::all;
 use barnacle_bot::release_notes::find;
 use barnacle_bot::release_notes::parse;
@@ -82,7 +83,7 @@ fn a_technical_or_malformed_note_is_reported() -> Result<(), NotesError> {
         ),
         (
             "0.5.0",
-            "[[release]]\nversion = \"0.5.0\"\n\n[[release.new]]\nwhat = \"You can now skip a round.\"\nhow = \"\"\n".to_owned(),
+            "[[release]]\nversion = \"0.5.0\"\n\n[[release.new]]\ntitle = \"Skip a round\"\nwhat = \"You can now skip a round.\"\nhow = \"\"\n".to_owned(),
             vec![NoteProblem::MissingHow {
                 version: "0.5.0".to_owned(),
                 what: "You can now skip a round.".to_owned(),
@@ -90,7 +91,7 @@ fn a_technical_or_malformed_note_is_reported() -> Result<(), NotesError> {
         ),
         (
             "0.6.0",
-            "[[release]]\nversion = \"0.6.0\"\n\n[[release.new]]\nwhat = \"You can now end a series.\"\n".to_owned(),
+            "[[release]]\nversion = \"0.6.0\"\n\n[[release.new]]\ntitle = \"End a series\"\nwhat = \"You can now end a series.\"\n".to_owned(),
             vec![NoteProblem::MissingHow {
                 version: "0.6.0".to_owned(),
                 what: "You can now end a series.".to_owned(),
@@ -158,38 +159,38 @@ fn a_technical_or_malformed_note_is_reported() -> Result<(), NotesError> {
     assert_eq!(reported(&fixed("0.13.0", &[&longest]))?, Vec::new());
     let crowded = vec![longest.as_str(); 60];
     let found = reported(&fixed("0.14.0", &crowded))?;
-    assert!(found.contains(&NoteProblem::FieldTooLong {
-        version: "0.14.0".to_owned(),
-        field: "Fixed",
-        length: 7379,
-    }));
-    assert!(
-        found
-            .iter()
-            .any(|problem| matches!(problem, NoteProblem::EmbedTooLong { version, .. } if version == "0.14.0"))
-    );
+    assert!(found.iter().any(
+        |problem| matches!(problem, NoteProblem::PostTooLong { version, .. } if version == "0.14.0")
+    ));
     Ok(())
 }
 
 #[test]
-fn a_release_renders_its_heading_sections_and_footer() -> Result<(), NotesError> {
+fn a_release_renders_as_a_styled_message() -> Result<(), NotesError> {
     let releases = all()?;
     let release = find(&releases, "0.2.0").unwrap();
-    assert_eq!(release.title(), "Barnacle Update 0.2.0");
-    let fields = release.fields();
-    assert_eq!(fields.len(), 1);
-    let (name, text) = &fields[0];
-    assert_eq!(*name, "New");
-    assert!(text.starts_with("- You can now play a series"));
-    assert!(text.contains("How to use: Type /guess-series"));
-    let rows: Vec<&str> = text.lines().collect();
-    assert_eq!(rows.len(), 8);
-    assert!(rows.iter().step_by(2).all(|row| row.starts_with("- ")));
-    assert!(
-        rows.iter()
-            .skip(1)
-            .step_by(2)
-            .all(|row| row.starts_with("How to use: "))
+    assert_eq!(
+        release.render(),
+        "# Barnacle Update 0.2.0\n\
+         ## New\n\
+         \n\
+         ### Guess series\n\
+         You can now play a series of 2 to 20 silhouette rounds in a row without starting each one yourself.\n\
+         > **How to use:** Type /guess-series, choose how many rounds you want (10 if you leave it out), and answer in chat as usual.\n\
+         \n\
+         ### Series standings\n\
+         After every round in a series, Barnacle shows who has won the most rounds and who was fastest so far.\n\
+         > **How to use:** Keep playing; the standings appear under each answer, with a 5-second countdown before the next ship.\n\
+         \n\
+         ### Still playing check\n\
+         If the chat goes quiet for three rounds, Barnacle asks if you are still playing and stops unless someone presses Yes.\n\
+         > **How to use:** Press Yes within 10 seconds to keep the series going.\n\
+         \n\
+         ### Update news\n\
+         Server managers can now choose a channel where Barnacle posts news about its updates.\n\
+         > **How to use:** Someone with Manage Server types /updates setup, picks the channel, and can add a role to notify.\n\
+         \n\
+         -# Questions or feedback? Reach out to a server administrator."
     );
     assert_eq!(
         FOOTER,
@@ -202,14 +203,112 @@ fn a_release_renders_its_heading_sections_and_footer() -> Result<(), NotesError>
         fixed: vec![SOUND.to_owned(), "Fixed a missing hint.".to_owned()],
     };
     assert_eq!(
-        fixes_only.fields(),
-        vec![
-            ("Changed", "- Hints now come sooner.".to_owned()),
-            (
-                "Fixed",
-                "- Fixed a slow reply.\n- Fixed a missing hint.".to_owned()
-            ),
-        ]
+        fixes_only.render(),
+        "# Barnacle Update 0.2.1\n\
+         \n\
+         ## Changed\n\
+         - Hints now come sooner.\n\
+         \n\
+         ## Fixed\n\
+         - Fixed a slow reply.\n\
+         - Fixed a missing hint.\n\
+         \n\
+         -# Questions or feedback? Reach out to a server administrator."
     );
+    Ok(())
+}
+
+fn titled(version: &str, title: Option<&str>) -> String {
+    let title = title
+        .map(|title| format!("title = \"{title}\"\n"))
+        .unwrap_or_default();
+    format!(
+        "[[release]]\nversion = \"{version}\"\n\n[[release.new]]\n{title}what = \"You can now skip a round.\"\nhow = \"Press Skip.\"\n"
+    )
+}
+
+fn title_fault(version: &str, title: &str, fault: TitleFault) -> NoteProblem {
+    NoteProblem::Title {
+        version: version.to_owned(),
+        what: "You can now skip a round.".to_owned(),
+        title: title.to_owned(),
+        fault,
+    }
+}
+
+fn post_length(text: &str) -> Result<usize, NotesError> {
+    Ok(parse(text)?[0].render().chars().count() + 25)
+}
+
+#[test]
+fn a_missing_or_malformed_title_or_an_oversized_post_is_reported() -> Result<(), NotesError> {
+    let longest = format!("{}.", "a".repeat(119));
+    let widest = "a".repeat(40);
+    let too_wide = "a".repeat(41);
+    let missing = NoteProblem::MissingTitle {
+        version: "0.15.0".to_owned(),
+        what: "You can now skip a round.".to_owned(),
+    };
+    let crowded = fixed("0.19.0", &vec![longest.as_str(); 16]);
+    let crowded_length = post_length(&crowded)?;
+    assert!(crowded_length > 2000, "{crowded_length}");
+    let cases = [
+        ("0.15.0", titled("0.15.0", None), vec![missing.clone()]),
+        ("0.15.0", titled("0.15.0", Some("")), vec![missing]),
+        (
+            "0.16.0",
+            titled("0.16.0", Some(&too_wide)),
+            vec![title_fault(
+                "0.16.0",
+                &too_wide,
+                TitleFault::TooLong { length: 41 },
+            )],
+        ),
+        (
+            "0.17.0",
+            titled("0.17.0", Some("Skip a round.")),
+            vec![title_fault(
+                "0.17.0",
+                "Skip a round.",
+                TitleFault::FinalPunctuation,
+            )],
+        ),
+        (
+            "0.18.0",
+            titled("0.18.0", Some("Skip::round")),
+            vec![title_fault(
+                "0.18.0",
+                "Skip::round",
+                TitleFault::Technical { sequence: "::" },
+            )],
+        ),
+        (
+            "0.19.0",
+            crowded,
+            vec![NoteProblem::PostTooLong {
+                version: "0.19.0".to_owned(),
+                length: crowded_length,
+            }],
+        ),
+    ];
+    for (version, text, expected) in cases {
+        let found = reported(&text)?;
+        assert_eq!(found, expected, "{version}");
+        names_its_version_and_line(&found, version);
+    }
+    assert_eq!(reported(&titled("0.20.0", Some(&widest)))?, Vec::new());
+    let full = vec![longest.as_str(); 15];
+    let room = 2000 - post_length(&fixed("0.21.0", &full))? - "\n- ".len();
+    let last = format!("{}.", "a".repeat(room - 1));
+    let filled = fixed(
+        "0.21.0",
+        &full
+            .iter()
+            .copied()
+            .chain(std::iter::once(last.as_str()))
+            .collect::<Vec<&str>>(),
+    );
+    assert_eq!(post_length(&filled)?, 2000);
+    assert_eq!(reported(&filled)?, Vec::new());
     Ok(())
 }

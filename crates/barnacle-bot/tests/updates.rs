@@ -83,6 +83,7 @@ fn release(version: &str) -> Release {
     Release {
         version: version.to_owned(),
         new: vec![NewItem {
+            title: "Guess series".to_owned(),
             what: "You can now play a series of rounds.".to_owned(),
             how: "Type /guess-series.".to_owned(),
         }],
