@@ -6,6 +6,7 @@ mod options;
 mod recent;
 mod reveal;
 mod round;
+mod series;
 
 pub use book::ShipBook;
 pub use draw::Draw;
@@ -20,3 +21,7 @@ pub use round::Guess;
 pub use round::Round;
 pub use round::Solve;
 pub use round::Timing;
+pub use series::Quiet;
+pub use series::SeriesLength;
+pub use series::SeriesStanding;
+pub use series::Tally;

@@ -86,6 +86,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
         stores.solves,
         stores.attendance,
         stores.voice,
+        stores.updates,
     )
     .await?;
     Ok(())

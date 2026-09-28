@@ -2,6 +2,7 @@ mod announcer;
 mod board;
 mod commands;
 mod events;
+mod herald;
 mod rooms;
 
 use std::sync::Arc;
@@ -25,15 +26,23 @@ use crate::failure::Scope;
 use crate::ids::GuildId;
 use crate::logging;
 use crate::lookup::Directory;
+use crate::release_notes;
+use crate::release_notes::NotesError;
 use crate::solves::Solves;
 use crate::startup::Loaded;
 use crate::table::Table;
+use crate::updates::Updates;
+use crate::updates_store::UpdatesStore;
 use crate::voice::VoiceRooms;
 use crate::voice_store::VoiceStore;
 
 pub use announcer::DiscordAnnouncer;
+pub use announcer::ending_mentions;
+pub use announcer::ending_message;
+pub use announcer::series_edit;
 pub use board::DiscordBoard;
 pub use board::allowed_mentions;
+pub use herald::DiscordHerald;
 pub use rooms::DiscordRooms;
 
 const MEMBER_LOOKUPS_AT_ONCE: usize = 5;
@@ -54,6 +63,7 @@ pub struct Data {
     pub signups: Arc<Signups<DiscordBoard>>,
     pub rehearsal: Vec<GuildId>,
     pub voice: Arc<VoiceRooms<DiscordRooms>>,
+    pub updates: Arc<Updates<DiscordHerald>>,
 }
 
 fn now_unix() -> i64 {
@@ -74,6 +84,12 @@ pub enum RunError {
     Registration(#[source] serenity::Error),
     #[error("the Discord client failed")]
     Discord(#[source] serenity::Error),
+    #[error("crates/barnacle-bot/release-notes.toml could not be read")]
+    Notes(#[source] NotesError),
+    #[error(
+        "crates/barnacle-bot/release-notes.toml has no entry for Barnacle {version}; add its notes before running this version"
+    )]
+    NoNotes { version: &'static str },
 }
 
 impl From<serenity::Error> for RunError {
@@ -87,6 +103,7 @@ impl From<serenity::Error> for RunError {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     token: String,
     scope: CommandScope,
@@ -95,7 +112,13 @@ pub async fn run(
     solves: Solves,
     attendance: Attendance,
     voice: VoiceStore,
+    updates: UpdatesStore,
 ) -> Result<(), RunError> {
+    let version = env!("CARGO_PKG_VERSION");
+    let releases = release_notes::all().map_err(RunError::Notes)?;
+    let release = release_notes::find(&releases, version)
+        .cloned()
+        .ok_or(RunError::NoNotes { version })?;
     let intents = serenity::GatewayIntents::GUILDS
         | serenity::GatewayIntents::GUILD_MESSAGES
         | serenity::GatewayIntents::MESSAGE_CONTENT
@@ -111,7 +134,11 @@ pub async fn run(
         })
         .setup(move |ctx, ready, _framework| {
             Box::pin(async move {
-                let announcer = DiscordAnnouncer::new(Arc::clone(&ctx.http));
+                let announcer = DiscordAnnouncer::new(
+                    Arc::clone(&ctx.http),
+                    loaded.root.clone(),
+                    loaded.catalog_name.clone(),
+                );
                 let rng: StdRng = rand::make_rng();
                 let table = Table::new(loaded.book, solves, announcer, Timing::STANDARD, rng);
                 let board = DiscordBoard::new(Arc::clone(&ctx.http), ready.user.id);
@@ -213,6 +240,8 @@ pub async fn run(
                         }
                     }
                 });
+                let updates =
+                    Updates::new(updates, DiscordHerald::new(Arc::clone(&ctx.http)), release);
                 let data = Data {
                     table,
                     root: loaded.root,
@@ -224,6 +253,7 @@ pub async fn run(
                     signups,
                     rehearsal: rehearsal_guilds,
                     voice,
+                    updates,
                 };
                 tracing::info!(
                     "event.name" = "service.started",

@@ -89,7 +89,7 @@ ledger="$(docker run --rm \
 
 printf '\n=== checks ===\n'
 
-for migration in 0001_guess_solves 0002_cb_attendance 0003_cb_season_controls 0004_cb_rehearsal_harness 0005_voice_rooms 0006_cb_ping_roles; do
+for migration in 0001_guess_solves 0002_cb_attendance 0003_cb_season_controls 0004_cb_rehearsal_harness 0005_voice_rooms 0006_cb_ping_roles 0007_bot_updates; do
     expect_present "first start applies $migration" "$first" "applying $migration"
 done
 expect_present 'first start renders the config from the environment' "$first" \
@@ -114,6 +114,7 @@ for stage in "$first" "$second" "$third"; do
     expect_absent 'the attendance tables are present' "$stage" 'tables are missing'
     expect_absent 'the season controls are present' "$stage" 'season controls are missing'
     expect_absent 'the ping roles are present' "$stage" 'ping roles are missing'
+    expect_absent 'the updates table is present' "$stage" 'updates table is missing'
 done
 
 expected_ledger='0001_guess_solves
@@ -121,7 +122,8 @@ expected_ledger='0001_guess_solves
 0003_cb_season_controls
 0004_cb_rehearsal_harness
 0005_voice_rooms
-0006_cb_ping_roles'
+0006_cb_ping_roles
+0007_bot_updates'
 
 if [ "$ledger" = "$expected_ledger" ]; then
     report pass 'the migration ledger holds every migration'

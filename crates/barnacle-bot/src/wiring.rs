@@ -1,5 +1,8 @@
+use std::fmt;
+
 use barnacle_catalog::Tier;
 use barnacle_guess::RoundOptions;
+use barnacle_guess::SeriesLength;
 
 use crate::attendance::Delivery;
 use crate::attendance::Target;
@@ -11,7 +14,13 @@ use crate::schedule::Night;
 use crate::solves::Ranking;
 
 const CANCEL_PREFIX: &str = "barnacle-cancel:";
+const SKIP_PREFIX: &str = "barnacle-skip:";
+const END_SERIES_PREFIX: &str = "barnacle-end:";
+const STILL_PLAYING_PREFIX: &str = "barnacle-still:";
+const ANNOUNCE_PREFIX: &str = "barnacle-announce:";
 pub const ENDED_BUTTON_ID: &str = "barnacle-cancel:ended";
+pub const ENDED_SKIP_BUTTON_ID: &str = "barnacle-skip:ended";
+pub const ENDED_END_BUTTON_ID: &str = "barnacle-end:ended";
 pub const DEFAULT_LEADERBOARD_SIZE: u32 = 10;
 pub const SIGNUP_PREFIX: &str = "barnacle-cb:";
 
@@ -55,7 +64,7 @@ pub struct ChannelAccess {
 }
 
 pub fn missing_permissions(access: ChannelAccess) -> Vec<&'static str> {
-    [
+    lacking([
         (access.view_channel, "View Channel"),
         (
             access.send_messages,
@@ -68,11 +77,23 @@ pub fn missing_permissions(access: ChannelAccess) -> Vec<&'static str> {
         (access.embed_links, "Embed Links"),
         (access.attach_files, "Attach Files"),
         (access.read_message_history, "Read Message History"),
-    ]
-    .into_iter()
-    .filter(|(granted, _)| !granted)
-    .map(|(_, name)| name)
-    .collect()
+    ])
+}
+
+pub fn missing_update_permissions(access: ChannelAccess) -> Vec<&'static str> {
+    lacking([
+        (access.view_channel, "View Channel"),
+        (access.send_messages, "Send Messages"),
+        (access.embed_links, "Embed Links"),
+    ])
+}
+
+fn lacking<const N: usize>(checks: [(bool, &'static str); N]) -> Vec<&'static str> {
+    checks
+        .into_iter()
+        .filter(|(granted, _)| !granted)
+        .map(|(_, name)| name)
+        .collect()
 }
 
 pub fn round_options(
@@ -83,12 +104,70 @@ pub fn round_options(
     RoundOptions::new(tier(min_tier), tier(max_tier), historical)
 }
 
+pub fn series_request(
+    min_tier: Option<i64>,
+    max_tier: Option<i64>,
+    historical: Option<bool>,
+    rounds: Option<i64>,
+) -> Option<(RoundOptions, SeriesLength)> {
+    let length = match rounds {
+        None => SeriesLength::default(),
+        Some(rounds) => SeriesLength::new(u32::try_from(rounds).ok()?)?,
+    };
+    Some((round_options(min_tier, max_tier, historical), length))
+}
+
 pub fn cancel_button_id(number: u64) -> String {
-    format!("{CANCEL_PREFIX}{number}")
+    tagged_id(CANCEL_PREFIX, number)
 }
 
 pub fn round_number(custom_id: &str) -> Option<u64> {
-    custom_id.strip_prefix(CANCEL_PREFIX)?.parse().ok()
+    id_number(custom_id, CANCEL_PREFIX)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeriesClick {
+    Skip(u64),
+    End(u64),
+    StillPlaying(u64),
+}
+
+pub fn skip_button_id(number: u64) -> String {
+    tagged_id(SKIP_PREFIX, number)
+}
+
+pub fn end_series_button_id(number: u64) -> String {
+    tagged_id(END_SERIES_PREFIX, number)
+}
+
+pub fn still_playing_button_id(series: u64) -> String {
+    tagged_id(STILL_PLAYING_PREFIX, series)
+}
+
+pub fn series_click(custom_id: &str) -> Option<SeriesClick> {
+    id_number(custom_id, SKIP_PREFIX)
+        .map(SeriesClick::Skip)
+        .or_else(|| id_number(custom_id, END_SERIES_PREFIX).map(SeriesClick::End))
+        .or_else(|| id_number(custom_id, STILL_PLAYING_PREFIX).map(SeriesClick::StillPlaying))
+}
+
+pub fn announce_button_id(version: &str) -> String {
+    tagged_id(ANNOUNCE_PREFIX, version)
+}
+
+pub fn announce_version(custom_id: &str) -> Option<String> {
+    custom_id
+        .strip_prefix(ANNOUNCE_PREFIX)
+        .filter(|version| !version.is_empty())
+        .map(str::to_owned)
+}
+
+fn tagged_id(prefix: &str, tag: impl fmt::Display) -> String {
+    format!("{prefix}{tag}")
+}
+
+fn id_number(custom_id: &str, prefix: &str) -> Option<u64> {
+    custom_id.strip_prefix(prefix)?.parse().ok()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,16 +210,12 @@ fn canonical_season(text: &str) -> Option<i64> {
 }
 
 pub fn missing_signup_permissions(access: ChannelAccess) -> Vec<&'static str> {
-    [
+    lacking([
         (access.view_channel, "View Channel"),
         (access.send_messages, "Send Messages"),
         (access.embed_links, "Embed Links"),
         (access.read_message_history, "Read Message History"),
-    ]
-    .into_iter()
-    .filter(|(granted, _)| !granted)
-    .map(|(_, name)| name)
-    .collect()
+    ])
 }
 
 fn tier(value: Option<i64>) -> Option<Tier> {

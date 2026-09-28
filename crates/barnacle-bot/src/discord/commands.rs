@@ -2,9 +2,8 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use barnacle_guess::Draw;
+use barnacle_guess::RoundOptions;
 use barnacle_guess::Snowflake;
-use barnacle_guess::Timing;
 use barnacle_guess::UserId;
 use jiff::ToSpan;
 use jiff::civil::Date;
@@ -13,7 +12,11 @@ use poise::serenity_prelude as serenity;
 use super::Context;
 use super::Data;
 use super::Error;
+use super::announcer::SILHOUETTE_FILE;
 use super::announcer::cancel_row;
+use super::announcer::round_embed;
+use super::announcer::silhouette_attachment;
+use super::herald::release_embed;
 use super::rooms::MISSING_PERMISSIONS;
 use super::rooms::UNKNOWN_CHANNEL;
 use super::rooms::refused;
@@ -44,8 +47,10 @@ use crate::schedule::Night;
 use crate::schedule::Range;
 use crate::schedule::parse_day;
 use crate::solves::Standing;
+use crate::table::COUNTDOWN_SECONDS;
 use crate::table::StartOutcome;
 use crate::text;
+use crate::updates::Preview;
 use crate::voice::HUB_NAME_LIMIT;
 use crate::voice::NameProblem;
 use crate::voice::ROOM_ACCESS;
@@ -62,7 +67,6 @@ use crate::wiring::PingVerdict;
 use crate::wiring::SetupPing;
 use crate::wiring::SortChoice;
 
-const SILHOUETTE_FILE: &str = "silhouette.png";
 const UNKNOWN_MEMBER: isize = 10007;
 const MILLIS_PER_SECOND: u64 = 1000;
 const REHEARSAL_NIGHTS: u32 = 3;
@@ -82,6 +86,10 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
         poise::Command {
             description: Some("Start a round: name the ship from its silhouette".into()),
             ..guess()
+        },
+        poise::Command {
+            description: Some("Play several silhouette rounds in a row".into()),
+            ..guess_series()
         },
         poise::Command {
             description: Some("Look up ships".into()),
@@ -179,6 +187,24 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
             subcommand_required: true,
             ..voice()
         },
+        poise::Command {
+            description: Some("Barnacle update news for this server".into()),
+            subcommands: vec![poise::Command {
+                description: Some(
+                    "Choose where Barnacle posts its update news and who it pings".into(),
+                ),
+                ..updates_setup()
+            }],
+            subcommand_required: true,
+            ..updates()
+        },
+        poise::Command {
+            description: Some(
+                "Post the notes for this version of Barnacle to this server's updates channel"
+                    .into(),
+            ),
+            ..announce()
+        },
     ]
 }
 
@@ -255,19 +281,19 @@ async fn fail(ctx: Context<'_>, failure: Failure) -> Result<(), Error> {
 }
 
 fn missing_here(names: Vec<&'static str>) -> Option<text::Refusal> {
-    (!names.is_empty()).then_some(text::Refusal::MissingBotPermissions {
-        names,
-        channel: None,
-    })
+    missing_in(names, None)
+}
+
+fn missing_in(names: Vec<&'static str>, channel: Option<ChannelId>) -> Option<text::Refusal> {
+    (!names.is_empty()).then_some(text::Refusal::MissingBotPermissions { names, channel })
 }
 
 fn missing_in_season_channel(ctx: Context<'_>, season: &Season) -> Option<text::Refusal> {
     let granted = failure::barnacle_permissions_in(ctx.cache(), season.guild, season.channel)?;
-    let names = (SIGNUP_ACCESS - granted).get_permission_names();
-    (!names.is_empty()).then_some(text::Refusal::MissingBotPermissions {
-        names,
-        channel: Some(season.channel),
-    })
+    missing_in(
+        (SIGNUP_ACCESS - granted).get_permission_names(),
+        Some(season.channel),
+    )
 }
 
 fn manage_channels_denied(
@@ -303,11 +329,6 @@ fn channel_access(ctx: Context<'_>) -> ChannelAccess {
                 | serenity::ChannelType::NewsThread
         )
     });
-    let send = if in_thread {
-        serenity::Permissions::SEND_MESSAGES_IN_THREADS
-    } else {
-        serenity::Permissions::SEND_MESSAGES
-    };
     permissions.map_or(
         ChannelAccess {
             view_channel: true,
@@ -317,15 +338,24 @@ fn channel_access(ctx: Context<'_>) -> ChannelAccess {
             read_message_history: true,
             in_thread,
         },
-        |granted| ChannelAccess {
-            view_channel: granted.contains(serenity::Permissions::VIEW_CHANNEL),
-            send_messages: granted.contains(send),
-            embed_links: granted.contains(serenity::Permissions::EMBED_LINKS),
-            attach_files: granted.contains(serenity::Permissions::ATTACH_FILES),
-            read_message_history: granted.contains(serenity::Permissions::READ_MESSAGE_HISTORY),
-            in_thread,
-        },
+        |granted| access_of(granted, in_thread),
     )
+}
+
+fn access_of(granted: serenity::Permissions, in_thread: bool) -> ChannelAccess {
+    let send = if in_thread {
+        serenity::Permissions::SEND_MESSAGES_IN_THREADS
+    } else {
+        serenity::Permissions::SEND_MESSAGES
+    };
+    ChannelAccess {
+        view_channel: granted.contains(serenity::Permissions::VIEW_CHANNEL),
+        send_messages: granted.contains(send),
+        embed_links: granted.contains(serenity::Permissions::EMBED_LINKS),
+        attach_files: granted.contains(serenity::Permissions::ATTACH_FILES),
+        read_message_history: granted.contains(serenity::Permissions::READ_MESSAGE_HISTORY),
+        in_thread,
+    }
 }
 
 fn channel_kind(ctx: Context<'_>) -> Option<serenity::ChannelType> {
@@ -521,20 +551,43 @@ async fn remove_round_post(ctx: Context<'_>) {
     }
 }
 
-fn round_embed(draw: &Draw) -> serenity::CreateEmbed {
-    let embed = serenity::CreateEmbed::new()
-        .title(text::ROUND_TITLE)
-        .description(text::ROUND_DESCRIPTION)
-        .colour(text::EMBED_COLOUR)
-        .field(text::TIERS_FIELD, text::tier_range(draw.options()), true)
-        .image(format!("attachment://{SILHOUETTE_FILE}"))
-        .footer(serenity::CreateEmbedFooter::new(text::round_footer(
-            Timing::STANDARD,
-        )));
-    if draw.options().historical() {
-        embed.field(text::PAPER_EXCLUDED, "Yes", true)
-    } else {
-        embed
+fn unplayable_here(ctx: Context<'_>) -> Option<text::Refusal> {
+    missing_here(wiring::missing_permissions(channel_access(ctx)))
+}
+
+async fn post_reply(ctx: Context<'_>, reply: poise::CreateReply) -> Result<Snowflake, Error> {
+    let handle = ctx.send(reply).await?;
+    let posted = handle.message().await.map(|message| message.id);
+    match posted {
+        Ok(id) => Ok(Snowflake::new(id.get())),
+        Err(error) => {
+            if let Err(cleanup) = handle.delete(ctx).await {
+                failure::report(
+                    "command.failed",
+                    "an untracked round post could not be removed",
+                    &Failure::from_error(&cleanup),
+                    &Scope::of_command(ctx),
+                );
+            }
+            Err(error.into())
+        }
+    }
+}
+
+async fn answer_start(
+    ctx: Context<'_>,
+    outcome: StartOutcome<Error>,
+    options: RoundOptions,
+) -> Result<(), Error> {
+    match outcome {
+        StartOutcome::Started { .. } => Ok(()),
+        StartOutcome::Busy => refuse(ctx, text::Refusal::RoundAlreadyRunning).await,
+        StartOutcome::NoShips(_) => refuse(ctx, text::Refusal::EmptyPool(options)).await,
+        StartOutcome::PostFailed(error) => Err(error),
+        StartOutcome::PostTimedOut => {
+            remove_round_post(ctx).await;
+            Err("posting the round timed out".into())
+        }
     }
 }
 
@@ -554,7 +607,7 @@ async fn guess(
     let Some(place) = place(ctx) else {
         return Ok(());
     };
-    if let Some(refusal) = missing_here(wiring::missing_permissions(channel_access(ctx))) {
+    if let Some(refusal) = unplayable_here(ctx) {
         return refuse(ctx, refusal).await;
     }
     let data = ctx.data();
@@ -563,40 +616,55 @@ async fn guess(
     let outcome = data
         .table
         .start(place, options, invoker, |draw, number| async move {
-            let path = data.root.silhouette(&data.catalog_name, draw.ship());
-            let png = tokio::fs::read(&path).await?;
+            let attachment =
+                silhouette_attachment(&data.root, &data.catalog_name, draw.ship()).await?;
             let reply = poise::CreateReply::default()
                 .embed(round_embed(&draw))
-                .attachment(serenity::CreateAttachment::bytes(png, SILHOUETTE_FILE))
+                .attachment(attachment)
                 .components(vec![cancel_row(wiring::cancel_button_id(number), false)]);
-            let handle = ctx.send(reply).await?;
-            let posted = handle.message().await.map(|message| message.id);
-            match posted {
-                Ok(id) => Ok::<Snowflake, Error>(Snowflake::new(id.get())),
-                Err(error) => {
-                    if let Err(cleanup) = handle.delete(ctx).await {
-                        failure::report(
-                            "command.failed",
-                            "an untracked round post could not be removed",
-                            &Failure::from_error(&cleanup),
-                            &Scope::of_command(ctx),
-                        );
-                    }
-                    Err(error.into())
-                }
-            }
+            post_reply(ctx, reply).await
         })
         .await;
-    match outcome {
-        StartOutcome::Started { .. } => Ok(()),
-        StartOutcome::Busy => refuse(ctx, text::Refusal::RoundAlreadyRunning).await,
-        StartOutcome::NoShips(_) => refuse(ctx, text::Refusal::EmptyPool(options)).await,
-        StartOutcome::PostFailed(error) => Err(error),
-        StartOutcome::PostTimedOut => {
-            remove_round_post(ctx).await;
-            Err("posting the round timed out".into())
-        }
+    answer_start(ctx, outcome, options).await
+}
+
+#[poise::command(slash_command, guild_only, rename = "guess-series")]
+async fn guess_series(
+    ctx: Context<'_>,
+    #[description = "Lowest tier, 1 to 11 (default 6)"]
+    #[min = 1]
+    #[max = 11]
+    min_tier: Option<i64>,
+    #[description = "Highest tier, 1 to 11 (default 11)"]
+    #[min = 1]
+    #[max = 11]
+    max_tier: Option<i64>,
+    #[description = "Leave out ships that were never built"] historical: Option<bool>,
+    #[description = "How many rounds, 2 to 20 (default 10)"]
+    #[min = 2]
+    #[max = 20]
+    rounds: Option<i64>,
+) -> Result<(), Error> {
+    let Some(place) = place(ctx) else {
+        return Ok(());
+    };
+    if let Some(refusal) = unplayable_here(ctx) {
+        return refuse(ctx, refusal).await;
     }
+    let Some((options, length)) = wiring::series_request(min_tier, max_tier, historical, rounds)
+    else {
+        return refuse(ctx, text::Refusal::SeriesRoundsOutOfRange).await;
+    };
+    let invoker = UserId::new(ctx.author().id.get());
+    let intro = poise::CreateReply::default()
+        .content(text::series_intro(&options, length, COUNTDOWN_SECONDS))
+        .allowed_mentions(serenity::CreateAllowedMentions::new());
+    let outcome = ctx
+        .data()
+        .table
+        .start_series(place, options, length, invoker, || post_reply(ctx, intro))
+        .await;
+    answer_start(ctx, outcome, options).await
 }
 
 #[poise::command(slash_command)]
@@ -638,11 +706,10 @@ async fn ship_info(
             .colour(text::EMBED_COLOUR),
         |embed, (name, value)| embed.field(name, value, true),
     );
-    let path = data.root.silhouette(&data.catalog_name, &index);
-    let reply = match tokio::fs::read(&path).await {
-        Ok(png) => poise::CreateReply::default()
+    let reply = match silhouette_attachment(&data.root, &data.catalog_name, &index).await {
+        Ok(attachment) => poise::CreateReply::default()
             .embed(embed.image(format!("attachment://{SILHOUETTE_FILE}")))
-            .attachment(serenity::CreateAttachment::bytes(png, SILHOUETTE_FILE)),
+            .attachment(attachment),
         Err(_) => poise::CreateReply::default().embed(embed),
     };
     ctx.send(reply.ephemeral(true)).await?;
@@ -1528,6 +1595,103 @@ async fn rehearse_reset(ctx: Context<'_>) -> Result<(), Error> {
         .await;
     }
     private(ctx, text::reset_done(&purged)).await
+}
+
+#[poise::command(
+    slash_command,
+    guild_only,
+    default_member_permissions = "MANAGE_GUILD",
+    required_permissions = "MANAGE_GUILD"
+)]
+async fn updates(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
+}
+
+#[poise::command(slash_command, rename = "setup")]
+async fn updates_setup(
+    ctx: Context<'_>,
+    #[description = "Channel for Barnacle update posts"]
+    #[channel_types("Text", "News")]
+    channel: serenity::GuildChannel,
+    #[description = "Role to ping, or leave out for no ping"] role: Option<serenity::Role>,
+) -> Result<(), Error> {
+    let Some(guild) = ctx.guild_id() else {
+        return Ok(());
+    };
+    let place = Place {
+        guild: GuildId::new(guild.get()),
+        channel: ChannelId::new(channel.id.get()),
+    };
+    let granted = failure::barnacle_permissions_in(ctx.cache(), place.guild, place.channel);
+    let missing = granted
+        .map(|granted| wiring::missing_update_permissions(access_of(granted, false)))
+        .unwrap_or_default();
+    if let Some(refusal) = missing_in(missing, Some(place.channel)) {
+        return refuse(ctx, refusal).await;
+    }
+    let ping = role.map(|role| Ping::of(place.guild, RoleId::new(role.id.get())));
+    ctx.data()
+        .updates
+        .configure(place.guild, place.channel, ping)
+        .await?;
+    failure::record(
+        "updates.configured",
+        "a server chose where Barnacle's update news goes",
+        &Scope::of_command(ctx).channel(place.channel),
+    );
+    let verdict = update_ping_verdict(ctx, ping, place, granted);
+    private(ctx, text::updates_setup_reply(place.channel, ping, verdict)).await
+}
+
+#[poise::command(
+    slash_command,
+    guild_only,
+    owners_only,
+    default_member_permissions = "MANAGE_GUILD"
+)]
+async fn announce(ctx: Context<'_>) -> Result<(), Error> {
+    let Some(guild) = ctx.guild_id() else {
+        return Ok(());
+    };
+    let guild = GuildId::new(guild.get());
+    let updates = &ctx.data().updates;
+    let (channel, ping) = match updates.preview(guild).await? {
+        Preview::NotSetUp => return private(ctx, text::UPDATES_NOT_SET_UP).await,
+        Preview::AlreadySent { version } => {
+            return private(ctx, text::updates_already_sent(&version)).await;
+        }
+        Preview::Ready { channel, ping } => (channel, ping),
+    };
+    let granted = failure::barnacle_permissions_in(ctx.cache(), guild, channel);
+    let verdict = update_ping_verdict(ctx, ping, Place { guild, channel }, granted);
+    let release = updates.release();
+    ctx.send(
+        poise::CreateReply::default()
+            .content(text::announce_preview_line(channel, ping, verdict))
+            .embed(release_embed(release))
+            .components(vec![send_row(&release.version)])
+            .allowed_mentions(serenity::CreateAllowedMentions::new())
+            .ephemeral(true),
+    )
+    .await?;
+    Ok(())
+}
+
+fn update_ping_verdict(
+    ctx: Context<'_>,
+    ping: Option<Ping>,
+    place: Place,
+    granted: Option<serenity::Permissions>,
+) -> Option<PingVerdict> {
+    ping.map(|ping| judge_ping(ctx, ping, place, granted, false).verdict)
+}
+
+fn send_row(version: &str) -> serenity::CreateActionRow {
+    serenity::CreateActionRow::Buttons(vec![
+        serenity::CreateButton::new(wiring::announce_button_id(version))
+            .label(text::SEND_LABEL)
+            .style(serenity::ButtonStyle::Primary),
+    ])
 }
 
 #[poise::command(

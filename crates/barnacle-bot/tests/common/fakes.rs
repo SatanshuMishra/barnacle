@@ -24,7 +24,10 @@ use barnacle_bot::table::Announcer;
 use barnacle_bot::table::Ending;
 use barnacle_bot::table::Table;
 use barnacle_catalog::Ship;
+use barnacle_catalog::ShipIndex;
+use barnacle_guess::Draw;
 use barnacle_guess::Hint;
+use barnacle_guess::SeriesLength;
 use barnacle_guess::ShipBook;
 use barnacle_guess::Snowflake;
 use barnacle_guess::Timing;
@@ -33,6 +36,7 @@ use rand::rngs::StdRng;
 use tokio::sync::Semaphore;
 use tokio::time::Instant;
 
+use super::at;
 use super::catalog;
 use super::curation;
 
@@ -58,12 +62,38 @@ pub enum Posted {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SeriesPosted {
+    Round {
+        channel: ChannelId,
+        number: u64,
+        round: u32,
+        length: SeriesLength,
+        ship: ShipIndex,
+    },
+    Ending {
+        channel: ChannelId,
+        round_post: Snowflake,
+        content: String,
+        reply_to: Option<Snowflake>,
+        still_playing: Option<u64>,
+    },
+    Edited {
+        channel: ChannelId,
+        message: Snowflake,
+        content: String,
+    },
+}
+
+type Log<T> = Arc<Mutex<Vec<(Duration, T)>>>;
+
 #[derive(Clone)]
 pub struct FakeDiscord {
     start: Instant,
     fail: bool,
     hang: bool,
-    posted: Arc<Mutex<Vec<(Duration, Posted)>>>,
+    posted: Log<Posted>,
+    series_posted: Log<SeriesPosted>,
 }
 
 impl FakeDiscord {
@@ -73,6 +103,7 @@ impl FakeDiscord {
             fail: false,
             hang: false,
             posted: Arc::new(Mutex::new(Vec::new())),
+            series_posted: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -104,19 +135,28 @@ impl FakeDiscord {
             .collect()
     }
 
-    async fn answer(&self, posted: Posted) -> Result<(), AnnounceError> {
-        let result = self.record(posted);
+    pub fn series_posted(&self) -> Vec<(Duration, SeriesPosted)> {
+        self.series_posted.lock().unwrap().clone()
+    }
+
+    fn now(&self) -> Snowflake {
+        at(u64::try_from(self.start.elapsed().as_millis()).unwrap())
+    }
+
+    async fn answer<T>(
+        &self,
+        log: &Mutex<Vec<(Duration, T)>>,
+        call: T,
+    ) -> Result<(), AnnounceError> {
+        let result = self.record(log, call);
         if self.hang {
             std::future::pending::<()>().await;
         }
         result
     }
 
-    fn record(&self, posted: Posted) -> Result<(), AnnounceError> {
-        self.posted
-            .lock()
-            .unwrap()
-            .push((self.start.elapsed(), posted));
+    fn record<T>(&self, log: &Mutex<Vec<(Duration, T)>>, call: T) -> Result<(), AnnounceError> {
+        log.lock().unwrap().push((self.start.elapsed(), call));
         if self.fail {
             Err(AnnounceError("the fake Discord refuses every post".into()))
         } else {
@@ -127,10 +167,13 @@ impl FakeDiscord {
 
 impl Announcer for FakeDiscord {
     async fn post_hint(&self, channel: ChannelId, hint: &Hint) -> Result<(), AnnounceError> {
-        self.answer(Posted::Hint {
-            channel,
-            hint: hint.clone(),
-        })
+        self.answer(
+            &self.posted,
+            Posted::Hint {
+                channel,
+                hint: hint.clone(),
+            },
+        )
         .await
     }
 
@@ -140,11 +183,77 @@ impl Announcer for FakeDiscord {
         round_post: Snowflake,
         ending: &Ending,
     ) -> Result<(), AnnounceError> {
-        self.answer(Posted::Ending {
-            channel,
-            round_post,
-            ending: ending.clone(),
-        })
+        self.answer(
+            &self.posted,
+            Posted::Ending {
+                channel,
+                round_post,
+                ending: ending.clone(),
+            },
+        )
+        .await
+    }
+
+    async fn post_series_round(
+        &self,
+        channel: ChannelId,
+        draw: &Draw,
+        number: u64,
+        round: u32,
+        length: SeriesLength,
+    ) -> Result<Snowflake, AnnounceError> {
+        let posted = self.now();
+        self.answer(
+            &self.series_posted,
+            SeriesPosted::Round {
+                channel,
+                number,
+                round,
+                length,
+                ship: draw.ship().clone(),
+            },
+        )
+        .await
+        .map(|()| posted)
+    }
+
+    async fn post_series_ending(
+        &self,
+        channel: ChannelId,
+        round_post: Snowflake,
+        content: &str,
+        reply_to: Option<Snowflake>,
+        still_playing: Option<u64>,
+    ) -> Result<Snowflake, AnnounceError> {
+        let posted = self.now();
+        self.answer(
+            &self.series_posted,
+            SeriesPosted::Ending {
+                channel,
+                round_post,
+                content: content.to_owned(),
+                reply_to,
+                still_playing,
+            },
+        )
+        .await
+        .map(|()| posted)
+    }
+
+    async fn edit_series_message(
+        &self,
+        channel: ChannelId,
+        message: Snowflake,
+        content: &str,
+    ) -> Result<(), AnnounceError> {
+        self.answer(
+            &self.series_posted,
+            SeriesPosted::Edited {
+                channel,
+                message,
+                content: content.to_owned(),
+            },
+        )
         .await
     }
 }

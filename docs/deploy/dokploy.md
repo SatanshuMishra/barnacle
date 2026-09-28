@@ -69,7 +69,7 @@ event and field.
 
 ## First start against an empty volume
 
-Nothing to do by hand. The entrypoint creates the database, applies all five
+Nothing to do by hand. The entrypoint creates the database, applies all seven
 migrations in order and starts the bot. The logs read:
 
 ```text
@@ -79,6 +79,8 @@ barnacle: applying 0002_cb_attendance
 barnacle: applying 0003_cb_season_controls
 barnacle: applying 0004_cb_rehearsal_harness
 barnacle: applying 0005_voice_rooms
+barnacle: applying 0006_cb_ping_roles
+barnacle: applying 0007_bot_updates
 ```
 
 On every later start the entrypoint reads the `schema_migrations` ledger, finds

@@ -97,3 +97,73 @@ fn only_a_first_post_asks_discord_to_ping_everyone() {
             .roles([serenity::RoleId::new(123), serenity::RoleId::new(456)])
     );
 }
+
+#[test]
+fn every_server_is_sent_guess_series_with_its_rounds_bounds() {
+    let commands = command_list(false);
+    let series = commands
+        .iter()
+        .find(|command| command.name == "guess-series")
+        .expect("guess-series is registered");
+    assert_eq!(
+        series
+            .parameters
+            .iter()
+            .map(|parameter| parameter.name.to_string())
+            .collect::<Vec<String>>(),
+        ["min_tier", "max_tier", "historical", "rounds"]
+    );
+    let rounds = series
+        .parameters
+        .iter()
+        .find(|parameter| parameter.name == "rounds")
+        .and_then(|parameter| parameter.create_as_slash_command_option())
+        .map(|option| serde_json::to_value(option).unwrap())
+        .unwrap();
+    assert_eq!(rounds["min_value"], 2.0);
+    assert_eq!(rounds["max_value"], 20.0);
+    assert_eq!(rounds["required"], false);
+    assert!(
+        names(&command_list(true))
+            .iter()
+            .any(|name| name == "guess-series")
+    );
+}
+
+#[test]
+fn announce_is_owner_only_and_updates_setup_needs_manage_server() {
+    let commands = command_list(false);
+    let named = |name: &str| {
+        commands
+            .iter()
+            .find(|command| command.name == name)
+            .unwrap_or_else(|| panic!("{name} is registered"))
+    };
+    let announce = named("announce");
+    assert!(announce.owners_only);
+    assert!(announce.guild_only);
+    assert_eq!(
+        announce.default_member_permissions,
+        serenity::Permissions::MANAGE_GUILD
+    );
+    let updates = named("updates");
+    assert!(updates.guild_only);
+    assert!(updates.subcommand_required);
+    assert_eq!(
+        updates.default_member_permissions,
+        serenity::Permissions::MANAGE_GUILD
+    );
+    assert_eq!(
+        updates.required_permissions,
+        serenity::Permissions::MANAGE_GUILD
+    );
+    assert_eq!(names(&updates.subcommands), ["setup"]);
+    assert_eq!(
+        updates.subcommands[0]
+            .parameters
+            .iter()
+            .map(|parameter| (parameter.name.to_string(), parameter.required))
+            .collect::<Vec<(String, bool)>>(),
+        [("channel".to_owned(), true), ("role".to_owned(), false)]
+    );
+}
