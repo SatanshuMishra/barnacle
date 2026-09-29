@@ -9,7 +9,7 @@ use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::Ping;
 use barnacle_bot::ids::RoleId;
-use barnacle_bot::release_notes::NewItem;
+use barnacle_bot::release_notes::Feature;
 use barnacle_bot::release_notes::Release;
 use barnacle_bot::updates::Herald;
 use barnacle_bot::updates::HeraldError;
@@ -82,13 +82,15 @@ impl Herald for FakeHerald {
 fn release(version: &str) -> Release {
     Release {
         version: version.to_owned(),
-        new: vec![NewItem {
-            title: "Guess series".to_owned(),
-            what: "You can now play a series of rounds.".to_owned(),
-            how: "Type /guess-series.".to_owned(),
+        summary: "You can now play a series of rounds.".to_owned(),
+        features: vec![Feature {
+            title: "Silhouette series".to_owned(),
+            story: vec!["You can now play a series of rounds.".to_owned()],
+            steps: vec!["Type /guess-series.".to_owned()],
+            ..Feature::default()
         }],
-        changed: Vec::new(),
-        fixed: Vec::new(),
+        changes: Vec::new(),
+        fixes: Vec::new(),
     }
 }
 

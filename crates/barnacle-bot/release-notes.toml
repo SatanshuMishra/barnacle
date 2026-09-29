@@ -1,24 +1,33 @@
 [[release]]
 version = "0.2.0"
-changed = []
-fixed = []
+summary = "This update lets you play several silhouette rounds in a row and lets servers choose where Barnacle posts news."
 
-[[release.new]]
-title = "Guess series"
-what = "You can now play a series of 2 to 20 silhouette rounds in a row without starting each one yourself."
-how = "Type /guess-series, choose how many rounds you want (10 if you leave it out), and answer in chat as usual."
+[[release.feature]]
+title = "Silhouette series"
+story = [
+    "Until now, each round of the ship silhouette game (/guess) had to be started by hand, one at a time.",
+    "A series plays up to 20 rounds back to back and keeps score for everyone taking part.",
+]
+steps = [
+    "Type /guess-series in any channel where /guess works.",
+    "Choose how many rounds to play, from 2 to 20; if you leave it out, you get 10.",
+    "Name each ship in chat as it appears, just like /guess.",
+]
+expect = [
+    "A 5-second countdown appears before every ship, so you are ready to answer.",
+    "After each round, the standings show who has won the most rounds and who was fastest so far.",
+    "The standings clear away when the next ship appears, so the channel stays tidy.",
+    "If nobody talks for three rounds, Barnacle asks if you are still playing; press Yes within 10 seconds to keep going.",
+    "When the series ends, the final standings stay in the channel for everyone to see.",
+]
 
-[[release.new]]
-title = "Series standings"
-what = "After every round in a series, Barnacle shows who has won the most rounds and who was fastest so far."
-how = "Keep playing; the standings appear under each answer, with a 5-second countdown before the next ship."
-
-[[release.new]]
-title = "Still playing check"
-what = "If the chat goes quiet for three rounds, Barnacle asks if you are still playing and stops unless someone presses Yes."
-how = "Press Yes within 10 seconds to keep the series going."
-
-[[release.new]]
-title = "Update news"
-what = "Server managers can now choose a channel where Barnacle posts news about its updates."
-how = "Someone with Manage Server types /updates setup, picks the channel, and can add a role to notify."
+[[release.feature]]
+title = "Update news channel"
+audience = "server managers"
+story = [
+    "Barnacle can now post news like this in a channel your server picks, so members hear about changes as they happen.",
+]
+steps = [
+    "Someone with Manage Server types /updates setup.",
+    "They pick the channel for the news and, if they like, a role to notify.",
+]
