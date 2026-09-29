@@ -76,12 +76,21 @@ pub enum SeriesPosted {
         round_post: Snowflake,
         content: String,
         reply_to: Option<Snowflake>,
+    },
+    Message {
+        channel: ChannelId,
+        message: Snowflake,
+        content: String,
         still_playing: Option<u64>,
     },
     Edited {
         channel: ChannelId,
         message: Snowflake,
         content: String,
+    },
+    Deleted {
+        channel: ChannelId,
+        message: Snowflake,
     },
 }
 
@@ -94,6 +103,7 @@ pub struct FakeDiscord {
     hang: bool,
     posted: Log<Posted>,
     series_posted: Log<SeriesPosted>,
+    issued: Arc<Mutex<Option<(u64, u64)>>>,
 }
 
 impl FakeDiscord {
@@ -104,6 +114,7 @@ impl FakeDiscord {
             hang: false,
             posted: Arc::new(Mutex::new(Vec::new())),
             series_posted: Arc::new(Mutex::new(Vec::new())),
+            issued: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -140,7 +151,15 @@ impl FakeDiscord {
     }
 
     fn now(&self) -> Snowflake {
-        at(u64::try_from(self.start.elapsed().as_millis()).unwrap())
+        let elapsed = u64::try_from(self.start.elapsed().as_millis()).unwrap();
+        let mut issued = self.issued.lock().unwrap();
+        let earlier = match *issued {
+            Some((millis, count)) if millis == elapsed => count + 1,
+            Some(_) | None => 0,
+        };
+        assert!(earlier < 1 << 22, "too many messages at {elapsed} ms");
+        *issued = Some((elapsed, earlier));
+        Snowflake::new(at(elapsed).get() + earlier)
     }
 
     async fn answer<T>(
@@ -223,7 +242,6 @@ impl Announcer for FakeDiscord {
         round_post: Snowflake,
         content: &str,
         reply_to: Option<Snowflake>,
-        still_playing: Option<u64>,
     ) -> Result<Snowflake, AnnounceError> {
         let posted = self.now();
         self.answer(
@@ -233,6 +251,25 @@ impl Announcer for FakeDiscord {
                 round_post,
                 content: content.to_owned(),
                 reply_to,
+            },
+        )
+        .await
+        .map(|()| posted)
+    }
+
+    async fn post_series_message(
+        &self,
+        channel: ChannelId,
+        content: &str,
+        still_playing: Option<u64>,
+    ) -> Result<Snowflake, AnnounceError> {
+        let posted = self.now();
+        self.answer(
+            &self.series_posted,
+            SeriesPosted::Message {
+                channel,
+                message: posted,
+                content: content.to_owned(),
                 still_playing,
             },
         )
@@ -253,6 +290,18 @@ impl Announcer for FakeDiscord {
                 message,
                 content: content.to_owned(),
             },
+        )
+        .await
+    }
+
+    async fn delete_series_message(
+        &self,
+        channel: ChannelId,
+        message: Snowflake,
+    ) -> Result<(), AnnounceError> {
+        self.answer(
+            &self.series_posted,
+            SeriesPosted::Deleted { channel, message },
         )
         .await
     }

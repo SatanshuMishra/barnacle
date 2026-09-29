@@ -43,6 +43,7 @@ pub use announcer::series_edit;
 pub use board::DiscordBoard;
 pub use board::allowed_mentions;
 pub use herald::DiscordHerald;
+pub use herald::announcement_message;
 pub use rooms::DiscordRooms;
 
 const MEMBER_LOOKUPS_AT_ONCE: usize = 5;

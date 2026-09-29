@@ -2,35 +2,65 @@ use std::fmt;
 
 use serde::Deserialize;
 
+use crate::text::MESSAGE_CONTENT_LIMIT;
+
 pub const FOOTER: &str = "Questions or feedback? Reach out to a server administrator.";
 
 const NOTES: &str = include_str!("../release-notes.toml");
 const LONGEST_LINE: usize = 120;
-const FIELD_LIMIT: usize = 1024;
-const EMBED_LIMIT: usize = 6000;
+const LONGEST_TITLE: usize = 40;
+const LONGEST_STORY: usize = 2;
+const LONGEST_PING_LINE: usize = 25;
 const SENTENCE_ENDS: [char; 3] = ['.', '!', '?'];
 const TECHNICAL: [&str; 11] = [
     "`", "**", "__", "::", "->", "http", ".rs", ".toml", ".sql", "{", "}",
 ];
+const NEW_FEATURES: &str = "## New features";
+const CHANGES: &str = "## Changes to existing features";
+const FIXES: &str = "## Fixes";
+const HOW_TO_USE: &str = "**How to use it**";
+const WHAT_TO_EXPECT: &str = "**What to expect**";
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Release {
     pub version: String,
     #[serde(default)]
-    pub new: Vec<NewItem>,
+    pub summary: String,
+    #[serde(default, rename = "feature")]
+    pub features: Vec<Feature>,
+    #[serde(default, rename = "change")]
+    pub changes: Vec<Change>,
     #[serde(default)]
-    pub changed: Vec<String>,
-    #[serde(default)]
-    pub fixed: Vec<String>,
+    pub fixes: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct NewItem {
-    pub what: String,
+pub struct Feature {
     #[serde(default)]
-    pub how: String,
+    pub title: String,
+    #[serde(default)]
+    pub audience: Option<String>,
+    #[serde(default)]
+    pub story: Vec<String>,
+    #[serde(default)]
+    pub steps: Vec<String>,
+    #[serde(default)]
+    pub expect: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Change {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub audience: Option<String>,
+    #[serde(default)]
+    pub before: String,
+    #[serde(default)]
+    pub now: String,
 }
 
 #[derive(Deserialize)]
@@ -69,6 +99,27 @@ impl fmt::Display for LineFault {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleFault {
+    Empty,
+    TooLong { length: usize },
+    FinalPunctuation,
+    Technical { sequence: &'static str },
+}
+
+impl fmt::Display for TitleFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => f.write_str("is empty"),
+            Self::TooLong { length } => {
+                write!(f, "is {length} characters; the limit is {LONGEST_TITLE}")
+            }
+            Self::FinalPunctuation => f.write_str("ends in '.', '!' or '?'"),
+            Self::Technical { sequence } => write!(f, "contains {sequence:?}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NoteProblem {
     #[error("{version} has more than one entry")]
@@ -77,57 +128,124 @@ pub enum NoteProblem {
         "\"{version}\" is not a version; write three whole numbers separated by dots, such as 0.2.0"
     )]
     BadVersion { version: String },
-    #[error("{version} has no new, changed or fixed line")]
-    NoLines { version: String },
-    #[error("{version}: the new item \"{what}\" has no how")]
-    MissingHow { version: String, what: String },
+    #[error("{version} has no summary; say in one sentence what the update brings")]
+    MissingSummary { version: String },
+    #[error("{version} has no feature, change or fix")]
+    NoContent { version: String },
+    #[error("{version}: the item \"{item}\" has no title")]
+    MissingTitle { version: String, item: String },
+    #[error("{version}: the title \"{title}\" {fault}")]
+    Title {
+        version: String,
+        title: String,
+        fault: TitleFault,
+    },
+    #[error("{version}: the audience \"{audience}\" of \"{title}\" {fault}")]
+    Audience {
+        version: String,
+        title: String,
+        audience: String,
+        fault: TitleFault,
+    },
+    #[error("{version}: the feature \"{title}\" has no story; say what it is and why it helps")]
+    MissingStory { version: String, title: String },
+    #[error(
+        "{version}: the feature \"{title}\" tells its story in {sentences} sentences; use at most {LONGEST_STORY}"
+    )]
+    LongStory {
+        version: String,
+        title: String,
+        sentences: usize,
+    },
+    #[error("{version}: the feature \"{title}\" has no steps; say how to use it")]
+    MissingSteps { version: String, title: String },
     #[error("{version}: \"{line}\" {fault}")]
     Line {
         version: String,
         line: String,
         fault: LineFault,
     },
-    #[error("{version}: the {field} field is {length} characters; Discord allows {FIELD_LIMIT}")]
-    FieldTooLong {
-        version: String,
-        field: &'static str,
-        length: usize,
-    },
-    #[error("{version}: the announcement is {length} characters; Discord allows {EMBED_LIMIT}")]
-    EmbedTooLong { version: String, length: usize },
+    #[error(
+        "{version}: the post with the longest ping is {length} characters; Discord allows {MESSAGE_CONTENT_LIMIT}"
+    )]
+    PostTooLong { version: String, length: usize },
 }
 
 impl Release {
-    pub fn title(&self) -> String {
-        format!("Barnacle Update {}", self.version)
-    }
-
-    pub fn fields(&self) -> Vec<(&'static str, String)> {
-        let new: Vec<String> = self
-            .new
-            .iter()
-            .map(|item| format!("- {}\nHow to use: {}", item.what, item.how))
-            .collect();
-        [
-            ("New", new),
-            ("Changed", bullets(&self.changed)),
-            ("Fixed", bullets(&self.fixed)),
-        ]
-        .into_iter()
-        .filter(|(_, lines)| !lines.is_empty())
-        .map(|(name, lines)| (name, lines.join("\n")))
-        .collect()
+    pub fn render(&self) -> String {
+        std::iter::once(format!("# Barnacle Update {}", self.version))
+            .chain(Some(self.summary.clone()).filter(|summary| !summary.trim().is_empty()))
+            .chain(section(
+                NEW_FEATURES,
+                self.features.iter().map(Feature::block),
+            ))
+            .chain(section(CHANGES, self.changes.iter().map(Change::block)))
+            .chain(fixes(&self.fixes))
+            .chain([String::new(), format!("-# {FOOTER}")])
+            .collect::<Vec<String>>()
+            .join("\n")
     }
 
     fn lines(&self) -> impl Iterator<Item = &str> {
-        self.new
+        Some(self.summary.as_str())
+            .filter(|summary| !summary.trim().is_empty())
+            .into_iter()
+            .chain(self.features.iter().flat_map(|feature| {
+                feature
+                    .story
+                    .iter()
+                    .chain(&feature.steps)
+                    .chain(&feature.expect)
+                    .map(String::as_str)
+            }))
+            .chain(
+                self.changes
+                    .iter()
+                    .flat_map(|change| [change.before.as_str(), change.now.as_str()]),
+            )
+            .chain(self.fixes.iter().map(String::as_str))
+    }
+}
+
+impl Feature {
+    fn block(&self) -> Vec<String> {
+        let steps = labelled(
+            HOW_TO_USE,
+            self.steps
+                .iter()
+                .zip(1..)
+                .map(|(step, number)| format!("{number}. {step}")),
+        );
+        let expect = labelled(
+            WHAT_TO_EXPECT,
+            self.expect.iter().map(|line| format!("- {line}")),
+        );
+        heading(&self.title, self.audience.as_deref())
+            .into_iter()
+            .chain(Some(self.story.join(" ")).filter(|story| !story.is_empty()))
+            .chain(steps)
+            .chain(expect)
+            .collect()
+    }
+
+    fn first_line(&self) -> &str {
+        self.story
             .iter()
-            .flat_map(|item| {
-                std::iter::once(item.what.as_str())
-                    .chain(Some(item.how.as_str()).filter(|how| !how.trim().is_empty()))
-            })
-            .chain(self.changed.iter().map(String::as_str))
-            .chain(self.fixed.iter().map(String::as_str))
+            .chain(&self.steps)
+            .next()
+            .map_or("", String::as_str)
+    }
+}
+
+impl Change {
+    fn block(&self) -> Vec<String> {
+        heading(&self.title, self.audience.as_deref())
+            .into_iter()
+            .chain([
+                format!("**Before:** {}", self.before),
+                format!("**Now:** {}", self.now),
+            ])
+            .collect()
     }
 }
 
@@ -165,17 +283,38 @@ fn release_problems(release: &Release) -> Vec<NoteProblem> {
     let version = || release.version.clone();
     let bad_version =
         (!is_version(&release.version)).then(|| NoteProblem::BadVersion { version: version() });
-    let no_lines =
-        (release.new.is_empty() && release.changed.is_empty() && release.fixed.is_empty())
-            .then(|| NoteProblem::NoLines { version: version() });
-    let missing_how = release
-        .new
+    let missing_summary = release
+        .summary
+        .trim()
+        .is_empty()
+        .then(|| NoteProblem::MissingSummary { version: version() });
+    let no_content =
+        (release.features.is_empty() && release.changes.is_empty() && release.fixes.is_empty())
+            .then(|| NoteProblem::NoContent { version: version() });
+    let headings = release
+        .features
         .iter()
-        .filter(|item| item.how.trim().is_empty())
-        .map(|item| NoteProblem::MissingHow {
-            version: version(),
-            what: item.what.clone(),
+        .map(|feature| {
+            (
+                feature.title.as_str(),
+                feature.audience.as_deref(),
+                feature.first_line(),
+            )
+        })
+        .chain(release.changes.iter().map(|change| {
+            (
+                change.title.as_str(),
+                change.audience.as_deref(),
+                change.now.as_str(),
+            )
+        }))
+        .flat_map(|(title, audience, item)| {
+            heading_problems(&release.version, title, audience, item)
         });
+    let gaps = release
+        .features
+        .iter()
+        .flat_map(|feature| feature_problems(&release.version, feature));
     let lines = release.lines().flat_map(|line| {
         faults(line).into_iter().map(|fault| NoteProblem::Line {
             version: version(),
@@ -183,36 +322,91 @@ fn release_problems(release: &Release) -> Vec<NoteProblem> {
             fault,
         })
     });
+    let length = release.render().chars().count() + LONGEST_PING_LINE;
+    let too_long = (length > MESSAGE_CONTENT_LIMIT).then(|| NoteProblem::PostTooLong {
+        version: version(),
+        length,
+    });
     bad_version
         .into_iter()
-        .chain(no_lines)
-        .chain(missing_how)
+        .chain(missing_summary)
+        .chain(no_content)
+        .chain(headings)
+        .chain(gaps)
         .chain(lines)
-        .chain(embed_problems(release))
+        .chain(too_long)
         .collect()
 }
 
-fn embed_problems(release: &Release) -> Vec<NoteProblem> {
-    let fields = release.fields();
-    let long_fields = fields.iter().filter_map(|(field, value)| {
-        let length = value.chars().count();
-        (length > FIELD_LIMIT).then(|| NoteProblem::FieldTooLong {
-            version: release.version.clone(),
-            field,
-            length,
-        })
+fn heading_problems(
+    version: &str,
+    title: &str,
+    audience: Option<&str>,
+    item: &str,
+) -> Vec<NoteProblem> {
+    let titled = if title.trim().is_empty() {
+        vec![NoteProblem::MissingTitle {
+            version: version.to_owned(),
+            item: item.to_owned(),
+        }]
+    } else {
+        title_faults(title)
+            .into_iter()
+            .map(|fault| NoteProblem::Title {
+                version: version.to_owned(),
+                title: title.to_owned(),
+                fault,
+            })
+            .collect()
+    };
+    let audienced = audience.into_iter().flat_map(|audience| {
+        title_faults(audience)
+            .into_iter()
+            .map(move |fault| NoteProblem::Audience {
+                version: version.to_owned(),
+                title: title.to_owned(),
+                audience: audience.to_owned(),
+                fault,
+            })
     });
-    let length = release.title().chars().count()
-        + fields
-            .iter()
-            .map(|(field, value)| field.chars().count() + value.chars().count())
-            .sum::<usize>()
-        + FOOTER.chars().count();
-    let long_embed = (length > EMBED_LIMIT).then(|| NoteProblem::EmbedTooLong {
-        version: release.version.clone(),
-        length,
+    titled.into_iter().chain(audienced).collect()
+}
+
+fn feature_problems(version: &str, feature: &Feature) -> Vec<NoteProblem> {
+    let title = || feature.title.clone();
+    let story = match feature.story.len() {
+        0 => Some(NoteProblem::MissingStory {
+            version: version.to_owned(),
+            title: title(),
+        }),
+        sentences if sentences > LONGEST_STORY => Some(NoteProblem::LongStory {
+            version: version.to_owned(),
+            title: title(),
+            sentences,
+        }),
+        _ => None,
+    };
+    let steps = feature.steps.is_empty().then(|| NoteProblem::MissingSteps {
+        version: version.to_owned(),
+        title: title(),
     });
-    long_fields.chain(long_embed).collect()
+    story.into_iter().chain(steps).collect()
+}
+
+fn title_faults(title: &str) -> Vec<TitleFault> {
+    if title.trim().is_empty() {
+        return vec![TitleFault::Empty];
+    }
+    let length = title.chars().count();
+    let too_long = (length > LONGEST_TITLE).then_some(TitleFault::TooLong { length });
+    let punctuated = title
+        .ends_with(SENTENCE_ENDS)
+        .then_some(TitleFault::FinalPunctuation);
+    too_long
+        .into_iter()
+        .chain(punctuated)
+        .chain(technical(title).map(|sequence| TitleFault::Technical { sequence }))
+        .collect()
 }
 
 fn faults(line: &str) -> Vec<LineFault> {
@@ -223,16 +417,18 @@ fn faults(line: &str) -> Vec<LineFault> {
     let too_long = (length > LONGEST_LINE).then_some(LineFault::TooLong { length });
     let unfinished = (!line.ends_with(SENTENCE_ENDS)).then_some(LineFault::NoFinalPunctuation);
     let broken = has_sentence_break(line).then_some(LineFault::SentenceBreak);
-    let technical = TECHNICAL
-        .into_iter()
-        .filter(|sequence| line.contains(sequence))
-        .map(|sequence| LineFault::Technical { sequence });
     too_long
         .into_iter()
         .chain(unfinished)
         .chain(broken)
-        .chain(technical)
+        .chain(technical(line).map(|sequence| LineFault::Technical { sequence }))
         .collect()
+}
+
+fn technical(text: &str) -> impl Iterator<Item = &'static str> {
+    TECHNICAL
+        .into_iter()
+        .filter(move |sequence| text.contains(sequence))
 }
 
 fn has_sentence_break(line: &str) -> bool {
@@ -252,6 +448,44 @@ fn is_number(part: &str) -> bool {
         && (part == "0" || !part.starts_with('0'))
 }
 
-fn bullets(lines: &[String]) -> Vec<String> {
-    lines.iter().map(|line| format!("- {line}")).collect()
+fn heading(title: &str, audience: Option<&str>) -> Vec<String> {
+    std::iter::once(format!("### {title}"))
+        .chain(audience.map(|audience| format!("-# For {audience}")))
+        .collect()
+}
+
+fn labelled(label: &str, lines: impl Iterator<Item = String>) -> Vec<String> {
+    let lines: Vec<String> = lines.collect();
+    if lines.is_empty() {
+        lines
+    } else {
+        std::iter::once(label.to_owned()).chain(lines).collect()
+    }
+}
+
+fn section(heading: &str, blocks: impl Iterator<Item = Vec<String>>) -> Vec<String> {
+    let blocks: Vec<Vec<String>> = blocks.collect();
+    if blocks.is_empty() {
+        Vec::new()
+    } else {
+        [String::new(), heading.to_owned()]
+            .into_iter()
+            .chain(
+                blocks
+                    .into_iter()
+                    .flat_map(|block| std::iter::once(String::new()).chain(block)),
+            )
+            .collect()
+    }
+}
+
+fn fixes(lines: &[String]) -> Vec<String> {
+    if lines.is_empty() {
+        Vec::new()
+    } else {
+        [String::new(), FIXES.to_owned()]
+            .into_iter()
+            .chain(lines.iter().map(|line| format!("- {line}")))
+            .collect()
+    }
 }

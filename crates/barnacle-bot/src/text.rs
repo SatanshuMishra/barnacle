@@ -45,8 +45,8 @@ pub const CANCEL_REFUSED: &str =
 pub const ROUND_OVER: &str = "That round has already ended.";
 pub const SERIES_FIELD: &str = "Series";
 pub const SERIES_CHECK: &str =
-    "Are you still playing? Press Yes within 10 seconds to keep the series going.";
-pub const SERIES_EXPIRED: &str = "Nobody answered, so the series ended.";
+    "### Are you still playing?\nPress **Yes** within 10 seconds to keep the series going.";
+pub const SERIES_EXPIRED: &str = "### Nobody answered, so the series ended.";
 pub const SKIP_LABEL: &str = "Skip";
 pub const END_SERIES_LABEL: &str = "End series";
 pub const STILL_PLAYING_LABEL: &str = "Yes";
@@ -91,9 +91,11 @@ const RESET_BLOCKED_TAIL: &str =
 const MENTION_PERMISSION: &str = "Mention @everyone, @here, and All Roles";
 const MENTIONABLE_SETTING: &str = "Allow anyone to @mention this role";
 
+const SERIES_TITLE: &str = "## Silhouette series";
+const SERIES_OVER: &str = "## Series over";
 const HISTORICAL_SERIES: &str = "Ships that were never built are left out.";
-const MOST_ROUNDS_WON: &str = "**Most rounds won**";
-const FASTEST_TIME: &str = "**Fastest time**";
+const MOST_ROUNDS_WON: &str = "Most rounds won";
+const FASTEST_TIME: &str = "Fastest time";
 const NO_SERIES_WINS_YET: &str = "Nobody has won a round in this series yet.";
 const NO_SERIES_WINS: &str = "Nobody won a round in this series.";
 
@@ -229,25 +231,50 @@ fn it_was(reveal: &Reveal) -> String {
     sentence(&format!("It was {}", ship_line(reveal)))
 }
 
-pub fn series_intro(options: &RoundOptions, length: SeriesLength, remaining: u32) -> String {
-    let settings = format!(
-        "Silhouette series: {} rounds, {}.",
-        length.get(),
-        tiers_phrase(options)
-    );
-    let settings = if options.historical() {
-        format!("{settings} {HISTORICAL_SERIES}")
+pub fn series_header(options: &RoundOptions, length: SeriesLength, starter: UserId) -> String {
+    let tiers = if options.spans_several_tiers() {
+        "Tiers"
     } else {
-        settings
+        "Tier"
     };
-    format!("{settings}\n{}", series_countdown(1, length, remaining))
+    let historical = if options.historical() {
+        HISTORICAL_SERIES
+    } else {
+        ""
+    };
+    join_filled(
+        &[
+            SERIES_TITLE,
+            &format!(
+                "**{} rounds** | {tiers} **{}**",
+                length.get(),
+                tier_range(options)
+            ),
+            historical,
+            &format!("Started by <@{}>", starter.get()),
+        ],
+        "\n",
+    )
+}
+
+pub fn series_intro(
+    options: &RoundOptions,
+    length: SeriesLength,
+    starter: UserId,
+    remaining: u32,
+) -> String {
+    format!(
+        "{}\n{}",
+        series_header(options, length, starter),
+        series_countdown(1, length, remaining)
+    )
 }
 
 pub fn series_countdown(round: u32, length: SeriesLength, remaining: u32) -> String {
     let label = series_round_label(round, length);
     match remaining {
-        COUNTDOWN_SECONDS => format!("{label} starts in {remaining} seconds."),
-        remaining => format!("{label} starts in {remaining}..."),
+        COUNTDOWN_SECONDS => format!("### {label} starts in {remaining} seconds"),
+        remaining => format!("### {label} starts in {remaining}..."),
     }
 }
 
@@ -257,33 +284,43 @@ pub fn series_round_label(round: u32, length: SeriesLength) -> String {
 
 pub fn series_standings(tally: &Tally, round: u32, length: SeriesLength) -> String {
     series_summary(
-        format!("**Standings after round {round} of {}**", length.get()),
+        format!("### Standings after round {round} of {}", length.get()),
         tally,
         NO_SERIES_WINS_YET,
+        |label| format!("**{label}**"),
     )
 }
 
 pub fn series_overview(tally: &Tally, played: u32, length: SeriesLength) -> String {
     series_summary(
-        format!("**Series over after {played} of {} rounds.**", length.get()),
+        format!(
+            "{SERIES_OVER}\n**{played} of {} rounds played**",
+            length.get()
+        ),
         tally,
         NO_SERIES_WINS,
+        |label| format!("### {label}"),
     )
 }
 
 pub fn series_message(parts: &[&str]) -> String {
-    join_filled(parts, "\n\n")
+    join_filled(parts, "\n")
 }
 
-fn series_summary(heading: String, tally: &Tally, nobody: &str) -> String {
+fn series_summary(
+    heading: String,
+    tally: &Tally,
+    nobody: &str,
+    label: impl Fn(&str) -> String,
+) -> String {
     let lists = if tally.is_empty() {
         vec![nobody.to_owned()]
     } else {
-        std::iter::once(MOST_ROUNDS_WON.to_owned())
+        std::iter::once(label(MOST_ROUNDS_WON))
             .chain(series_list(&tally.by_wins(), |standing| {
                 wins(u64::from(standing.wins))
             }))
-            .chain(std::iter::once(FASTEST_TIME.to_owned()))
+            .chain(std::iter::once(label(FASTEST_TIME)))
             .chain(series_list(&tally.by_time(), |standing| {
                 seconds(standing.best)
             }))
@@ -304,7 +341,7 @@ fn series_list(
         .enumerate()
         .map(|(rank, standing)| {
             format!(
-                "{}. <@{}>: {}",
+                "**{}.** <@{}> · {}",
                 rank + 1,
                 standing.user.get(),
                 value(standing)

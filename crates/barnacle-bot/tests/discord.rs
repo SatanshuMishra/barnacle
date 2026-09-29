@@ -2,10 +2,12 @@ use barnacle_bot::attendance::Delivery;
 use barnacle_bot::discord::Data;
 use barnacle_bot::discord::Error;
 use barnacle_bot::discord::allowed_mentions;
+use barnacle_bot::discord::announcement_message;
 use barnacle_bot::discord::command_list;
 use barnacle_bot::discord::command_list_for;
 use barnacle_bot::ids::Ping;
 use barnacle_bot::ids::RoleId;
+use barnacle_bot::release_notes;
 use barnacle_bot::wiring::ping_allowance;
 use poise::serenity_prelude as serenity;
 
@@ -165,5 +167,30 @@ fn announce_is_owner_only_and_updates_setup_needs_manage_server() {
             .map(|parameter| (parameter.name.to_string(), parameter.required))
             .collect::<Vec<(String, bool)>>(),
         [("channel".to_owned(), true), ("role".to_owned(), false)]
+    );
+}
+
+#[test]
+fn an_update_post_is_a_plain_message_that_pings_only_its_role() {
+    let releases = release_notes::all().unwrap();
+    let release = release_notes::find(&releases, "0.2.0").unwrap();
+    let message = serde_json::to_value(announcement_message(
+        release,
+        Some(Ping::Role(RoleId::new(123))),
+    ))
+    .unwrap();
+    assert_eq!(message["content"], format!("<@&123>\n{}", release.render()));
+    assert!(
+        message
+            .get("embeds")
+            .is_none_or(|embeds| embeds.as_array().is_some_and(Vec::is_empty)),
+        "{message}"
+    );
+    assert_eq!(
+        message["allowed_mentions"],
+        serde_json::to_value(
+            serenity::CreateAllowedMentions::new().roles([serenity::RoleId::new(123)])
+        )
+        .unwrap()
     );
 }
