@@ -1122,6 +1122,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
+name = "home"
+version = "0.5.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc627f471c528ff0c4a49e1d5e60450c8f6461dd6d10ba9dcd3a61d3dff7728d"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "http"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3634,9 +3643,9 @@ dependencies = [
 
 [[package]]
 name = "wows-core"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a55684b388d37ad44a86f8ff0cf7be886ece6ecbb8a1a4dd85633eee7a6269c"
+checksum = "5fd93fb1339d3d6bfe94437a2b0c541c7a23de65513722759cf5ffcb869f3b0c"
 dependencies = [
  "rkyv",
  "roxmltree",
@@ -3644,11 +3653,12 @@ dependencies = [
 
 [[package]]
 name = "wows-data-mgr"
-version = "0.21.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5394581817773a4ed1583602cc939bf78cb72bd829871f7ba58393b7e7c909b"
+checksum = "71a8d75c7e851aad5f0605dd709d22e882e98c56a199e3c5596464915f23a879"
 dependencies = [
  "clap",
+ "home",
  "indicatif",
  "jiff",
  "reqwest",
@@ -3667,9 +3677,9 @@ dependencies = [
 
 [[package]]
 name = "wowsunpack"
-version = "0.45.0"
+version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "696ad63e2ddf0311ebba65c308af0b91783f1ae88ed397c6774f4b3ebc8d3792"
+checksum = "2508c5f5959e2a4810cafd00167cf8440099820961eefe4ea17c9325f33eaeb5"
 dependencies = [
  "bon",
  "convert_case",

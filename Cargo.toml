@@ -12,8 +12,8 @@ repository = "https://github.com/SatanshuMishra/barnacle"
 [workspace.dependencies]
 barnacle-catalog = { path = "crates/barnacle-catalog" }
 barnacle-guess = { path = "crates/barnacle-guess" }
-wowsunpack = { version = "=0.45.0", default-features = false, features = ["parsing", "vfs"] }
-wows-data-mgr = { version = "=0.21.0", default-features = false, features = ["download"] }
+wowsunpack = { version = "=0.46.0", default-features = false, features = ["parsing", "vfs"] }
+wows-data-mgr = { version = "=0.22.0", default-features = false, features = ["download"] }
 pickled = "=2.0.0-alpha10"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
 clap = { version = "4", features = ["derive"] }
