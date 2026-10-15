@@ -75,7 +75,7 @@ libraries it uses, such as serenity, carry no `event.name`.
 | Service | `service.started`, `service.failed`, `startup.failed`, `commands.registered` |
 | Commands | `command.completed`, `command.refused`, `command.failed` |
 | Interactions and gateway events | `interaction.refused`, `interaction.failed`, `interaction.reply_failed`, `event.failed` |
-| Clan Battle sign-ups | `signup.post.published`, `signup.post.reposted`, `signup.post.closed`, `signup.post.removed`, `signup.post.failed`, `signup.tick.completed`, `signup.tick.failed`, `signup.ping.checked`, `signup.ping.silent`, `signup.click.recorded` |
+| Clan Battle sign-ups | `signup.post.published`, `signup.post.reposted`, `signup.post.closed`, `signup.post.reopened`, `signup.post.removed`, `signup.post.failed`, `signup.tick.completed`, `signup.tick.failed`, `signup.ping.checked`, `signup.ping.silent`, `signup.click.recorded` |
 | Rehearsal | `rehearsal.clock.cleared`, `rehearsal.clock.clear_failed` |
 | Silhouette game | `guess.round.started`, `guess.round.ended`, `guess.series.started`, `guess.series.ended`, `guess.post.failed`, `guess.solve.failed` |
 | Update announcements | `updates.configured`, `updates.announced` |

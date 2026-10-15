@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
@@ -231,14 +232,15 @@ fn place(ctx: Context<'_>) -> Option<Place> {
     })
 }
 
+pub fn private_reply(content: impl Into<String>) -> poise::CreateReply {
+    poise::CreateReply::default()
+        .content(content)
+        .allowed_mentions(serenity::CreateAllowedMentions::new())
+        .ephemeral(true)
+}
+
 async fn private(ctx: Context<'_>, content: impl Into<String>) -> Result<(), Error> {
-    ctx.send(
-        poise::CreateReply::default()
-            .content(content)
-            .allowed_mentions(serenity::CreateAllowedMentions::new())
-            .ephemeral(true),
-    )
-    .await?;
+    ctx.send(private_reply(content)).await?;
     Ok(())
 }
 
@@ -918,20 +920,20 @@ async fn open_panel(ctx: Context<'_>, draft: Draft) -> Result<(), Error> {
     let panel = ctx.id();
     let view = draft.panel(panel, super::now_unix());
     ctx.data().drafts.open(panel, draft, now_ms);
-    ctx.send(
-        poise::CreateReply::default()
-            .content(view.content)
-            .components(view.components)
-            .allowed_mentions(serenity::CreateAllowedMentions::new())
-            .ephemeral(true),
-    )
-    .await?;
+    ctx.send(event_draft::panel_reply(view)).await?;
     Ok(())
 }
 
 fn found_channel(ctx: Context<'_>, channel: serenity::ChannelId) -> Option<FoundChannel> {
     let guild = ctx.guild()?;
-    let held = guild.channels.get(&channel)?;
+    cached_event_channel(&guild.channels, channel)
+}
+
+pub fn cached_event_channel(
+    channels: &HashMap<serenity::ChannelId, serenity::GuildChannel>,
+    channel: serenity::ChannelId,
+) -> Option<FoundChannel> {
+    let held = channels.get(&channel)?;
     Some(FoundChannel {
         guild: GuildId::new(held.guild_id.get()),
         id: ChannelId::new(held.id.get()),
@@ -1241,14 +1243,19 @@ async fn event_list(ctx: Context<'_>) -> Result<(), Error> {
     };
     let now_unix = super::now_unix();
     let events = ctx.data().signups.store().events_in(place.guild).await?;
-    let lines: Vec<String> = listed_events(&events, now_unix)
+    ctx.send(event_list_reply(&events, now_unix)).await?;
+    Ok(())
+}
+
+pub fn event_list_reply(events: &[Event], now_unix: i64) -> poise::CreateReply {
+    let lines: Vec<String> = listed_events(events, now_unix)
         .into_iter()
         .map(|event| text::event_line(event, now_unix))
         .collect();
     if lines.is_empty() {
-        return private(ctx, text::NO_EVENT_HERE).await;
+        return private_reply(text::NO_EVENT_HERE);
     }
-    private(ctx, text::event_list(&lines)).await
+    private_reply(text::event_list(&lines))
 }
 
 #[poise::command(

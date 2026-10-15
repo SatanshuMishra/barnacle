@@ -323,6 +323,10 @@ impl Session {
         self.start_unix - POST_LEAD_SECONDS
     }
 
+    pub fn close_unix(self) -> i64 {
+        self.start_unix
+    }
+
     pub fn remove_at_unix(self) -> i64 {
         self.end_unix() + REMOVE_AFTER_END_SECONDS
     }

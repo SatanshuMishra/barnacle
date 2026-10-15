@@ -81,7 +81,7 @@ fn a_denver_session_in_daylight_time_starts_at_its_local_time() {
     assert_eq!(session.start_unix(), 1_792_018_800);
     assert_eq!(session.end_unix(), 1_792_033_200);
     assert_eq!(session.post_at_unix(), 1_791_932_400);
-    assert_eq!(session.start_unix(), 1_792_018_800, "sign-ups close");
+    assert_eq!(session.close_unix(), 1_792_018_800);
     assert_eq!(session.remove_at_unix(), 1_792_035_000);
 }
 

@@ -1,3 +1,5 @@
+mod common;
+
 use barnacle_bot::attendance::Delivery;
 use barnacle_bot::attendance::HourTally;
 use barnacle_bot::attendance::SignupView;
@@ -15,6 +17,7 @@ use barnacle_bot::release_notes;
 use barnacle_bot::schedule::Hour;
 use barnacle_bot::schedule::Hours;
 use barnacle_bot::schedule::Schedule;
+use barnacle_bot::schedule::Span;
 use barnacle_bot::schedule::StartTime;
 use barnacle_bot::schedule::Weekdays;
 use barnacle_bot::schedule::Zone;
@@ -173,9 +176,51 @@ fn menu_reply(attending: &[u8]) -> serde_json::Value {
     serde_json::to_value(hours_menu_reply(&denver_six_hours(), &hour_list(attending))).unwrap()
 }
 
-#[test]
-fn the_hours_menu_starts_from_the_members_hours() {
-    let reply = menu_reply(&[2, 3, 7]);
+fn denver_six_hour_day() -> Span {
+    Span::new(
+        parse_day("2026-10-14").unwrap(),
+        parse_day("2026-10-14").unwrap(),
+        Schedule::new(
+            Weekdays::new(&[jiff::civil::Weekday::Wednesday]).unwrap(),
+            StartTime::parse("17:00").unwrap(),
+            Zone::find("America/Denver").unwrap(),
+            Hours::new(6).unwrap(),
+        ),
+    )
+    .unwrap()
+}
+
+fn menu_options(reply: &serde_json::Value) -> Vec<(String, String, bool)> {
+    reply["components"][0]["components"][0]["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|option| {
+            (
+                option["label"].as_str().unwrap().to_owned(),
+                option["value"].as_str().unwrap().to_owned(),
+                option["default"].as_bool().unwrap_or(false),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn the_hours_menu_starts_from_the_members_hours() {
+    let reply = common::hours_menu_json(
+        denver_six_hour_day(),
+        &[
+            (200, 1, false),
+            (200, 2, true),
+            (200, 3, true),
+            (200, 4, false),
+            (200, 7, true),
+            (300, 5, true),
+        ],
+        200,
+        1_791_932_400,
+    )
+    .await;
     let content = reply["content"].as_str().unwrap();
     for (number, start, end) in [
         (1, 1_792_018_800, 1_792_022_400),
@@ -198,20 +243,8 @@ fn the_hours_menu_starts_from_the_members_hours() {
     assert_eq!(menu["custom_id"], "barnacle-cb-hours:1:2026-10-14");
     assert_eq!(menu["min_values"], 0);
     assert_eq!(menu["max_values"], 6);
-    let options: Vec<(String, String, bool)> = menu["options"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|option| {
-            (
-                option["label"].as_str().unwrap().to_owned(),
-                option["value"].as_str().unwrap().to_owned(),
-                option["default"].as_bool().unwrap_or(false),
-            )
-        })
-        .collect();
     assert_eq!(
-        options,
+        menu_options(&reply),
         [
             ("Hour 1".to_owned(), "1".to_owned(), false),
             ("Hour 2".to_owned(), "2".to_owned(), true),
@@ -223,19 +256,32 @@ fn the_hours_menu_starts_from_the_members_hours() {
     );
 }
 
-#[test]
-fn a_fresh_hours_menu_selects_nothing() {
-    let reply = menu_reply(&[]);
-    let options = reply["components"][0]["components"][0]["options"]
-        .as_array()
-        .unwrap()
-        .clone();
-    assert_eq!(options.len(), 6);
-    assert!(
-        options
-            .iter()
-            .all(|option| !option["default"].as_bool().unwrap_or(false)),
-        "{options:?}"
+#[tokio::test]
+async fn a_fresh_hours_menu_selects_nothing() {
+    let reply = common::hours_menu_json(
+        denver_six_hour_day(),
+        &[
+            (200, 1, false),
+            (200, 2, false),
+            (200, 3, false),
+            (200, 4, false),
+            (200, 5, false),
+            (200, 6, false),
+        ],
+        200,
+        1_791_932_400,
+    )
+    .await;
+    assert_eq!(
+        menu_options(&reply),
+        [
+            ("Hour 1".to_owned(), "1".to_owned(), false),
+            ("Hour 2".to_owned(), "2".to_owned(), false),
+            ("Hour 3".to_owned(), "3".to_owned(), false),
+            ("Hour 4".to_owned(), "4".to_owned(), false),
+            ("Hour 5".to_owned(), "5".to_owned(), false),
+            ("Hour 6".to_owned(), "6".to_owned(), false),
+        ]
     );
 }
 

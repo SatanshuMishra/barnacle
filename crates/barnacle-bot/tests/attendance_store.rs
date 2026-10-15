@@ -25,7 +25,10 @@ use barnacle_bot::schedule::parse_day;
 use barnacle_guess::Snowflake;
 use barnacle_guess::UserId;
 use common::attendance_pool;
+use common::event_state;
+use common::every_answer;
 use common::memory_pool;
+use common::posts_and_answers;
 use common::run_script;
 use common::seasons_pool;
 use jiff::civil::Date;
@@ -1622,6 +1625,8 @@ async fn the_0008_rollback_restores_seasons() {
         )
         .await
         .unwrap();
+    let season_before = posts_and_answers(&pool, 1).await;
+    let seven_days_before = posts_and_answers(&pool, seven_days.id).await;
     run_script(&pool, common::CB_EVENTS_DOWN).await.unwrap();
     assert_eq!(table_columns(&pool, "cb_seasons").await, SEASONS_AT_0007);
     let rows: Vec<(i64, i64, Option<String>, i64)> =
@@ -1642,10 +1647,11 @@ async fn the_0008_rollback_restores_seasons() {
             .await
             .unwrap();
     assert_eq!(roles, vec![(1, 4242), (seven_days.id, 4343)]);
-    assert_eq!(counted(&pool, POSTS_OF_EVENT, 1).await, 1);
-    assert_eq!(counted(&pool, POSTS_OF_EVENT, seven_days.id).await, 1);
-    assert_eq!(counted(&pool, MARKS_OF_EVENT, 1).await, 4);
-    assert_eq!(counted(&pool, MARKS_OF_EVENT, seven_days.id).await, 4);
+    assert_eq!(posts_and_answers(&pool, 1).await, season_before);
+    assert_eq!(
+        posts_and_answers(&pool, seven_days.id).await,
+        seven_days_before
+    );
     let ledger: Vec<String> = sqlx::query_scalar("SELECT name FROM schema_migrations")
         .fetch_all(&pool)
         .await
@@ -1675,8 +1681,12 @@ async fn the_0008_rollback_refuses_what_0007_cannot_hold() {
         },
     )
     .await;
+    let denver_before = event_state(&pool, denver.id).await;
+    let answers_before = every_answer(&pool).await;
     assert!(run_script(&pool, common::CB_EVENTS_DOWN).await.is_err());
     rolled_back(&pool).await;
+    assert_eq!(event_state(&pool, denver.id).await, denver_before);
+    assert_eq!(every_answer(&pool).await, answers_before);
     assert_eq!(store.event(denver.id).await.unwrap(), Some(denver));
     assert!(
         table_columns(&pool, "cb_seasons")
@@ -1720,10 +1730,13 @@ async fn the_0008_rollback_refuses_what_0007_cannot_hold() {
         )
         .await
         .unwrap();
+    let long_before = event_state(&pool, long.id).await;
+    let answers_before = every_answer(&pool).await;
     assert!(run_script(&pool, common::CB_EVENTS_DOWN).await.is_err());
     rolled_back(&pool).await;
+    assert_eq!(event_state(&pool, long.id).await, long_before);
+    assert_eq!(every_answer(&pool).await, answers_before);
     assert_eq!(store.event(long.id).await.unwrap(), Some(with_posts(&long)));
-    assert_eq!(counted(&pool, MARKS_OF_EVENT, long.id).await, 6);
 }
 
 #[tokio::test]
@@ -1897,7 +1910,20 @@ async fn saving_an_edit_of_an_ended_event_is_refused() {
         .record_post(event.id, day("2026-10-14"), Snowflake::new(7), CREATED_AT)
         .await
         .unwrap();
+    store
+        .mark(
+            event.id,
+            day("2026-10-14"),
+            AKI,
+            &[hour(1)],
+            hours(4),
+            true,
+            CREATED_AT,
+        )
+        .await
+        .unwrap();
     store.end_event(GUILD, event.id, ENDED_AT).await.unwrap();
+    let before = event_state(&pool, event.id).await;
     let renamed = EventChange {
         name: Some("Ranked Finals".to_owned()),
         ..EventChange::default()
@@ -1906,6 +1932,7 @@ async fn saving_an_edit_of_an_ended_event_is_refused() {
         edited(&store, event.id, CREATED_AT, &renamed).await,
         EditOutcome::NotFound
     );
+    assert_eq!(event_state(&pool, event.id).await, before);
     assert_eq!(name_of(&pool, event.id).await, "Ranked Sprint");
     assert_eq!(
         ended_at(&pool, event.id).await,

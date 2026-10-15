@@ -80,6 +80,22 @@ fn signup_button(
     .disabled(!view.open)
 }
 
+pub fn signup_message(view: &SignupView, delivery: Delivery) -> serenity::CreateMessage {
+    serenity::CreateMessage::new()
+        .content(wiring::ping_content(&view.pings))
+        .embed(signup_embed(view))
+        .components(signup_rows(view))
+        .allowed_mentions(ping_mentions(delivery, view))
+}
+
+pub fn signup_edit(view: &SignupView) -> serenity::EditMessage {
+    serenity::EditMessage::new()
+        .content(wiring::ping_content(&view.pings))
+        .embed(signup_embed(view))
+        .components(signup_rows(view))
+        .allowed_mentions(ping_mentions(Delivery::Redraw, view))
+}
+
 pub fn signup_rows(view: &SignupView) -> Vec<serenity::CreateActionRow> {
     let hours = view.session.hours();
     let choose = (!text::short_event(hours)).then(|| {
@@ -204,13 +220,8 @@ impl Board for DiscordBoard {
         view: &SignupView,
         delivery: Delivery,
     ) -> Result<Sent, BoardError> {
-        let message = serenity::CreateMessage::new()
-            .content(wiring::ping_content(&view.pings))
-            .embed(signup_embed(view))
-            .components(signup_rows(view))
-            .allowed_mentions(ping_mentions(delivery, view));
         let posted = channel_id(channel)?
-            .send_message(&self.http, message)
+            .send_message(&self.http, signup_message(view, delivery))
             .await
             .map_err(failed)?;
         let mentioned: Vec<RoleId> = posted
@@ -249,13 +260,8 @@ impl Board for DiscordBoard {
         message: Snowflake,
         view: &SignupView,
     ) -> Result<(), BoardError> {
-        let edit = serenity::EditMessage::new()
-            .content(wiring::ping_content(&view.pings))
-            .embed(signup_embed(view))
-            .components(signup_rows(view))
-            .allowed_mentions(ping_mentions(Delivery::Redraw, view));
         channel_id(channel)?
-            .edit_message(&self.http, message_id(message)?, edit)
+            .edit_message(&self.http, message_id(message)?, signup_edit(view))
             .await
             .map_err(failed)?;
         Ok(())

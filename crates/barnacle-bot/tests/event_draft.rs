@@ -1,10 +1,14 @@
 mod common;
 
+use std::sync::Arc;
+
 use barnacle_bot::attendance::PostsReport;
+use barnacle_bot::attendance::Signups;
 use barnacle_bot::attendance_store::Attendance;
 use barnacle_bot::attendance_store::CreateOutcome;
 use barnacle_bot::attendance_store::Event;
 use barnacle_bot::attendance_store::EventChange;
+use barnacle_bot::attendance_store::NewEvent;
 use barnacle_bot::event_draft;
 use barnacle_bot::event_draft::CreateOptions;
 use barnacle_bot::event_draft::Draft;
@@ -12,6 +16,7 @@ use barnacle_bot::event_draft::Drafts;
 use barnacle_bot::event_draft::EditOptions;
 use barnacle_bot::event_draft::PanelView;
 use barnacle_bot::event_draft::Ready;
+use barnacle_bot::event_draft::SaveAnswer;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::Ping;
@@ -28,9 +33,13 @@ use barnacle_bot::text;
 use barnacle_bot::text::Refusal;
 use barnacle_bot::wiring::PingVerdict;
 use barnacle_guess::UserId;
+use common::FIRST_ZONES;
 use common::attendance_pool;
+use common::date_run;
+use common::fakes::FakeBoard;
 use jiff::civil::Date;
 use jiff::civil::Weekday;
+use poise::serenity_prelude as serenity;
 
 const SERVER: GuildId = GuildId::new(1);
 const CHANNEL: ChannelId = ChannelId::new(10);
@@ -38,6 +47,7 @@ const ADMIN: UserId = UserId::new(100);
 const OTHER_ADMIN: UserId = UserId::new(200);
 const PANEL: u64 = 7;
 const BEFORE_THE_SESSIONS: i64 = 1_791_900_000;
+const OPENED_AT_MS: u64 = 1_791_900_000_000;
 const AFTER_THE_ONE_START: i64 = 1_792_030_000;
 
 fn day(text: &str) -> Date {
@@ -140,7 +150,19 @@ fn rows(view: &PanelView) -> Vec<serde_json::Value> {
 }
 
 fn picked_days(view: &PanelView) -> Vec<String> {
-    rows(view)[0]["components"][0]["options"]
+    days_picked(&rows(view))
+}
+
+fn picked_roles(view: &PanelView) -> Vec<u64> {
+    roles_picked(&rows(view))
+}
+
+fn button_labels(view: &PanelView) -> Vec<String> {
+    labels_of(&rows(view))
+}
+
+fn days_picked(rows: &[serde_json::Value]) -> Vec<String> {
+    rows[0]["components"][0]["options"]
         .as_array()
         .unwrap()
         .iter()
@@ -149,8 +171,8 @@ fn picked_days(view: &PanelView) -> Vec<String> {
         .collect()
 }
 
-fn picked_roles(view: &PanelView) -> Vec<u64> {
-    rows(view)[1]["components"][0]["default_values"]
+fn roles_picked(rows: &[serde_json::Value]) -> Vec<u64> {
+    rows[1]["components"][0]["default_values"]
         .as_array()
         .map(|values| {
             values
@@ -161,13 +183,44 @@ fn picked_roles(view: &PanelView) -> Vec<u64> {
         .unwrap_or_default()
 }
 
-fn button_labels(view: &PanelView) -> Vec<String> {
-    rows(view)[2]["components"]
+fn labels_of(rows: &[serde_json::Value]) -> Vec<String> {
+    rows[2]["components"]
         .as_array()
         .unwrap()
         .iter()
         .map(|button| button["label"].as_str().unwrap().to_owned())
         .collect()
+}
+
+fn opened(draft: Draft, now_ms: u64) -> Drafts {
+    let drafts = Drafts::default();
+    drafts.open(PANEL, draft, now_ms);
+    drafts
+}
+
+fn stored(drafts: &Drafts) -> Draft {
+    drafts.with(PANEL, ADMIN, OPENED_AT_MS).unwrap()
+}
+
+async fn empty_signups() -> (Arc<Signups<FakeBoard>>, Attendance) {
+    let store = Attendance::with_pool(attendance_pool().await)
+        .await
+        .unwrap();
+    (Signups::new(FakeBoard::new(), store.clone()), store)
+}
+
+fn no_pings(_draft: &Draft) -> Vec<(Ping, PingVerdict)> {
+    Vec::new()
+}
+
+fn judged_as(verdict: PingVerdict) -> impl FnOnce(&Draft) -> Vec<(Ping, PingVerdict)> {
+    move |draft: &Draft| {
+        draft
+            .pings()
+            .into_iter()
+            .map(|ping| (ping, verdict))
+            .collect()
+    }
 }
 
 fn accepted(name: &str) -> bool {
@@ -236,14 +289,21 @@ fn typing_part_of_a_place_suggests_it() {
 
 #[test]
 fn an_empty_query_puts_the_server_zones_first() {
-    let suggested = event_draft::zone_suggestions("", &["America/Denver".to_owned()]);
-    assert_eq!(suggested.len(), 25);
-    assert_eq!(suggested[0], "America/Denver");
-    assert_eq!(suggested[1], "Africa/Abidjan");
-    let rest = &suggested[1..];
-    assert!(in_order(rest), "{rest:?}");
-    assert!(rest.iter().all(|name| accepted(name)), "{rest:?}");
-    assert!(!rest.contains(&"America/Denver".to_owned()));
+    let sprint = event(
+        4,
+        "Ranked Sprint",
+        wednesdays("2026-10-14", "2026-10-18", "America/Denver"),
+        1_791_800_000_000,
+    );
+    let zones = event_draft::server_zones(&[sprint], 1_791_900_000);
+    let suggested = event_draft::zone_suggestions("", &zones);
+    let expected: Vec<String> = std::iter::once("America/Denver")
+        .chain(FIRST_ZONES[..24].iter().copied())
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(expected.len(), 25);
+    assert_eq!(expected[1], "Africa/Abidjan");
+    assert_eq!(suggested, expected);
 }
 
 #[test]
@@ -362,11 +422,9 @@ async fn a_failed_read_still_suggests_zones() {
     let store = Attendance::with_pool(pool).await.unwrap();
     let read = store.events_in(SERVER).await;
     assert!(read.is_err());
-    let suggested = event_draft::zone_choices("", read, BEFORE_THE_SESSIONS);
-    assert_eq!(suggested.len(), 25);
-    assert_eq!(suggested[0], "Africa/Abidjan");
-    assert!(in_order(&suggested), "{suggested:?}");
-    assert!(suggested.iter().all(|name| accepted(name)), "{suggested:?}");
+    let suggested = event_draft::zone_choices("", read, 1_791_900_000);
+    assert_eq!(FIRST_ZONES[0], "Africa/Abidjan");
+    assert_eq!(suggested, FIRST_ZONES.map(str::to_owned));
 }
 
 #[test]
@@ -446,6 +504,13 @@ fn an_empty_or_overlong_name_is_refused() {
 #[test]
 fn no_panel_text_says_night_or_season() {
     let created = create(&denver_options("2026-10-14", "2026-10-28")).unwrap();
+    let cancelled = event_draft::cancel_pressed(
+        &opened(created.clone(), OPENED_AT_MS),
+        PANEL,
+        ADMIN,
+        OPENED_AT_MS,
+    )
+    .unwrap();
     let sprint = denver_sprint();
     let edited = Draft::edit(
         &sprint,
@@ -483,7 +548,7 @@ fn no_panel_text_says_night_or_season() {
                 failures: 1,
             },
         ),
-        text::PANEL_CANCELLED.to_owned(),
+        cancelled,
         text::CREATE_LABEL.to_owned(),
         text::SAVE_LABEL.to_owned(),
         text::WEEKDAYS_PLACEHOLDER.to_owned(),
@@ -491,21 +556,11 @@ fn no_panel_text_says_night_or_season() {
         text::everyone_label(true).to_owned(),
         text::everyone_label(false).to_owned(),
     ];
-    let refusals = [
-        Refusal::TemplateUnknown,
-        Refusal::MissingOptions(vec!["start", "hours", "time_zone"]),
-        Refusal::MissingOptions(vec!["hours"]),
-        Refusal::StartFormat,
-        Refusal::HoursOutOfRange,
-        Refusal::ZoneUnknown,
-        Refusal::WeekdaysInvalid,
-        Refusal::TooManyRoles,
-        Refusal::PanelUnknown,
-        Refusal::PanelNotYours,
-        Refusal::PanelExpired,
-        Refusal::ChannelUnknown,
-    ]
-    .map(|refusal| refusal.message());
+    let refusals: Vec<String> = common::every_refusal()
+        .iter()
+        .map(Refusal::message)
+        .collect();
+    assert_eq!(refusals.len(), 40);
     for text in texts.iter().chain(refusals.iter()) {
         assert!(!says_night_or_season(text), "{text}");
     }
@@ -692,20 +747,31 @@ fn suggested_dates(typed: &str) -> Vec<(String, String)> {
 #[test]
 fn an_empty_date_query_suggests_the_next_25_days() {
     let suggested = suggested_dates("");
-    assert_eq!(suggested.len(), 25);
+    let expected = date_run("2026-10-12");
     assert_eq!(
-        suggested[0],
+        expected[0],
         ("2026-10-12 (Monday)".to_owned(), "2026-10-12".to_owned())
     );
-    assert_eq!(suggested[24].1, "2026-11-05");
+    assert_eq!(
+        expected[24],
+        ("2026-11-05 (Thursday)".to_owned(), "2026-11-05".to_owned())
+    );
+    assert_eq!(suggested, expected);
 }
 
 #[test]
 fn a_month_query_suggests_that_month() {
     let suggested = suggested_dates("2026-12");
-    assert_eq!(suggested.len(), 25);
-    assert_eq!(suggested[0].1, "2026-12-01");
-    assert_eq!(suggested[24].1, "2026-12-25");
+    let expected = date_run("2026-12-01");
+    assert_eq!(
+        expected[0],
+        ("2026-12-01 (Tuesday)".to_owned(), "2026-12-01".to_owned())
+    );
+    assert_eq!(
+        expected[24],
+        ("2026-12-25 (Friday)".to_owned(), "2026-12-25".to_owned())
+    );
+    assert_eq!(suggested, expected);
 }
 
 #[test]
@@ -733,15 +799,21 @@ fn yesterdays_utc_date_is_suggested() {
 
 #[test]
 fn the_panel_previews_the_event() {
-    let view = season_36().panel(PANEL, BEFORE_THE_SESSIONS);
-    assert!(view.content.contains("Season 36"), "{}", view.content);
-    assert!(
-        view.content.contains("<t:1792020600:F>"),
-        "{}",
-        view.content
+    let reply = serde_json::to_value(
+        event_draft::panel_reply(season_36().panel(PANEL, BEFORE_THE_SESSIONS))
+            .to_slash_initial_response(serenity::CreateInteractionResponseMessage::new()),
+    )
+    .unwrap();
+    assert_eq!(reply["flags"], 64);
+    assert_eq!(
+        reply["allowed_mentions"],
+        serde_json::to_value(serenity::CreateAllowedMentions::new()).unwrap()
     );
-    assert!(view.content.contains("4 sessions"), "{}", view.content);
-    let rows = rows(&view);
+    let content = reply["content"].as_str().unwrap();
+    assert!(content.contains("Season 36"), "{content}");
+    assert!(content.contains("<t:1792020600:F>"), "{content}");
+    assert!(content.contains("4 sessions"), "{content}");
+    let rows = reply["components"].as_array().unwrap().clone();
     assert_eq!(rows.len(), 3);
     let days = &rows[0]["components"][0];
     assert_eq!(days["custom_id"], "barnacle-event:7:days");
@@ -764,15 +836,15 @@ fn the_panel_previews_the_event() {
             "Sunday"
         ]
     );
-    assert_eq!(picked_days(&view), ["wed", "thu", "sat", "sun"]);
+    assert_eq!(days_picked(&rows), ["wed", "thu", "sat", "sun"]);
     let roles = &rows[1]["components"][0];
     assert_eq!(roles["custom_id"], "barnacle-event:7:roles");
     assert_eq!(roles["type"], 6);
     assert_eq!(roles["min_values"], 0);
     assert_eq!(roles["max_values"], 5);
-    assert!(picked_roles(&view).is_empty());
+    assert!(roles_picked(&rows).is_empty());
     assert_eq!(
-        button_labels(&view),
+        labels_of(&rows),
         ["Create", "Ping @everyone: off", "Cancel"]
     );
     assert_eq!(
@@ -804,204 +876,306 @@ fn picking_weekdays_redraws_the_preview() {
     let every_day: Vec<String> = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
         .map(str::to_owned)
         .to_vec();
-    let view = season_36()
-        .with_weekdays(&every_day)
-        .unwrap()
-        .panel(PANEL, BEFORE_THE_SESSIONS);
+    let drafts = opened(season_36(), OPENED_AT_MS);
+    let view =
+        event_draft::weekdays_picked(&drafts, PANEL, ADMIN, &every_day, OPENED_AT_MS).unwrap();
     assert!(view.content.contains("5 sessions"), "{}", view.content);
     assert_eq!(
         picked_days(&view),
         ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
     );
+    assert_eq!(
+        stored(&drafts).span().schedule().weekdays(),
+        Weekdays::EVERY_DAY
+    );
 }
 
 #[test]
 fn picking_no_or_unknown_weekdays_is_refused() {
-    let draft = season_36();
-    assert_eq!(draft.with_weekdays(&[]), Err(Refusal::WeekdaysInvalid));
+    let drafts = opened(season_36(), OPENED_AT_MS);
     assert_eq!(
-        draft.with_weekdays(&["funday".to_owned()]),
-        Err(Refusal::WeekdaysInvalid)
+        event_draft::weekdays_picked(&drafts, PANEL, ADMIN, &[], OPENED_AT_MS).err(),
+        Some(Refusal::WeekdaysInvalid)
     );
-    assert_eq!(draft, season_36());
+    assert_eq!(
+        event_draft::weekdays_picked(&drafts, PANEL, ADMIN, &["funday".to_owned()], OPENED_AT_MS)
+            .err(),
+        Some(Refusal::WeekdaysInvalid)
+    );
+    assert_eq!(stored(&drafts), season_36());
 }
 
 #[test]
 fn picking_roles_sets_the_pings() {
-    let draft = season_36();
-    assert!(draft.with_roles(&[]).unwrap().pings().is_empty());
+    let drafts = opened(season_36(), OPENED_AT_MS);
+    event_draft::roles_picked(&drafts, PANEL, ADMIN, &[], OPENED_AT_MS).unwrap();
+    assert!(stored(&drafts).pings().is_empty());
+    event_draft::roles_picked(
+        &drafts,
+        PANEL,
+        ADMIN,
+        &[RoleId::new(11), RoleId::new(12)],
+        OPENED_AT_MS,
+    )
+    .unwrap();
     assert_eq!(
-        draft
-            .with_roles(&[RoleId::new(11), RoleId::new(12)])
-            .unwrap()
-            .pings(),
+        stored(&drafts).pings(),
         vec![Ping::Role(RoleId::new(11)), Ping::Role(RoleId::new(12))]
     );
-    let everyone = draft.with_roles(&[RoleId::new(1)]).unwrap();
-    assert_eq!(everyone.pings(), vec![Ping::Everyone]);
-    let view = everyone.panel(PANEL, BEFORE_THE_SESSIONS);
+    let view =
+        event_draft::roles_picked(&drafts, PANEL, ADMIN, &[RoleId::new(1)], OPENED_AT_MS).unwrap();
+    assert_eq!(stored(&drafts).pings(), vec![Ping::Everyone]);
     assert!(picked_roles(&view).is_empty());
     assert_eq!(button_labels(&view)[1], "Ping @everyone: on");
 }
 
 #[test]
 fn picking_everyone_with_roles_or_six_roles_is_refused() {
-    let draft = season_36();
+    let drafts = opened(season_36(), OPENED_AT_MS);
     assert_eq!(
-        draft.with_roles(&[RoleId::new(1), RoleId::new(11)]),
-        Err(Refusal::PingMixesEveryone)
+        event_draft::roles_picked(
+            &drafts,
+            PANEL,
+            ADMIN,
+            &[RoleId::new(1), RoleId::new(11)],
+            OPENED_AT_MS
+        )
+        .err(),
+        Some(Refusal::PingMixesEveryone)
     );
     assert_eq!(
-        draft.with_roles(&[
-            RoleId::new(11),
-            RoleId::new(12),
-            RoleId::new(13),
-            RoleId::new(14),
-            RoleId::new(15),
-            RoleId::new(16),
-        ]),
-        Err(Refusal::TooManyRoles)
+        event_draft::roles_picked(
+            &drafts,
+            PANEL,
+            ADMIN,
+            &[
+                RoleId::new(11),
+                RoleId::new(12),
+                RoleId::new(13),
+                RoleId::new(14),
+                RoleId::new(15),
+                RoleId::new(16),
+            ],
+            OPENED_AT_MS
+        )
+        .err(),
+        Some(Refusal::TooManyRoles)
     );
-    assert_eq!(draft, season_36());
+    assert_eq!(stored(&drafts), season_36());
 }
 
 #[test]
 fn the_everyone_button_turns_everyone_on_and_off() {
-    let draft = season_36();
-    let on = draft.with_everyone().unwrap();
-    assert!(on.everyone());
-    assert!(
-        on.panel(PANEL, BEFORE_THE_SESSIONS)
-            .content
-            .contains("Pings @everyone.")
+    let drafts = opened(season_36(), OPENED_AT_MS);
+    let on = event_draft::everyone_pressed(&drafts, PANEL, ADMIN, OPENED_AT_MS).unwrap();
+    assert!(stored(&drafts).everyone());
+    assert!(on.content.contains("Pings @everyone."), "{}", on.content);
+    assert_eq!(button_labels(&on)[1], "Ping @everyone: on");
+    let off = event_draft::everyone_pressed(&drafts, PANEL, ADMIN, OPENED_AT_MS).unwrap();
+    assert!(!stored(&drafts).everyone());
+    assert_eq!(button_labels(&off)[1], "Ping @everyone: off");
+    event_draft::roles_picked(&drafts, PANEL, ADMIN, &[RoleId::new(11)], OPENED_AT_MS).unwrap();
+    assert_eq!(
+        event_draft::everyone_pressed(&drafts, PANEL, ADMIN, OPENED_AT_MS).err(),
+        Some(Refusal::PingMixesEveryone)
     );
-    let off = on.with_everyone().unwrap();
-    assert!(!off.everyone());
-    let roled = off.with_roles(&[RoleId::new(11)]).unwrap();
-    assert_eq!(roled.with_everyone(), Err(Refusal::PingMixesEveryone));
+    let roled = stored(&drafts);
     assert_eq!(roled.roles(), [RoleId::new(11)]);
     assert!(!roled.everyone());
-    let alone = roled.with_roles(&[]).unwrap().with_everyone().unwrap();
+    event_draft::roles_picked(&drafts, PANEL, ADMIN, &[], OPENED_AT_MS).unwrap();
+    event_draft::everyone_pressed(&drafts, PANEL, ADMIN, OPENED_AT_MS).unwrap();
     assert_eq!(
-        alone.with_roles(&[RoleId::new(11)]),
-        Err(Refusal::PingMixesEveryone)
+        event_draft::roles_picked(&drafts, PANEL, ADMIN, &[RoleId::new(11)], OPENED_AT_MS).err(),
+        Some(Refusal::PingMixesEveryone)
     );
+    let alone = stored(&drafts);
     assert!(alone.everyone());
     assert!(alone.roles().is_empty());
 }
 
-#[test]
-fn a_panel_belongs_to_its_admin_for_15_minutes() {
-    let drafts = Drafts::default();
-    drafts.open(PANEL, season_36(), 1_791_900_000_000);
+#[tokio::test]
+async fn a_panel_belongs_to_its_admin_for_15_minutes() {
+    let (signups, store) = empty_signups().await;
+    let drafts = opened(season_36(), 1_791_900_000_000);
     assert_eq!(
-        drafts.with(PANEL, OTHER_ADMIN, 1_791_900_001_000),
-        Err(Refusal::PanelNotYours)
+        event_draft::save_pressed(
+            &drafts,
+            PANEL,
+            OTHER_ADMIN,
+            &signups,
+            no_pings,
+            1_791_900_001_000
+        )
+        .await,
+        SaveAnswer::Refused(Refusal::PanelNotYours)
     );
     assert_eq!(
-        drafts.with(PANEL, ADMIN, 1_791_900_900_001),
-        Err(Refusal::PanelExpired)
+        event_draft::save_pressed(&drafts, PANEL, ADMIN, &signups, no_pings, 1_791_900_900_001)
+            .await,
+        SaveAnswer::Refused(Refusal::PanelExpired)
     );
     assert_eq!(
-        drafts.take(PANEL, ADMIN, 1_791_900_900_001),
-        Err(Refusal::PanelExpired)
+        event_draft::save_pressed(&drafts, 8, ADMIN, &signups, no_pings, 1_791_900_001_000).await,
+        SaveAnswer::Refused(Refusal::PanelUnknown)
     );
-    assert_eq!(
-        drafts.with(8, ADMIN, 1_791_900_001_000),
-        Err(Refusal::PanelUnknown)
-    );
-    assert_eq!(
-        drafts.take(8, ADMIN, 1_791_900_001_000),
-        Err(Refusal::PanelUnknown)
-    );
+    assert!(store.events_in(SERVER).await.unwrap().is_empty());
 }
 
-#[test]
-fn cancel_discards_the_draft() {
-    let drafts = Drafts::default();
-    drafts.open(PANEL, season_36(), 1_791_900_000_000);
+#[tokio::test]
+async fn cancel_discards_the_draft() {
+    let (signups, store) = empty_signups().await;
+    let drafts = opened(season_36(), 1_791_900_000_000);
     assert_eq!(
-        drafts.take(PANEL, ADMIN, 1_791_900_001_000),
-        Ok(season_36())
+        event_draft::cancel_pressed(&drafts, PANEL, ADMIN, 1_791_900_001_000),
+        Ok("Cancelled. Nothing was saved.".to_owned())
     );
     assert_eq!(
         drafts.with(PANEL, ADMIN, 1_791_900_002_000),
         Err(Refusal::PanelUnknown)
     );
+    assert_eq!(
+        event_draft::save_pressed(&drafts, PANEL, ADMIN, &signups, no_pings, 1_791_900_002_000)
+            .await,
+        SaveAnswer::Refused(Refusal::PanelUnknown)
+    );
+    assert!(store.events_in(SERVER).await.unwrap().is_empty());
 }
 
-#[test]
-fn create_checks_the_draft_again() {
+#[tokio::test]
+async fn create_checks_the_draft_again() {
     let draft = season_36().with_roles(&[RoleId::new(11)]).unwrap();
     let role = Ping::Role(RoleId::new(11));
+
+    let (signups, store) = empty_signups().await;
+    let drafts = opened(draft.clone(), 1_792_366_201_000);
     assert_eq!(
-        draft.ready(1_792_366_201, &[]),
-        Err(Refusal::NoSessionsLeft)
+        event_draft::save_pressed(
+            &drafts,
+            PANEL,
+            ADMIN,
+            &signups,
+            judged_as(PingVerdict::Sounds),
+            1_792_366_201_000
+        )
+        .await,
+        SaveAnswer::Refused(Refusal::NoSessionsLeft)
     );
+    assert!(store.events_in(SERVER).await.unwrap().is_empty());
+    assert!(drafts.with(PANEL, ADMIN, 1_792_366_201_000).is_ok());
+
+    let (signups, store) = empty_signups().await;
+    let drafts = opened(draft.clone(), OPENED_AT_MS);
     assert_eq!(
-        draft.ready(
-            BEFORE_THE_SESSIONS,
-            &[(role, PingVerdict::BlockedByChannel)]
-        ),
-        Err(Refusal::PingBlockedByChannel {
+        event_draft::save_pressed(
+            &drafts,
+            PANEL,
+            ADMIN,
+            &signups,
+            judged_as(PingVerdict::BlockedByChannel),
+            OPENED_AT_MS
+        )
+        .await,
+        SaveAnswer::Refused(Refusal::PingBlockedByChannel {
             pings: vec![role],
             channel: CHANNEL,
         })
     );
-    let Ok(Ready::Create { new, warning }) =
-        draft.ready(BEFORE_THE_SESSIONS, &[(role, PingVerdict::Silent)])
+    assert!(store.events_in(SERVER).await.unwrap().is_empty());
+
+    let (signups, store) = empty_signups().await;
+    let drafts = opened(draft.clone(), OPENED_AT_MS);
+    let SaveAnswer::Saved(warned) = event_draft::save_pressed(
+        &drafts,
+        PANEL,
+        ADMIN,
+        &signups,
+        judged_as(PingVerdict::Silent),
+        OPENED_AT_MS,
+    )
+    .await
     else {
         panic!("a silent ping does not stop a create");
     };
-    let saved = Event {
-        id: 1,
-        guild: new.guild,
-        channel: new.channel,
-        name: new.name.clone(),
-        span: new.span.clone(),
-        created_by: new.created_by,
-        created_at_ms: new.created_at_ms,
-        ping_roles: new.ping_roles.clone(),
-        ended_at_ms: None,
-        posts_up: false,
-    };
-    let warned = draft
-        .saved_reply(
-            &CreateOutcome::Created(saved.clone()),
-            warning,
-            BEFORE_THE_SESSIONS,
-        )
-        .unwrap();
     assert!(
         warned.starts_with("<@&11> will not be pinged in <#10>"),
         "{warned}"
     );
     assert!(warned.contains("Season 36 will post in <#10>."), "{warned}");
+    let saved = store.events_in(SERVER).await.unwrap();
     assert_eq!(
-        draft.saved_reply(&CreateOutcome::NameTaken, None, BEFORE_THE_SESSIONS),
-        Err(Refusal::NameTaken("Season 36".to_owned()))
+        saved
+            .iter()
+            .map(|event| event.name.as_str())
+            .collect::<Vec<&str>>(),
+        ["Season 36"]
     );
-    let Ok(Ready::Create { new, warning }) =
-        draft.ready(BEFORE_THE_SESSIONS, &[(role, PingVerdict::Sounds)])
+    assert_eq!(
+        drafts.with(PANEL, ADMIN, OPENED_AT_MS),
+        Err(Refusal::PanelUnknown)
+    );
+
+    let (signups, store) = empty_signups().await;
+    let earlier = match store
+        .create_event(&NewEvent {
+            guild: SERVER,
+            channel: CHANNEL,
+            name: "Season 36".to_owned(),
+            span: draft.span().clone(),
+            created_by: OTHER_ADMIN,
+            created_at_ms: 1_791_800_000_000,
+            ping_roles: Vec::new(),
+        })
+        .await
+        .unwrap()
+    {
+        CreateOutcome::Created(event) => event,
+        CreateOutcome::NameTaken => panic!("the earlier Season 36 was not stored"),
+    };
+    let drafts = opened(draft.clone(), OPENED_AT_MS);
+    assert_eq!(
+        event_draft::save_pressed(
+            &drafts,
+            PANEL,
+            ADMIN,
+            &signups,
+            judged_as(PingVerdict::Sounds),
+            OPENED_AT_MS
+        )
+        .await,
+        SaveAnswer::Refused(Refusal::NameTaken("Season 36".to_owned()))
+    );
+    assert_eq!(store.events_in(SERVER).await.unwrap(), vec![earlier]);
+
+    let (signups, store) = empty_signups().await;
+    let drafts = opened(draft, OPENED_AT_MS);
+    let SaveAnswer::Saved(reply) = event_draft::save_pressed(
+        &drafts,
+        PANEL,
+        ADMIN,
+        &signups,
+        judged_as(PingVerdict::Sounds),
+        OPENED_AT_MS,
+    )
+    .await
     else {
         panic!("every check passing makes a create");
     };
-    assert_eq!(warning, None);
-    assert_eq!(new.guild, SERVER);
-    assert_eq!(new.channel, CHANNEL);
-    assert_eq!(new.name, "Season 36");
-    assert_eq!(new.created_by, ADMIN);
-    assert_eq!(new.created_at_ms, 1_791_900_000_000);
-    assert_eq!(new.ping_roles, vec![RoleId::new(11)]);
-    assert_eq!(new.span.first_day(), day("2026-10-14"));
-    assert_eq!(new.span.last_day(), day("2026-10-18"));
-    let reply = draft
-        .saved_reply(&CreateOutcome::Created(saved), warning, BEFORE_THE_SESSIONS)
-        .unwrap();
     assert!(
         reply.starts_with("Season 36 will post in <#10>."),
         "{reply}"
     );
+    let saved = store.events_in(SERVER).await.unwrap();
+    assert_eq!(saved.len(), 1);
+    let created = &saved[0];
+    assert_eq!(created.guild, SERVER);
+    assert_eq!(created.channel, CHANNEL);
+    assert_eq!(created.name, "Season 36");
+    assert_eq!(created.created_by, ADMIN);
+    assert_eq!(created.created_at_ms, 1_791_900_000_000);
+    assert_eq!(created.ping_roles, vec![RoleId::new(11)]);
+    assert_eq!(created.span.first_day(), day("2026-10-14"));
+    assert_eq!(created.span.last_day(), day("2026-10-18"));
+    assert_eq!(created.span.schedule(), &Schedule::clan_battles());
 }
 
 #[test]

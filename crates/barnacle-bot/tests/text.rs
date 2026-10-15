@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use barnacle_bot::attendance::Cell;
+use barnacle_bot::attendance::Delivery;
 use barnacle_bot::attendance::HourTally;
 use barnacle_bot::attendance::PostTag;
 use barnacle_bot::attendance::PurgeReport;
@@ -11,6 +12,7 @@ use barnacle_bot::attendance::RosterRow;
 use barnacle_bot::attendance::SignupView;
 use barnacle_bot::attendance::TickReport;
 use barnacle_bot::attendance_store::Event;
+use barnacle_bot::discord;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::Ping;
@@ -41,6 +43,7 @@ use barnacle_guess::UserId;
 use common::every_refusal;
 use common::index;
 use common::tier;
+use poise::serenity_prelude as serenity;
 
 fn yamato() -> Reveal {
     Reveal {
@@ -960,11 +963,19 @@ fn hidden_players_are_counted() {
 
 #[test]
 fn a_sign_up_post_is_titled_with_its_event_name() {
-    assert_eq!(text::signup_title("*Ranked* Sprint"), "\\*Ranked\\* Sprint");
-    assert_eq!(
-        text::signup_title("Clan Battles · Season 35: Komodo Dragon"),
-        "Clan Battles · Season 35: Komodo Dragon"
-    );
+    for (name, title) in [
+        ("*Ranked* Sprint", "\\*Ranked\\* Sprint"),
+        (
+            "Clan Battles · Season 35: Komodo Dragon",
+            "Clan Battles · Season 35: Komodo Dragon",
+        ),
+    ] {
+        let view = view_of(name, signup_session(), true);
+        let sent = serde_json::to_value(discord::signup_message(&view, Delivery::New)).unwrap();
+        assert_eq!(sent["embeds"][0]["title"], title, "{sent}");
+        let edited = serde_json::to_value(discord::signup_edit(&view)).unwrap();
+        assert_eq!(edited["embeds"][0]["title"], title, "{edited}");
+    }
 }
 
 #[test]
@@ -1822,7 +1833,31 @@ fn an_event_line_writes_times_as_timestamps() {
 
 #[test]
 fn an_empty_list_says_no_event_is_set_up() {
-    assert_eq!(text::NO_EVENT_HERE, "No event is set up here.");
+    let none = serde_json::to_value(
+        discord::event_list_reply(&[], 1_791_900_000)
+            .to_slash_initial_response(serenity::CreateInteractionResponseMessage::new()),
+    )
+    .unwrap();
+    assert_eq!(none["flags"], 64);
+    assert_eq!(
+        none["allowed_mentions"],
+        serde_json::to_value(serenity::CreateAllowedMentions::new()).unwrap()
+    );
+    assert_eq!(none["content"], "No event is set up here.");
+    let one = serde_json::to_value(
+        discord::event_list_reply(&[listed_sprint()], 1_791_900_000)
+            .to_slash_initial_response(serenity::CreateInteractionResponseMessage::new()),
+    )
+    .unwrap();
+    assert_eq!(one["flags"], 64);
+    assert_eq!(
+        one["allowed_mentions"],
+        serde_json::to_value(serenity::CreateAllowedMentions::new()).unwrap()
+    );
+    assert_eq!(
+        one["content"],
+        "<#10> **Ranked Sprint**, 2026-10-14 to 2026-10-17. Wednesday and Saturday at <t:1792018800:t>, 4 hours, America/Denver. 2 sessions ahead. Next sign-up post: <t:1791932400:F> (<t:1791932400:R>)."
+    );
 }
 
 #[test]

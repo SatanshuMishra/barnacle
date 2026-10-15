@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::SeqCst;
 
@@ -284,9 +286,16 @@ const HOURS_TARGET: &str = "hours";
 
 #[derive(Default)]
 struct Slot {
-    edit: Mutex<()>,
+    edit: Mutex<Settled>,
     wanted: AtomicU64,
-    drawn: AtomicU64,
+    latest: AtomicI64,
+    owed: AtomicBool,
+}
+
+#[derive(Default)]
+struct Settled {
+    through: u64,
+    drawn: Option<PostState>,
 }
 
 enum Judged {
@@ -571,34 +580,49 @@ impl<B: Board> Signups<B> {
             }
             for post in posts
                 .iter()
-                .filter(|post| post.state == PostState::Open)
-                .filter(|post| post.session.start_unix() <= now_unix)
+                .filter(|post| post.state != PostState::Removed)
                 .filter(|post| !swept.contains(&post.session))
+                .filter(|post| {
+                    post.state != state_at(post.session, now_unix) || self.owes(post.message)
+                })
             {
                 let tag = PostTag {
                     event: event.id,
                     session: post.session,
                 };
                 let scope = post_scope(event, post.session).message(post.message);
-                if !self
-                    .redraw(event, post.session, post.message, now_unix)
+                let Some(drawn) = self
+                    .redraw(event, post.session.date(), post.message, now_unix)
+                    .await
+                else {
+                    report.failures += 1;
+                    continue;
+                };
+                if drawn == post.state {
+                    continue;
+                }
+                if let Err(error) = self
+                    .store
+                    .set_post_state(event.id, post.session.date(), drawn)
                     .await
                 {
+                    let summary = match drawn {
+                        PostState::Closed => "a closed sign-up post could not be saved",
+                        PostState::Open | PostState::Removed => {
+                            "a reopened sign-up post could not be saved"
+                        }
+                    };
+                    post_failed(summary, &error, &scope);
                     report.failures += 1;
                     continue;
                 }
-                match self
-                    .store
-                    .set_post_state(event.id, post.session.date(), PostState::Closed)
-                    .await
-                {
-                    Ok(()) => {
+                match drawn {
+                    PostState::Closed => {
                         failure::record("signup.post.closed", "a sign-up post closed", &scope);
                         report.closed.push(tag);
                     }
-                    Err(error) => {
-                        post_failed("a closed sign-up post could not be saved", &error, &scope);
-                        report.failures += 1;
+                    PostState::Open | PostState::Removed => {
+                        failure::record("signup.post.reopened", "a sign-up post reopened", &scope);
                     }
                 }
             }
@@ -812,7 +836,7 @@ impl<B: Board> Signups<B> {
         {
             Ok(EditOutcome::Edited { before, after }) => {
                 let outside = self.clear_held(&after, ClearScope::OutsideSchedule).await;
-                let refreshed = self.refresh_posts(&after, now_unix).await;
+                let refreshed = self.refresh_held(&after, now_unix).await;
                 EditReport::Edited {
                     before,
                     after,
@@ -832,6 +856,11 @@ impl<B: Board> Signups<B> {
     }
 
     pub async fn refresh_posts(self: &Arc<Self>, event: &Event, now_unix: i64) -> PostsReport {
+        let _beating = self.beats.lock().await;
+        self.refresh_held(event, now_unix).await
+    }
+
+    async fn refresh_held(&self, event: &Event, now_unix: i64) -> PostsReport {
         let posts = match self.store.posts(event).await {
             Ok(posts) => posts,
             Err(error) => {
@@ -848,15 +877,17 @@ impl<B: Board> Signups<B> {
         };
         let mut report = PostsReport::default();
         for post in posts.iter().filter(|post| post.state != PostState::Removed) {
-            let state = if now_unix < post.session.start_unix() {
-                PostState::Open
-            } else {
-                PostState::Closed
+            let Some(drawn) = self
+                .redraw(event, post.session.date(), post.message, now_unix)
+                .await
+            else {
+                report.failures += 1;
+                continue;
             };
-            if state != post.state
+            if drawn != post.state
                 && let Err(error) = self
                     .store
-                    .set_post_state(event.id, post.session.date(), state)
+                    .set_post_state(event.id, post.session.date(), drawn)
                     .await
             {
                 post_failed(
@@ -867,14 +898,7 @@ impl<B: Board> Signups<B> {
                 report.failures += 1;
                 continue;
             }
-            if self
-                .redraw(event, post.session, post.message, now_unix)
-                .await
-            {
-                report.touched += 1;
-            } else {
-                report.failures += 1;
-            }
+            report.touched += 1;
         }
         report
     }
@@ -1048,7 +1072,7 @@ impl<B: Board> Signups<B> {
             return Judged::Gone;
         };
         let (now_unix, now_ms) = self.rehearsal_instant(event.guild, now_unix, now_ms).await;
-        if session.start_unix() <= now_unix {
+        if session.close_unix() <= now_unix {
             return Judged::Closed {
                 start_unix: session.start_unix(),
             };
@@ -1084,7 +1108,7 @@ impl<B: Board> Signups<B> {
                 message
             }
         }?;
-        self.redraw(event, session, current, now_unix).await;
+        self.redraw(event, session.date(), current, now_unix).await;
         Some(current)
     }
 
@@ -1130,7 +1154,7 @@ impl<B: Board> Signups<B> {
         };
         let Some(post) = posts
             .iter()
-            .find(|post| post.state == PostState::Open && instant < post.session.start_unix())
+            .find(|post| post.state == PostState::Open && instant < post.session.close_unix())
         else {
             return RepostOutcome::NothingOpen {
                 next_post_at: next_post_at(&event.span, instant),
@@ -1233,7 +1257,7 @@ impl<B: Board> Signups<B> {
             unheard.is_empty(),
             &scope,
         );
-        self.redraw(&event, session, message, instant).await;
+        self.redraw(&event, session.date(), message, instant).await;
         RepostOutcome::Reposted {
             session,
             previous,
@@ -1298,18 +1322,34 @@ impl<B: Board> Signups<B> {
     async fn redraw(
         &self,
         event: &Event,
-        session: Session,
+        date: Date,
         message: Snowflake,
         now_unix: i64,
-    ) -> bool {
+    ) -> Option<PostState> {
         let slot = self.slot(message);
+        slot.latest.fetch_max(now_unix, SeqCst);
         let mine = slot.wanted.fetch_add(1, SeqCst) + 1;
-        let _drawing = slot.edit.lock().await;
-        if slot.drawn.load(SeqCst) >= mine {
-            return true;
+        let mut settled = slot.edit.lock().await;
+        if settled.through >= mine {
+            return settled.drawn;
         }
-        let target = slot.wanted.load(SeqCst);
-        let scope = post_scope(event, session).message(message);
+        let through = slot.wanted.load(SeqCst);
+        let drawn = self
+            .draw(event, date, message, slot.latest.load(SeqCst))
+            .await;
+        slot.owed.store(drawn.is_none(), SeqCst);
+        *settled = Settled { through, drawn };
+        drawn
+    }
+
+    async fn draw(
+        &self,
+        event: &Event,
+        date: Date,
+        message: Snowflake,
+        now_unix: i64,
+    ) -> Option<PostState> {
+        let scope = event_scope(event).night(date.to_string()).message(message);
         let event = match self.store.event(event.id).await {
             Ok(Some(event)) => event,
             Ok(None) => {
@@ -1319,7 +1359,7 @@ impl<B: Board> Signups<B> {
                     &Failure::internal(format!("event {} no longer exists", event.id)),
                     &scope,
                 );
-                return false;
+                return None;
             }
             Err(error) => {
                 post_failed(
@@ -1327,8 +1367,17 @@ impl<B: Board> Signups<B> {
                     &error,
                     &scope,
                 );
-                return false;
+                return None;
             }
+        };
+        let Some(session) = event.span.session_on(date) else {
+            failure::report(
+                "signup.post.failed",
+                "a sign-up post could not be redrawn because its event no longer holds its session",
+                &Failure::internal(format!("event {} holds no session on {date}", event.id)),
+                &scope,
+            );
+            return None;
         };
         let view = match self.view(&event, session, now_unix).await {
             Ok(view) => view,
@@ -1338,15 +1387,18 @@ impl<B: Board> Signups<B> {
                     &error,
                     &scope,
                 );
-                return false;
+                return None;
             }
         };
         if let Err(error) = self.board.edit_post(event.channel, message, &view).await {
             post_failed("a sign-up post could not be redrawn", &error, &scope);
-            return false;
+            return None;
         }
-        slot.drawn.store(target, SeqCst);
-        true
+        Some(if view.open {
+            PostState::Open
+        } else {
+            PostState::Closed
+        })
     }
 
     async fn record(
@@ -1372,6 +1424,14 @@ impl<B: Board> Signups<B> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         Arc::clone(slots.entry(message).or_default())
+    }
+
+    fn owes(&self, message: Snowflake) -> bool {
+        self.slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&message)
+            .is_some_and(|slot| slot.owed.load(SeqCst))
     }
 
     fn forget(&self, message: Snowflake) {
@@ -1424,7 +1484,7 @@ fn moments<'a>(
     let closes = posts
         .iter()
         .filter(|post| post.state == PostState::Open)
-        .map(|post| post.session.start_unix());
+        .map(|post| post.session.close_unix());
     let postings = event
         .span
         .sessions()
@@ -1490,6 +1550,14 @@ fn post_scope(event: &Event, session: Session) -> Scope {
     event_scope(event).night(session.label())
 }
 
+fn state_at(session: Session, now_unix: i64) -> PostState {
+    if now_unix < session.close_unix() {
+        PostState::Open
+    } else {
+        PostState::Closed
+    }
+}
+
 fn shifted(now_unix: i64, now_ms: u64, offset: i64) -> Option<(i64, u64)> {
     let instant = now_unix.checked_add(offset)?;
     let instant_ms = now_ms.checked_add_signed(offset.checked_mul(MILLIS_PER_SECOND)?)?;
@@ -1509,7 +1577,7 @@ fn build_view(event: &Event, session: Session, now_unix: i64, marks: &[Mark]) ->
         event: event.id,
         name: event.name.clone(),
         session,
-        open: now_unix < session.start_unix(),
+        open: now_unix < session.close_unix(),
         pings: event
             .ping_roles
             .iter()

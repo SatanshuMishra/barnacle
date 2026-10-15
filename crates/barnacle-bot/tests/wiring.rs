@@ -1,9 +1,14 @@
 mod common;
 
+use std::collections::HashMap;
+
 use barnacle_bot::attendance::Delivery;
 use barnacle_bot::attendance::Target;
 use barnacle_bot::attendance_store::Attendance;
+use barnacle_bot::attendance_store::CreateOutcome;
 use barnacle_bot::attendance_store::Event;
+use barnacle_bot::attendance_store::NewEvent;
+use barnacle_bot::discord;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::Ping;
@@ -21,7 +26,6 @@ use barnacle_bot::wiring;
 use barnacle_bot::wiring::ChannelAccess;
 use barnacle_bot::wiring::ChannelProblem;
 use barnacle_bot::wiring::EventChoice;
-use barnacle_bot::wiring::FoundChannel;
 use barnacle_bot::wiring::LeaderboardRequest;
 use barnacle_bot::wiring::PanelPart;
 use barnacle_bot::wiring::PingAllowance;
@@ -35,9 +39,11 @@ use barnacle_bot::wiring::SignupClick;
 use barnacle_bot::wiring::SortChoice;
 use barnacle_guess::RoundOptions;
 use barnacle_guess::SeriesLength;
+use barnacle_guess::Snowflake;
 use barnacle_guess::UserId;
 use common::tier;
 use jiff::civil::Date;
+use poise::serenity_prelude as serenity;
 
 #[test]
 fn command_options_become_round_options() {
@@ -996,18 +1002,62 @@ fn a_typed_name_picks_its_event() {
     assert_eq!(picked(&events, "été cup", BEFORE_THE_SESSIONS), Some(11));
 }
 
-#[test]
-fn anything_else_is_not_found() {
-    let events = [
-        running(4, "Ranked Sprint", "2026-10-14", "2026-10-18"),
-        Event {
-            ended_at_ms: Some(1_791_800_000_000),
-            ..running(5, "Ranked Warmup", "2026-10-14", "2026-10-18")
-        },
-        running(9, "Ranked Qualifier", "2026-10-14", "2026-10-18"),
-    ];
-    for text in ["5", "12", "zzz", ""] {
-        assert_eq!(picked(&events, text, BEFORE_THE_SESSIONS), None, "{text}");
+#[tokio::test]
+async fn anything_else_is_not_found() {
+    let store = common::attendance().await;
+    created(&store, 1, "Ranked Sprint").await;
+    created(&store, 1, "Ranked Finals").await;
+    let warmup = created(&store, 1, "Ranked Warmup").await;
+    store
+        .record_post(
+            warmup.id,
+            parse_day("2026-10-14").unwrap(),
+            Snowflake::new(7),
+            1_791_800_000_000,
+        )
+        .await
+        .unwrap();
+    store
+        .end_event(SERVER, warmup.id, 1_791_850_000_000)
+        .await
+        .unwrap();
+    let drill = created(&store, 2, "Drill").await;
+    let events = store.events_in(SERVER).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.name.as_str())
+            .collect::<Vec<&str>>(),
+        ["Ranked Sprint", "Ranked Finals"]
+    );
+    for text in [
+        warmup.id.to_string(),
+        drill.id.to_string(),
+        "zzz".to_owned(),
+        String::new(),
+    ] {
+        assert_eq!(picked(&events, &text, 1_791_900_000), None, "{text}");
+    }
+}
+
+async fn created(store: &Attendance, guild: u64, name: &str) -> Event {
+    let new = NewEvent {
+        guild: GuildId::new(guild),
+        channel: ChannelId::new(10),
+        name: name.to_owned(),
+        span: Span::new(
+            parse_day("2026-10-14").unwrap(),
+            parse_day("2026-10-18").unwrap(),
+            Schedule::clan_battles(),
+        )
+        .unwrap(),
+        created_by: UserId::new(100),
+        created_at_ms: 1_791_800_000_000,
+        ping_roles: Vec::new(),
+    };
+    match store.create_event(&new).await.unwrap() {
+        CreateOutcome::Created(event) => event,
+        CreateOutcome::NameTaken => panic!("{name} was not stored"),
     }
 }
 
@@ -1057,42 +1107,31 @@ fn a_malformed_panel_id_is_ignored() {
 
 #[test]
 fn an_edit_channel_must_be_a_text_channel_of_this_server() {
-    let server = GuildId::new(1);
-    assert_eq!(
-        wiring::event_channel(server, None),
-        Err(ChannelProblem::Unknown)
-    );
-    assert_eq!(
+    let channels = HashMap::from([
+        cached(12, 1, serenity::ChannelType::Voice),
+        cached(13, 2, serenity::ChannelType::Text),
+        cached(11, 1, serenity::ChannelType::Text),
+    ]);
+    let judged = |chosen: u64| {
         wiring::event_channel(
-            server,
-            Some(FoundChannel {
-                guild: GuildId::new(2),
-                id: ChannelId::new(21),
-                text: true,
-            })
-        ),
-        Err(ChannelProblem::Unknown)
-    );
-    assert_eq!(
-        wiring::event_channel(
-            server,
-            Some(FoundChannel {
-                guild: GuildId::new(1),
-                id: ChannelId::new(12),
-                text: false,
-            })
-        ),
-        Err(ChannelProblem::NotText)
-    );
-    assert_eq!(
-        wiring::event_channel(
-            server,
-            Some(FoundChannel {
-                guild: GuildId::new(1),
-                id: ChannelId::new(11),
-                text: true,
-            })
-        ),
-        Ok(ChannelId::new(11))
-    );
+            GuildId::new(1),
+            discord::cached_event_channel(&channels, serenity::ChannelId::new(chosen)),
+        )
+    };
+    assert_eq!(judged(14), Err(ChannelProblem::Unknown));
+    assert_eq!(judged(13), Err(ChannelProblem::Unknown));
+    assert_eq!(judged(12), Err(ChannelProblem::NotText));
+    assert_eq!(judged(11), Ok(ChannelId::new(11)));
+}
+
+fn cached(
+    id: u64,
+    guild: u64,
+    kind: serenity::ChannelType,
+) -> (serenity::ChannelId, serenity::GuildChannel) {
+    let mut channel = serenity::GuildChannel::default();
+    channel.id = serenity::ChannelId::new(id);
+    channel.guild_id = serenity::GuildId::new(guild);
+    channel.kind = kind;
+    (channel.id, channel)
 }

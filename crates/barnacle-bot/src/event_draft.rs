@@ -185,6 +185,17 @@ pub enum Applied {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SaveAnswer {
+    Saved(String),
+    Unsaved(String),
+    Refused(Refusal),
+    Failed {
+        summary: &'static str,
+        failure: Failure,
+    },
+}
+
 impl Ready {
     pub async fn apply<B: Board>(
         self,
@@ -677,6 +688,140 @@ impl Drafts {
     fn held(&self) -> MutexGuard<'_, HashMap<u64, Opened>> {
         self.open.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+pub fn panel_reply(view: PanelView) -> poise::CreateReply {
+    poise::CreateReply::default()
+        .content(view.content)
+        .components(view.components)
+        .allowed_mentions(serenity::CreateAllowedMentions::new())
+        .ephemeral(true)
+}
+
+pub fn weekdays_picked(
+    drafts: &Drafts,
+    panel: u64,
+    user: UserId,
+    values: &[String],
+    now_ms: u64,
+) -> Result<PanelView, Refusal> {
+    redrawn(drafts, panel, user, now_ms, |draft| {
+        draft.with_weekdays(values)
+    })
+}
+
+pub fn roles_picked(
+    drafts: &Drafts,
+    panel: u64,
+    user: UserId,
+    roles: &[RoleId],
+    now_ms: u64,
+) -> Result<PanelView, Refusal> {
+    redrawn(drafts, panel, user, now_ms, |draft| draft.with_roles(roles))
+}
+
+pub fn everyone_pressed(
+    drafts: &Drafts,
+    panel: u64,
+    user: UserId,
+    now_ms: u64,
+) -> Result<PanelView, Refusal> {
+    redrawn(drafts, panel, user, now_ms, Draft::with_everyone)
+}
+
+pub fn cancel_pressed(
+    drafts: &Drafts,
+    panel: u64,
+    user: UserId,
+    now_ms: u64,
+) -> Result<String, Refusal> {
+    drafts
+        .take(panel, user, now_ms)
+        .map(|_| text::PANEL_CANCELLED.to_owned())
+}
+
+pub async fn save_pressed<B: Board>(
+    drafts: &Drafts,
+    panel: u64,
+    user: UserId,
+    signups: &Arc<Signups<B>>,
+    judge: impl FnOnce(&Draft) -> Vec<(Ping, PingVerdict)>,
+    now_ms: u64,
+) -> SaveAnswer {
+    let draft = match drafts.with(panel, user, now_ms) {
+        Ok(draft) => draft,
+        Err(refusal) => return SaveAnswer::Refused(refusal),
+    };
+    let now_unix = unix_of(now_ms);
+    let verdicts = judge(&draft);
+    let answer = match draft.ready(now_unix, &verdicts) {
+        Err(refusal) => SaveAnswer::Refused(refusal),
+        Ok(ready) => match ready.apply(signups, draft.guild(), now_unix).await {
+            Applied::Create {
+                outcome: Ok(outcome),
+                warning,
+            } => match draft.saved_reply(&outcome, warning, now_unix) {
+                Ok(reply) => SaveAnswer::Saved(reply),
+                Err(refusal) => SaveAnswer::Refused(refusal),
+            },
+            Applied::Create {
+                outcome: Err(error),
+                ..
+            } => SaveAnswer::Failed {
+                summary: "an event could not be saved",
+                failure: Failure::from_error(&error),
+            },
+            Applied::Edit { report, warning } => edit_answer(report, &draft, warning),
+        },
+    };
+    if matches!(answer, SaveAnswer::Saved(_)) {
+        let _ = drafts.take(panel, user, now_ms);
+    }
+    answer
+}
+
+fn redrawn(
+    drafts: &Drafts,
+    panel: u64,
+    user: UserId,
+    now_ms: u64,
+    change: impl FnOnce(&Draft) -> Result<Draft, Refusal>,
+) -> Result<PanelView, Refusal> {
+    let draft = drafts
+        .with(panel, user, now_ms)
+        .and_then(|draft| change(&draft))?;
+    let view = draft.panel(panel, unix_of(now_ms));
+    drafts.replace(panel, draft);
+    Ok(view)
+}
+
+fn edit_answer(report: EditReport, draft: &Draft, warning: Option<String>) -> SaveAnswer {
+    match report {
+        EditReport::Edited {
+            after,
+            cleared,
+            refreshed,
+            ..
+        } => SaveAnswer::Saved(text::warned(
+            warning,
+            text::event_edited(&after, &cleared, &refreshed),
+        )),
+        EditReport::ClearFailed { failures } => {
+            SaveAnswer::Unsaved(text::failures_noted(text::CLEAR_FAILED_MOVE, failures))
+        }
+        EditReport::NameTaken => SaveAnswer::Refused(Refusal::NameTaken(draft.name().to_owned())),
+        EditReport::BadRange => SaveAnswer::Refused(Refusal::LastDayBeforeFirst),
+        EditReport::TooFar => SaveAnswer::Refused(Refusal::DatesTooFar),
+        EditReport::NotFound => SaveAnswer::Refused(Refusal::EventNotFound),
+        EditReport::Failed(failure) => SaveAnswer::Failed {
+            summary: "an event edit could not be saved",
+            failure,
+        },
+    }
+}
+
+fn unix_of(now_ms: u64) -> i64 {
+    i64::try_from(now_ms / MILLIS_PER_SECOND).unwrap_or(i64::MAX)
 }
 
 fn usable(opened: Option<&Opened>, user: UserId, now_ms: u64) -> Result<&Opened, Refusal> {

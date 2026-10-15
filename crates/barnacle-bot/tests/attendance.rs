@@ -22,6 +22,7 @@ use barnacle_bot::attendance::RehearsalOutcome;
 use barnacle_bot::attendance::Removal;
 use barnacle_bot::attendance::RepostOutcome;
 use barnacle_bot::attendance::RepostPing;
+use barnacle_bot::attendance::RosterRow;
 use barnacle_bot::attendance::Sent;
 use barnacle_bot::attendance::SignupView;
 use barnacle_bot::attendance::Signups;
@@ -37,6 +38,7 @@ use barnacle_bot::attendance_store::EventChange;
 use barnacle_bot::attendance_store::NewEvent;
 use barnacle_bot::attendance_store::Post;
 use barnacle_bot::attendance_store::PostState;
+use barnacle_bot::discord;
 use barnacle_bot::event_draft::Applied;
 use barnacle_bot::event_draft::Ready;
 use barnacle_bot::failure::Kind;
@@ -62,6 +64,7 @@ use common::fakes::BoardCall;
 use common::fakes::FakeBoard;
 use jiff::civil::Date;
 use jiff::civil::Weekday;
+use poise::serenity_prelude as serenity;
 use sqlx::sqlite::SqlitePool;
 use tokio::sync::Semaphore;
 
@@ -2224,6 +2227,18 @@ fn reposted(outcome: RepostOutcome) -> (Snowflake, Snowflake, bool) {
     }
 }
 
+fn last_sent(board: &FakeBoard) -> (SignupView, Delivery) {
+    board
+        .calls()
+        .into_iter()
+        .rev()
+        .find_map(|call| match call {
+            BoardCall::Sent { view, delivery, .. } => Some((view, delivery)),
+            _ => None,
+        })
+        .expect("a post was sent")
+}
+
 fn last_delivery(board: &FakeBoard) -> Delivery {
     board
         .calls()
@@ -3049,9 +3064,8 @@ async fn a_click_for_an_hour_beyond_the_event_is_refused() {
 #[tokio::test]
 async fn a_click_on_a_dropped_date_ended_or_foreign_event_is_gone() {
     let board = FakeBoard::new();
-    let store = Attendance::with_pool(attendance_pool().await)
-        .await
-        .unwrap();
+    let pool = attendance_pool().await;
+    let store = Attendance::with_pool(pool.clone()).await.unwrap();
     let live = created(
         &store,
         &named(
@@ -3078,6 +3092,22 @@ async fn a_click_on_a_dropped_date_ended_or_foreign_event_is_gone() {
         .end_event(GUILD, ended.id, millis(1_791_934_200))
         .await
         .unwrap();
+    let posted = message_for(&store, &live, day("2026-10-14")).await;
+    assert_eq!(
+        signups
+            .click(
+                Click {
+                    date: day("2026-10-14"),
+                    ..press(&live, posted, BOREALIS, Target::All)
+                },
+                1_791_934_250,
+                millis(1_791_934_250)
+            )
+            .await,
+        ClickOutcome::Recorded
+    );
+    let before = common::every_answer(&pool).await;
+    assert_eq!(before.len(), 4);
     let on = |event: &Event, date: &str| Click {
         date: day(date),
         ..press(event, Snowflake::new(1_000), AKI, Target::All)
@@ -3103,11 +3133,7 @@ async fn a_click_on_a_dropped_date_ended_or_foreign_event_is_gone() {
             "{click:?}"
         );
     }
-    for event in [&live, &ended] {
-        for date in ["2026-10-14", "2026-10-16"] {
-            assert!(store.roster(event.id, day(date)).await.unwrap().is_empty());
-        }
-    }
+    assert_eq!(common::every_answer(&pool).await, before);
 }
 
 #[tokio::test]
@@ -3252,6 +3278,12 @@ async fn reposting_an_event_by_id_keeps_its_answers() {
     assert_eq!(first.rows.len(), 2);
     assert_eq!(last_delivery(&board), Delivery::Redraw);
     assert_eq!(board.pinging_sends().len(), 1);
+    let (view, delivery) = last_sent(&board);
+    let quiet_message = serde_json::to_value(discord::signup_message(&view, delivery)).unwrap();
+    assert_eq!(
+        quiet_message["allowed_mentions"],
+        serde_json::to_value(serenity::CreateAllowedMentions::new()).unwrap()
+    );
     let (previous, loud, _) = reposted(
         repost(
             &signups,
@@ -3270,6 +3302,15 @@ async fn reposting_an_event_by_id_keeps_its_answers() {
     assert_eq!(last_delivery(&board), Delivery::New);
     assert_eq!(board.pinging_sends().len(), 2);
     assert_eq!(second.pings, vec![Ping::Role(CREWMATES)]);
+    let (view, delivery) = last_sent(&board);
+    let loud_message = serde_json::to_value(discord::signup_message(&view, delivery)).unwrap();
+    assert_eq!(
+        loud_message["allowed_mentions"],
+        serde_json::to_value(
+            serenity::CreateAllowedMentions::new().roles([serenity::RoleId::new(4242)])
+        )
+        .unwrap()
+    );
     assert_eq!(message_for(&store, &event, first_date()).await, loud);
 }
 
@@ -3812,15 +3853,26 @@ async fn an_edit_deletes_posts_the_schedule_no_longer_holds() {
         state_of(&store, &event, day("2026-10-17")).await,
         PostState::Removed
     );
-    let redrawn: Vec<(Snowflake, Date)> = board
+    let redrawn: Vec<(Snowflake, SignupView)> = board
         .calls()
         .into_iter()
         .filter_map(|call| match call {
-            BoardCall::Edited { message, view, .. } => Some((message, view.session.date())),
+            BoardCall::Edited { message, view, .. } => Some((message, view)),
             _ => None,
         })
         .collect();
-    assert_eq!(redrawn, vec![(wednesday, day("2026-10-14"))]);
+    assert_eq!(
+        redrawn
+            .iter()
+            .map(|(message, view)| (*message, view.session.date()))
+            .collect::<Vec<(Snowflake, Date)>>(),
+        vec![(wednesday, day("2026-10-14"))]
+    );
+    let edit = serde_json::to_value(discord::signup_edit(&redrawn[0].1)).unwrap();
+    assert_eq!(
+        edit["allowed_mentions"],
+        serde_json::to_value(serenity::CreateAllowedMentions::new()).unwrap()
+    );
     assert_eq!(board.sends().len(), 1);
     assert_eq!(board.pinging_sends().len(), 1);
 }
@@ -3882,6 +3934,12 @@ async fn an_edit_of_name_or_roles_redraws_without_a_ping() {
         })
         .expect("Wednesday's post was redrawn");
     assert_eq!(titled.name, "Ranked Finals");
+    let renamed_edit = serde_json::to_value(discord::signup_edit(&titled)).unwrap();
+    assert_eq!(renamed_edit["embeds"][0]["title"], "Ranked Finals");
+    assert_eq!(
+        renamed_edit["allowed_mentions"],
+        serde_json::to_value(serenity::CreateAllowedMentions::new()).unwrap()
+    );
     let repinged = EventChange {
         ping_roles: Some(vec![RoleId::new(12)]),
         ..EventChange::default()
@@ -3909,6 +3967,11 @@ async fn an_edit_of_name_or_roles_redraws_without_a_ping() {
         })
         .expect("Wednesday's post was redrawn");
     assert_eq!(roled.pings, vec![Ping::Role(RoleId::new(12))]);
+    let roled_edit = serde_json::to_value(discord::signup_edit(&roled)).unwrap();
+    assert_eq!(
+        roled_edit["allowed_mentions"],
+        serde_json::to_value(serenity::CreateAllowedMentions::new()).unwrap()
+    );
     assert_eq!(board.sends().len(), 1);
     assert_eq!(board.pinging_sends().len(), 1);
 }
@@ -3924,10 +3987,13 @@ async fn moving_an_event_clears_the_old_channel_first() {
         ..EventChange::default()
     };
     board.fail_deletes(true);
+    let (sends, edits, _) = board_counts(&board);
     assert_eq!(
         sprint_edit(&signups, &event, &moved_out).await,
         EditReport::ClearFailed { failures: 1 }
     );
+    assert_eq!(board.sends().len(), sends);
+    assert_eq!(board.edits().len(), edits);
     assert_eq!(
         store
             .live_event(GUILD, event.id)
@@ -4463,5 +4529,534 @@ async fn a_rename_saved_during_a_move_waits_for_it() {
             .unwrap()
             .name,
         "Drill"
+    );
+}
+
+fn board_counts(board: &FakeBoard) -> (usize, usize, usize) {
+    (
+        board.sends().len(),
+        board.edits().len(),
+        board.deletes().len(),
+    )
+}
+
+fn attend_all_on(event: &Event, message: Snowflake, user: UserId, date: Date) -> Click {
+    Click {
+        date,
+        ..press(event, message, user, Target::All)
+    }
+}
+
+async fn answers_on(
+    store: &Attendance,
+    event: &Event,
+    date: Date,
+    user: UserId,
+) -> Vec<(u8, bool)> {
+    store
+        .roster(event.id, date)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|mark| mark.user == user)
+        .map(|mark| (mark.hour.get(), mark.attending))
+        .collect()
+}
+
+async fn start_edit(
+    signups: &Arc<Signups<FakeBoard>>,
+    event: &Event,
+    change: &EventChange,
+    today: &str,
+    now_unix: i64,
+) -> EditReport {
+    signups
+        .edit_event(
+            GUILD,
+            event.id,
+            event.created_at_ms,
+            change,
+            day(today),
+            now_unix,
+        )
+        .await
+}
+
+#[tokio::test]
+async fn a_post_left_closed_before_its_start_is_reopened_by_the_beat() {
+    let logs = common::logs::capture();
+    let board = FakeBoard::new();
+    let new = sprint_on(&[Weekday::Wednesday], "2026-10-14");
+    let (signups, event, store) = ready_from(board.clone(), &new).await;
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    signups.tick(1_792_018_800, millis(1_792_018_800)).await;
+    let message = message_for(&store, &event, day("2026-10-14")).await;
+    board.fail_edits(true);
+    let later = EventChange {
+        start: Some(StartTime::parse("19:00").unwrap()),
+        ..EventChange::default()
+    };
+    let EditReport::Edited {
+        after, refreshed, ..
+    } = start_edit(&signups, &event, &later, "2026-10-14", 1_792_020_600).await
+    else {
+        panic!("the start was not saved");
+    };
+    assert_eq!(
+        store
+            .live_event(GUILD, event.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .span
+            .schedule()
+            .start(),
+        StartTime::parse("19:00").unwrap()
+    );
+    assert_eq!(
+        refreshed,
+        PostsReport {
+            touched: 0,
+            failures: 1
+        }
+    );
+    assert_eq!(
+        state_of(&store, &after, day("2026-10-14")).await,
+        PostState::Closed
+    );
+    let refused = signups.tick(1_792_020_660, millis(1_792_020_660)).await;
+    assert_eq!(refused.failures, 1);
+    assert_eq!(
+        state_of(&store, &after, day("2026-10-14")).await,
+        PostState::Closed
+    );
+    board.fail_edits(false);
+    let reopened = signups.tick(1_792_020_720, millis(1_792_020_720)).await;
+    assert_eq!(reopened.failures, 0);
+    assert!(reopened.closed.is_empty());
+    let drawn = last_drawn(&board, message);
+    assert!(drawn.open);
+    assert_eq!(drawn.session.start_unix(), 1_792_026_000);
+    assert_eq!(
+        state_of(&store, &after, day("2026-10-14")).await,
+        PostState::Open
+    );
+    assert_eq!(logs.named("signup.post.reopened").len(), 1);
+    let quiet = board_counts(&board);
+    signups.tick(1_792_023_000, millis(1_792_023_000)).await;
+    assert_eq!(board_counts(&board), quiet);
+    let closed = signups.tick(1_792_026_000, millis(1_792_026_000)).await;
+    assert_eq!(closed.closed, vec![tag(&after, day("2026-10-14"))]);
+    let redrawn = last_drawn(&board, message);
+    assert!(!redrawn.open);
+    assert_eq!(redrawn.session.start_unix(), 1_792_026_000);
+    assert_eq!(
+        state_of(&store, &after, day("2026-10-14")).await,
+        PostState::Closed
+    );
+    let still = board_counts(&board);
+    signups.tick(1_792_026_060, millis(1_792_026_060)).await;
+    assert_eq!(board_counts(&board), still);
+    assert_eq!(logs.named("signup.post.reopened").len(), 1);
+}
+
+#[tokio::test]
+async fn a_press_whose_redraw_failed_is_drawn_at_the_next_beat() {
+    let logs = common::logs::capture();
+    let board = FakeBoard::new();
+    let new = sprint_on(&[Weekday::Wednesday], "2026-10-14");
+    let (signups, event, store) = ready_from(board.clone(), &new).await;
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    let message = message_for(&store, &event, day("2026-10-14")).await;
+    board.fail_edits(true);
+    let outcome = signups
+        .click(
+            attend_all_on(&event, message, UserId::new(7), day("2026-10-14")),
+            1_791_940_000,
+            millis(1_791_940_000),
+        )
+        .await;
+    assert_eq!(outcome, ClickOutcome::Recorded);
+    assert_eq!(
+        answers_on(&store, &event, day("2026-10-14"), UserId::new(7)).await,
+        vec![(1, true), (2, true), (3, true), (4, true)]
+    );
+    let failed = only(logs.named("signup.post.failed"));
+    assert_eq!(failed["message"], "a sign-up post could not be redrawn");
+    assert_eq!(board.edits().len(), 1);
+    board.fail_edits(false);
+    let report = signups.tick(1_791_940_060, millis(1_791_940_060)).await;
+    assert_eq!(report.failures, 0);
+    assert_eq!(board.edits().len(), 2);
+    let drawn = last_drawn(&board, message);
+    assert!(drawn.open);
+    assert_eq!(
+        drawn.rows,
+        vec![RosterRow {
+            user: UserId::new(7),
+            cells: vec![Cell::In; 4]
+        }]
+    );
+    assert_eq!(
+        state_of(&store, &event, day("2026-10-14")).await,
+        PostState::Open
+    );
+    let quiet = board_counts(&board);
+    signups.tick(1_791_940_120, millis(1_791_940_120)).await;
+    assert_eq!(board_counts(&board), quiet);
+}
+
+#[tokio::test]
+async fn a_draw_owed_before_a_restart_waits_for_the_next_draw() {
+    let board = FakeBoard::new();
+    let new = sprint_on(&[Weekday::Wednesday], "2026-10-14");
+    let (signups, event, store) = ready_from(board.clone(), &new).await;
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    let message = message_for(&store, &event, day("2026-10-14")).await;
+    board.fail_edits(true);
+    assert_eq!(
+        signups
+            .click(
+                attend_all_on(&event, message, UserId::new(7), day("2026-10-14")),
+                1_791_940_000,
+                millis(1_791_940_000),
+            )
+            .await,
+        ClickOutcome::Recorded
+    );
+    let restarted = Signups::new(board.clone(), store.clone());
+    board.fail_edits(false);
+    let quiet = board_counts(&board);
+    restarted.tick(1_791_940_060, millis(1_791_940_060)).await;
+    assert_eq!(board_counts(&board), quiet);
+    let closed = restarted.tick(1_792_018_800, millis(1_792_018_800)).await;
+    assert_eq!(closed.closed, vec![tag(&event, day("2026-10-14"))]);
+    let drawn = last_drawn(&board, message);
+    assert!(!drawn.open);
+    assert_eq!(
+        drawn.rows,
+        vec![RosterRow {
+            user: UserId::new(7),
+            cells: vec![Cell::In; 4]
+        }]
+    );
+    assert_eq!(
+        state_of(&store, &event, day("2026-10-14")).await,
+        PostState::Closed
+    );
+}
+
+#[tokio::test]
+async fn a_press_answered_after_the_close_draws_the_post_closed() {
+    let board = FakeBoard::new();
+    let new = sprint_on(&[Weekday::Wednesday], "2026-10-14");
+    let (signups, event, store) = ready_from(board.clone(), &new).await;
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    signups.tick(1_792_018_800, millis(1_792_018_800)).await;
+    let message = message_for(&store, &event, day("2026-10-14")).await;
+    assert_eq!(
+        state_of(&store, &event, day("2026-10-14")).await,
+        PostState::Closed
+    );
+    let outcome = signups
+        .click(
+            attend_all_on(&event, message, UserId::new(7), day("2026-10-14")),
+            1_792_018_790,
+            millis(1_792_018_790),
+        )
+        .await;
+    assert_eq!(outcome, ClickOutcome::Recorded);
+    assert_eq!(
+        answers_on(&store, &event, day("2026-10-14"), UserId::new(7)).await,
+        vec![(1, true), (2, true), (3, true), (4, true)]
+    );
+    let drawn = last_drawn(&board, message);
+    assert!(!drawn.open);
+    assert_eq!(
+        drawn.rows,
+        vec![RosterRow {
+            user: UserId::new(7),
+            cells: vec![Cell::In; 4]
+        }]
+    );
+    assert_eq!(
+        state_of(&store, &event, day("2026-10-14")).await,
+        PostState::Closed
+    );
+}
+
+#[tokio::test]
+async fn a_close_whose_redraw_failed_in_a_save_is_drawn_at_the_next_beat() {
+    let board = FakeBoard::new();
+    let new = sprint_on(&[Weekday::Wednesday, Weekday::Saturday], "2026-10-17");
+    let (signups, event, store) = ready_from(board.clone(), &new).await;
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    let message = message_for(&store, &event, day("2026-10-14")).await;
+    board.fail_edits(true);
+    let earlier = EventChange {
+        start: Some(StartTime::parse("15:00").unwrap()),
+        ..EventChange::default()
+    };
+    let EditReport::Edited {
+        after, refreshed, ..
+    } = start_edit(&signups, &event, &earlier, "2026-10-14", 1_792_015_200).await
+    else {
+        panic!("the start was not saved");
+    };
+    assert_eq!(
+        store
+            .live_event(GUILD, event.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .span
+            .schedule()
+            .start(),
+        StartTime::parse("15:00").unwrap()
+    );
+    assert_eq!(
+        refreshed,
+        PostsReport {
+            touched: 0,
+            failures: 1
+        }
+    );
+    assert_eq!(
+        state_of(&store, &after, day("2026-10-14")).await,
+        PostState::Open
+    );
+    board.fail_edits(false);
+    let closed = signups.tick(1_792_015_260, millis(1_792_015_260)).await;
+    assert_eq!(closed.closed, vec![tag(&after, day("2026-10-14"))]);
+    let drawn = last_drawn(&board, message);
+    assert!(!drawn.open);
+    assert_eq!(drawn.session.start_unix(), 1_792_011_600);
+    assert_eq!(
+        state_of(&store, &after, day("2026-10-14")).await,
+        PostState::Closed
+    );
+}
+
+#[tokio::test]
+async fn a_failed_redraw_of_a_save_that_keeps_the_state_is_drawn_at_the_next_beat() {
+    let board = FakeBoard::new();
+    let new = sprint_on(&[Weekday::Wednesday], "2026-10-14");
+    let (signups, event, store) = ready_from(board.clone(), &new).await;
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    let message = message_for(&store, &event, day("2026-10-14")).await;
+    board.fail_edits(true);
+    let longer = EventChange {
+        start: Some(StartTime::parse("19:00").unwrap()),
+        hours: Some(hours(6)),
+        ..EventChange::default()
+    };
+    let EditReport::Edited {
+        after, refreshed, ..
+    } = start_edit(&signups, &event, &longer, "2026-10-14", 1_791_940_000).await
+    else {
+        panic!("the start and hours were not saved");
+    };
+    let saved = store.live_event(GUILD, event.id).await.unwrap().unwrap();
+    assert_eq!(
+        saved.span.schedule().start(),
+        StartTime::parse("19:00").unwrap()
+    );
+    assert_eq!(saved.span.schedule().hours(), hours(6));
+    assert_eq!(
+        refreshed,
+        PostsReport {
+            touched: 0,
+            failures: 1
+        }
+    );
+    assert_eq!(
+        state_of(&store, &after, day("2026-10-14")).await,
+        PostState::Open
+    );
+    board.fail_edits(false);
+    let edits = board.edits().len();
+    let report = signups.tick(1_791_940_060, millis(1_791_940_060)).await;
+    assert_eq!(report.failures, 0);
+    assert_eq!(board.edits().len(), edits + 1);
+    let drawn = last_drawn(&board, message);
+    assert!(drawn.open);
+    assert_eq!(drawn.session.start_unix(), 1_792_026_000);
+    assert_eq!(drawn.session.hours(), hours(6));
+    assert_eq!(drawn.hours.len(), 6);
+    assert_eq!(
+        state_of(&store, &after, day("2026-10-14")).await,
+        PostState::Open
+    );
+    let quiet = board_counts(&board);
+    signups.tick(1_791_940_120, millis(1_791_940_120)).await;
+    assert_eq!(board_counts(&board), quiet);
+}
+
+#[derive(Clone)]
+struct HeldEdits {
+    board: FakeBoard,
+    reached: Arc<Semaphore>,
+    gate: Arc<Semaphore>,
+}
+
+impl HeldEdits {
+    fn new(board: FakeBoard) -> Self {
+        Self {
+            board,
+            reached: Arc::new(Semaphore::new(0)),
+            gate: Arc::new(Semaphore::new(0)),
+        }
+    }
+
+    async fn reached(&self) {
+        self.reached.acquire().await.unwrap().forget();
+    }
+
+    fn open(&self) {
+        self.gate.close();
+    }
+}
+
+impl Board for HeldEdits {
+    async fn send_post(
+        &self,
+        channel: ChannelId,
+        view: &SignupView,
+        delivery: Delivery,
+    ) -> Result<Sent, BoardError> {
+        self.board.send_post(channel, view, delivery).await
+    }
+
+    async fn find_post(
+        &self,
+        channel: ChannelId,
+        tag: PostTag,
+    ) -> Result<Option<Snowflake>, BoardError> {
+        self.board.find_post(channel, tag).await
+    }
+
+    async fn edit_post(
+        &self,
+        channel: ChannelId,
+        message: Snowflake,
+        view: &SignupView,
+    ) -> Result<(), BoardError> {
+        self.reached.add_permits(1);
+        let _opened = self.gate.acquire().await;
+        self.board.edit_post(channel, message, view).await
+    }
+
+    async fn delete_post(
+        &self,
+        channel: ChannelId,
+        message: Snowflake,
+    ) -> Result<Removal, BoardError> {
+        self.board.delete_post(channel, message).await
+    }
+}
+
+#[tokio::test]
+async fn a_press_waiting_before_a_save_is_drawn_from_the_saved_event() {
+    let fake = FakeBoard::new();
+    let board = HeldEdits::new(fake.clone());
+    let (store, held) = store_of(&[sprint_on(&[Weekday::Wednesday], "2026-10-14")]).await;
+    let event = held[0].clone();
+    let signups = Signups::new(board.clone(), store.clone());
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    let message = message_for(&store, &event, day("2026-10-14")).await;
+    let first = {
+        let signups = Arc::clone(&signups);
+        let click = attend_all_on(&event, message, UserId::new(7), day("2026-10-14"));
+        tokio::spawn(async move {
+            signups
+                .click(click, 1_792_015_180, millis(1_792_015_180))
+                .await
+        })
+    };
+    board.reached().await;
+    let second = {
+        let signups = Arc::clone(&signups);
+        let click = attend_all_on(&event, message, UserId::new(8), day("2026-10-14"));
+        tokio::spawn(async move {
+            signups
+                .click(click, 1_792_015_190, millis(1_792_015_190))
+                .await
+        })
+    };
+    assert!(
+        lands_within_a_second(async || {
+            !answers_on(&store, &event, day("2026-10-14"), UserId::new(8))
+                .await
+                .is_empty()
+        })
+        .await
+    );
+    tokio::task::yield_now().await;
+    let save = {
+        let signups = Arc::clone(&signups);
+        let event = event.clone();
+        tokio::spawn(async move {
+            signups
+                .edit_event(
+                    GUILD,
+                    event.id,
+                    event.created_at_ms,
+                    &EventChange {
+                        start: Some(StartTime::parse("15:00").unwrap()),
+                        ..EventChange::default()
+                    },
+                    day("2026-10-14"),
+                    1_792_015_200,
+                )
+                .await
+        })
+    };
+    assert!(
+        lands_within_a_second(async || {
+            store
+                .event(event.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .span
+                .schedule()
+                .start()
+                == StartTime::parse("15:00").unwrap()
+        })
+        .await
+    );
+    tokio::task::yield_now().await;
+    board.open();
+    assert_eq!(first.await.unwrap(), ClickOutcome::Recorded);
+    assert_eq!(second.await.unwrap(), ClickOutcome::Recorded);
+    let EditReport::Edited { refreshed, .. } = save.await.unwrap() else {
+        panic!("the start was not saved");
+    };
+    assert_eq!(refreshed.failures, 0);
+    for member in [UserId::new(7), UserId::new(8)] {
+        assert_eq!(
+            answers_on(&store, &event, day("2026-10-14"), member).await,
+            vec![(1, true), (2, true), (3, true), (4, true)]
+        );
+    }
+    let last = fake.edits().pop().expect("the post was redrawn");
+    assert!(!last.open);
+    assert_eq!(last.session.start_unix(), 1_792_011_600);
+    assert_eq!(
+        last.rows,
+        vec![
+            RosterRow {
+                user: UserId::new(7),
+                cells: vec![Cell::In; 4]
+            },
+            RosterRow {
+                user: UserId::new(8),
+                cells: vec![Cell::In; 4]
+            }
+        ]
+    );
+    assert_eq!(
+        state_of(&store, &event, day("2026-10-14")).await,
+        PostState::Closed
     );
 }

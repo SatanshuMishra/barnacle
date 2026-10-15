@@ -3,24 +3,24 @@ use poise::serenity_prelude as serenity;
 
 use super::Data;
 use super::commands;
+use super::commands::CheckedPing;
 use super::events::Answer;
 use super::events::acknowledge;
 use super::events::tell;
-use crate::attendance::EditReport;
-use crate::event_draft::Applied;
+use crate::event_draft;
 use crate::event_draft::Draft;
+use crate::event_draft::Drafts;
+use crate::event_draft::PanelView;
 use crate::event_draft::Purpose;
+use crate::event_draft::SaveAnswer;
 use crate::failure;
 use crate::failure::Failure;
 use crate::failure::Scope;
 use crate::ids::GuildId;
-use crate::ids::Ping;
 use crate::ids::Place;
 use crate::ids::RoleId;
-use crate::text;
 use crate::text::Refusal;
 use crate::wiring::PanelPart;
-use crate::wiring::PingVerdict;
 
 const PANEL_FAILED: &str = "The event was not saved";
 const CLOCK_BEFORE_1970: &str = "the clock reads before 1970";
@@ -64,16 +64,9 @@ pub(super) async fn pressed(
             )
             .await
         }
-        PanelPart::Cancel => match data.drafts.take(panel, user, now_ms) {
-            Ok(_) => {
-                update(
-                    serenity_context,
-                    component,
-                    text::PANEL_CANCELLED.to_owned(),
-                    Vec::new(),
-                    &scope,
-                )
-                .await;
+        PanelPart::Cancel => match event_draft::cancel_pressed(&data.drafts, panel, user, now_ms) {
+            Ok(content) => {
+                update(serenity_context, component, content, Vec::new(), &scope).await;
             }
             Err(refusal) => {
                 let content = refusal_text(&refusal, &scope);
@@ -88,14 +81,15 @@ pub(super) async fn pressed(
             }
         },
         PanelPart::Days | PanelPart::Roles | PanelPart::Everyone => {
-            let redrawn = data
-                .drafts
-                .with(panel, user, now_ms)
-                .and_then(|draft| changed(&draft, part, &component.data.kind));
-            match redrawn {
-                Ok(draft) => {
-                    let view = draft.panel(panel, super::now_unix());
-                    data.drafts.replace(panel, draft);
+            match changed(
+                &data.drafts,
+                panel,
+                part,
+                &component.data.kind,
+                user,
+                now_ms,
+            ) {
+                Ok(view) => {
                     update(
                         serenity_context,
                         component,
@@ -122,22 +116,27 @@ pub(super) async fn pressed(
 }
 
 fn changed(
-    draft: &Draft,
+    drafts: &Drafts,
+    panel: u64,
     part: PanelPart,
     kind: &serenity::ComponentInteractionDataKind,
-) -> Result<Draft, Refusal> {
+    user: UserId,
+    now_ms: u64,
+) -> Result<PanelView, Refusal> {
     match (part, kind) {
         (PanelPart::Days, serenity::ComponentInteractionDataKind::StringSelect { values }) => {
-            draft.with_weekdays(values)
+            event_draft::weekdays_picked(drafts, panel, user, values, now_ms)
         }
         (PanelPart::Roles, serenity::ComponentInteractionDataKind::RoleSelect { values }) => {
             let roles: Vec<RoleId> = values.iter().map(|role| RoleId::new(role.get())).collect();
-            draft.with_roles(&roles)
+            event_draft::roles_picked(drafts, panel, user, &roles, now_ms)
         }
         (PanelPart::Everyone, serenity::ComponentInteractionDataKind::Button) => {
-            draft.with_everyone()
+            event_draft::everyone_pressed(drafts, panel, user, now_ms)
         }
-        _ => Err(Refusal::PanelUnknown),
+        _ => drafts
+            .with(panel, user, now_ms)
+            .and(Err(Refusal::PanelUnknown)),
     }
 }
 
@@ -153,10 +152,29 @@ async fn save(
     if !acknowledge(serenity_context, component, scope).await {
         return;
     }
-    let answer = match data.drafts.with(panel, user, now_ms) {
-        Ok(draft) => saved(data, serenity_context, component, &draft, scope).await,
-        Err(refusal) => Err(refusal_text(&refusal, scope)),
+    let mut checked: Vec<CheckedPing> = Vec::new();
+    let answer = event_draft::save_pressed(
+        &data.drafts,
+        panel,
+        user,
+        &data.signups,
+        |draft| {
+            checked = judged(serenity_context, component, draft);
+            checked
+                .iter()
+                .map(|checked| (checked.ping, checked.verdict))
+                .collect()
+        },
+        now_ms,
+    )
+    .await;
+    let answer = match answer {
+        SaveAnswer::Saved(content) => Ok(content),
+        SaveAnswer::Unsaved(content) => Err(content),
+        SaveAnswer::Refused(refusal) => Err(refusal_text(&refusal, scope)),
+        SaveAnswer::Failed { summary, failure } => Err(save_failed(summary, &failure, scope)),
     };
+    commands::log_ping_checks(&checked, answer.is_err(), scope);
     let content = match answer {
         Ok(content) => content,
         Err(content) => {
@@ -171,7 +189,6 @@ async fn save(
             return;
         }
     };
-    let _ = data.drafts.take(panel, user, now_ms);
     let edited = component
         .edit_response(
             serenity_context,
@@ -191,15 +208,11 @@ async fn save(
     }
 }
 
-async fn saved(
-    data: &Data,
+fn judged(
     serenity_context: &serenity::Context,
     component: &serenity::ComponentInteraction,
     draft: &Draft,
-    scope: &Scope,
-) -> Result<String, String> {
-    let now_unix = super::now_unix();
-    let creating = draft.purpose() == Purpose::Create;
+) -> Vec<CheckedPing> {
     let place = Place {
         guild: draft.guild(),
         channel: draft.channel(),
@@ -209,73 +222,13 @@ async fn saved(
     } else {
         failure::barnacle_permissions_in(&serenity_context.cache, draft.guild(), draft.channel())
     };
-    let checked = commands::judge_pings(
+    commands::judge_pings(
         &serenity_context.cache,
         &draft.pings(),
         place,
         granted,
-        creating,
-    );
-    let verdicts: Vec<(Ping, PingVerdict)> = checked
-        .iter()
-        .map(|checked| (checked.ping, checked.verdict))
-        .collect();
-    let answer = match draft.ready(now_unix, &verdicts) {
-        Err(refusal) => Err(refusal_text(&refusal, scope)),
-        Ok(ready) => match ready.apply(&data.signups, draft.guild(), now_unix).await {
-            Applied::Create {
-                outcome: Ok(outcome),
-                warning,
-            } => draft
-                .saved_reply(&outcome, warning, now_unix)
-                .map_err(|refusal| refusal_text(&refusal, scope)),
-            Applied::Create {
-                outcome: Err(error),
-                ..
-            } => Err(save_failed(
-                "an event could not be saved",
-                &Failure::from_error(&error),
-                scope,
-            )),
-            Applied::Edit { report, warning } => edit_answer(report, draft, warning, scope),
-        },
-    };
-    commands::log_ping_checks(&checked, answer.is_err(), scope);
-    answer
-}
-
-fn edit_answer(
-    report: EditReport,
-    draft: &Draft,
-    warning: Option<String>,
-    scope: &Scope,
-) -> Result<String, String> {
-    match report {
-        EditReport::Edited {
-            after,
-            cleared,
-            refreshed,
-            ..
-        } => Ok(text::warned(
-            warning,
-            text::event_edited(&after, &cleared, &refreshed),
-        )),
-        EditReport::ClearFailed { failures } => {
-            Err(text::failures_noted(text::CLEAR_FAILED_MOVE, failures))
-        }
-        EditReport::NameTaken => Err(refusal_text(
-            &Refusal::NameTaken(draft.name().to_owned()),
-            scope,
-        )),
-        EditReport::BadRange => Err(refusal_text(&Refusal::LastDayBeforeFirst, scope)),
-        EditReport::TooFar => Err(refusal_text(&Refusal::DatesTooFar, scope)),
-        EditReport::NotFound => Err(refusal_text(&Refusal::EventNotFound, scope)),
-        EditReport::Failed(failure) => Err(save_failed(
-            "an event edit could not be saved",
-            &failure,
-            scope,
-        )),
-    }
+        draft.purpose() == Purpose::Create,
+    )
 }
 
 fn refusal_text(refusal: &Refusal, scope: &Scope) -> String {
