@@ -65,6 +65,22 @@ fn the_notes_file_breaks_no_plain_language_rule() -> Result<(), NotesError> {
 }
 
 #[test]
+fn the_0_3_0_notes_tell_of_events_and_clan_battle_changes() -> Result<(), NotesError> {
+    assert_eq!(env!("CARGO_PKG_VERSION"), "0.3.0");
+    let releases = all()?;
+    let release = find(&releases, "0.3.0").expect("0.3.0 has notes");
+    assert!(
+        release
+            .features
+            .iter()
+            .any(|feature| feature.audience.as_deref() == Some("server managers"))
+    );
+    assert!(!release.changes.is_empty());
+    assert_eq!(problems(std::slice::from_ref(release)), Vec::new());
+    Ok(())
+}
+
+#[test]
 fn a_technical_or_malformed_note_is_reported() -> Result<(), NotesError> {
     let longest = format!("{}.", "a".repeat(119));
     let too_long = format!("{}.", "a".repeat(120));

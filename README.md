@@ -94,7 +94,15 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 
     It adds one table without touching the others, and carries the same run-once guard.
 
-13. Put the bot's token where the bot can find it. Copy `env.example` to `.env` and fill in the one value:
+13. Turn each season into an event once, so a server can schedule events with any name, days, start time and length. This rebuilds `cb_seasons` and `cb_marks`, so back the database up first as above, then, with the bot stopped:
+
+    ```bash
+    sqlite3 data/barnacle.sqlite3 < migrations/0008_events.sql
+    ```
+
+    Every season becomes a Clan Battles event named after its number and codename, with its posts and answers kept. The file carries the same run-once guard.
+
+14. Put the bot's token where the bot can find it. Copy `env.example` to `.env` and fill in the one value:
 
     ```bash
     cp env.example .env && chmod 600 .env
@@ -102,7 +110,7 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 
     `.env` is ignored by git. A `DISCORD_TOKEN` already exported in your shell wins over the file, so you can override it for one run without editing anything.
 
-14. Start the bot:
+15. Start the bot:
 
     ```bash
     cargo run --release -p barnacle-bot
@@ -125,6 +133,7 @@ For Clan Battle sign-ups, the same database also stores each player's Discord us
 - `migrations/0003_cb_season_controls.down.sql` also loses every ping role and every ended marker. It refuses to run once two seasons in the same server share a number, which is what happens as soon as a number is reused after a season ended; resolve those rows first. Back the file up before running it.
 - `migrations/0004_cb_rehearsal_harness.down.sql` drops the rehearsal clock table and the column that marks a season as nightly. Run it only after every rehearsal season has been reset, because a nightly season read back without that column would be treated as an ordinary one.
 - `migrations/0006_cb_ping_roles.down.sql` puts one ping role back on each season and keeps only its first; the others are lost. Back the file up before running it.
+- `migrations/0008_events.down.sql` gives each event its id as its season number and its name as its codename. It refuses to run while any event has a schedule other than the Clan Battles one or every day at 23:30 UTC for 4 hours, or any answer is for an hour above 4; resolve those rows first. Back the file up before running it.
 
 For Join to Create, the same database stores the server and channel IDs of each Join to Create channel together with the user ID of the admin who created it, and for each open room the user ID of the member it was opened for, until the room closes.
 
@@ -134,21 +143,39 @@ For update announcements, the same database stores each server's updates channel
 
 - `migrations/0007_bot_updates.down.sql` removes the table. Every server has to choose its updates channel again, and the next `/announce` there posts the running version's notes again.
 
-## Clan Battle sign-ups
+## Event sign-ups
 
-Create a channel that only the bot can post in, and run `/cb season start` there. The bot needs View Channel, Send Messages, Embed Links and Read Message History in that channel, all of which the invite link above already grants.
+Create a channel that only the bot can post in, and run `/event create` there. The bot needs View Channel, Send Messages, Embed Links and Read Message History in that channel, all of which the invite link above already grants. Every `/event` command needs Manage Server, and every reply is visible only to the person who ran it.
 
-CB nights run 23:30-03:30 UTC on Wednesday, Thursday, Saturday and Sunday. For each night, the bot posts the sign-up message 24 hours ahead, closes it when the night starts, and deletes it 30 minutes after it ends. The bot has to be running for each of these steps: if it is down when a night's start passes, that night gets no sign-up post.
+An event holds one session on each of its weekdays from its first day to its last. For each session, the bot posts the sign-up message 24 hours ahead, closes it when the session starts, and deletes it 30 minutes after it ends. The bot has to be running for each of these steps: if it is down when a session's start passes, that session gets no sign-up post. Every time in a sign-up post is a Discord timestamp, so each member sees it in their own time zone.
 
-`/cb season start` takes up to five roles to ping when a sign-up post goes up: `ping_role`, then `ping_role_2` to `ping_role_5`. The post pings them in that order, and a role given twice is pinged once. @everyone has to be picked on its own; picking it together with named roles is refused, because it already reaches every member. A night is pinged once, the first time its post appears, and never again: not when the post is updated, and not when it is posted afresh after a move. Picking @everyone pings the whole server, once per night like any role. A role marked mentionable in Discord needs no extra bot permission. Any other role, and @everyone, also need the bot to hold Mention @everyone, @here, and All Roles in that channel, or the ping is silent. Each role is checked on its own. A ping that cannot sound is refused at `/cb season start` and `/rehearse start` when a permission override on the channel is what blocks it, and otherwise warned about in the reply to those commands and to `/cb season edit` and `/cb season move`. Each night's first post also logs whether Discord registered its pings, and logs a `signup.ping.silent` warning naming any it did not.
+`/event create` takes:
+- `name`, from 1 to 100 characters once surrounding spaces are trimmed. Two running events in one server cannot share a name, whatever its case; an event that has ended, or whose last post has been deleted, gives its name up.
+- `first_day` and `last_day`, written `YYYY-MM-DD`. While you type, the bot suggests dates from yesterday to six months ahead, each with its weekday. The dates have to sit within six months either side of today, and at least one session has to be still to start.
+- `template`, which fills in the start, hours and time zone. The one template, Clan Battles, runs 23:30 UTC for 4 hours on Wednesday, Thursday, Saturday and Sunday. Any of `start`, `hours` and `time_zone` given beside it replaces the template's value.
+- `start`, on a 24-hour clock such as `17:00` or `5:30`, in the event's time zone.
+- `hours`, from 1 to 24.
+- `time_zone`, a place name such as `America/Denver` or `Europe/Berlin`, or `UTC`, picked from the suggestions. The suggestions list the zones of the server's running events first. An abbreviation such as `MDT`, an offset such as `UTC-6` and a name without a place such as `EST` are refused: they do not follow the place's own daylight saving changes, so a start written with one drifts by an hour twice a year.
 
-A season's dates have to sit within six months either side of today. Seasons run two to four months and are announced a week or two ahead, so anything wider is a typo.
+Without a template, `start`, `hours` and `time_zone` are all needed, and the reply names any that were left out.
 
-Four commands change a season once it is running:
-- `/cb season edit` changes a season's number, dates, codename or ping roles. Giving any of `ping_role` to `ping_role_5` replaces every role the season pinged with the ones given, and `clear_ping_role:true` stops it pinging any role; giving both is refused. Its sign-up post is redrawn where it already stands; it does not move channel and does not ping again.
-- `/cb season move` is run in the channel the season should post in from now on. It removes the season's posts from the old channel and posts them there instead. If any of the old posts cannot be removed, nothing moves and the season stays where it is.
-- `/cb season repost number:<n>` sends the season's open sign-up post again at the bottom of its channel, for when an admin deleted it by accident or it has scrolled out of sight. It deletes the old post if it is still there, sends the same night's post with every answer kept, and records the new post in the old one's place. Only a post still open for answers is reposted; with none open, the reply says when the next one goes up. `ping_again` is false by default, so a repost pings nobody. `ping_again:true` pings the season's roles once more, and is refused when the season has no ping role, or when the person running it could not ping those roles themselves: they need Mention @everyone, @here, and All Roles in the season's channel, or every role has to be mentionable. Like `/cb season start`, a repost with `ping_again:true` checks each role against the bot's own permissions, opens its reply with a warning for any role that cannot sound, and logs each check.
-- `/cb season end` stops a season at once: every sign-up post it still has is deleted from Discord and nothing more posts. If any post cannot be deleted, the season keeps running so you can fix the bot's permissions and run it again. Every answer already given stays in the database, and the season's number is free to reuse.
+`/event create` saves nothing yet. It opens a private panel that previews the event, its first session and how many sessions it holds, with:
+- a weekday menu, pre-selected with the template's weekdays, or with the first day's weekday when there is no template;
+- a role menu of up to five roles to ping, empty at first;
+- a Ping @everyone button, off at first;
+- Create, which checks the event again and saves it, and Cancel, which closes the panel and saves nothing.
+
+Only the admin who opened a panel can use it. A panel expires 15 minutes after it opens, and when the bot restarts; run the command again to open a new one.
+
+The roles picked on the panel are pinged in that order when a sign-up post goes up. @everyone has its own button and cannot be picked together with roles, because it already reaches every member; turning it on while roles are picked, or picking roles while it is on, is refused. A session is pinged once, the first time its post appears, and never again: not when the post is updated, and not when it is posted afresh after a move. Picking @everyone pings the whole server, once per session like any role. A role marked mentionable in Discord needs no extra bot permission. Any other role, and @everyone, also need the bot to hold Mention @everyone, @here, and All Roles in that channel, or the ping is silent. Each role is checked on its own. A ping that cannot sound is refused at Create and at `/rehearse start` when a permission override on the channel is what blocks it, and otherwise warned about in the reply to those and to Save. Each session's first post also logs whether Discord registered its pings, and logs a `signup.ping.silent` warning naming any it did not.
+
+An event of up to four hours shows Attend all and Nope all, then a row for each hour. A longer event shows Attend all, Nope all and Choose hours: Choose hours opens a private menu that lists each hour with its start and end, the member picks the hours they attend, and the post shows each member's hours as ranges such as `1–3, 5`.
+
+Four more commands work on running events. Edit, repost and end each pick the event by name from a list as you type.
+- `/event edit` opens the same panel, pre-selected with the event's weekdays, roles and Ping @everyone setting and showing any of `name`, `first_day`, `last_day`, `start`, `hours`, `time_zone` and `channel` given, with Save in place of Create. Save changes only what was changed on the panel or in the options, so a change another admin saved to another field in the meantime stays; with nothing changed it is refused. A change to the dates, weekdays, start time or time zone needs a session still to start; a change to only the name, hours, roles or channel does not. The posts of sessions the new schedule no longer holds are deleted, and the rest are redrawn where they stand without pinging again. Lowering the hours deletes the answers for the hours above the new count. `channel` takes a text channel of this server: the event's posts are deleted from its old channel first, and if any of them cannot be deleted, nothing changes and the event stays where it is. An event that ended, or was removed, after the panel opened is refused as not found.
+- `/event repost event:<event>` sends the event's open sign-up post again at the bottom of its channel, for when an admin deleted it by accident or it has scrolled out of sight. It deletes the old post if it is still there, sends the same session's post with every answer kept, and records the new post in the old one's place. Only a post still open for answers is reposted; with none open, the reply says when the next one goes up. `ping_again` is false by default, so a repost pings nobody. `ping_again:true` pings the event's roles once more, and is refused when the event pings nobody, or when the person running it could not ping those roles themselves: they need Mention @everyone, @here, and All Roles in the event's channel, or every role has to be mentionable. Like Create, a repost with `ping_again:true` checks each role against the bot's own permissions, opens its reply with a warning for any role that cannot sound, and logs each check.
+- `/event end event:<event>` stops an event at once: every sign-up post it still has is deleted from Discord and nothing more posts. If any post cannot be deleted, the event keeps running so you can fix the bot's permissions and run it again. Every answer already given stays in the database, and the event's name is free to reuse. An event that never posted is removed outright.
+- `/event list` lists the server's running events, each with its channel, dates, weekdays, start time, hours, time zone, sessions still ahead and next sign-up post.
 
 ### Rehearsing in a throwaway server
 
@@ -161,17 +188,17 @@ guilds = [222222222222222222]
 
 A server listed there has to be in `commands.guilds` as well, which means `commands.scope` has to be `"guilds"`.
 
-A rehearsal season is an ordinary season whose nights fall on every calendar day rather than only on CB days. Nothing else differs: each night still starts at 23:30 UTC, its post still goes up 24 hours ahead, still closes when the night starts and is still deleted 30 minutes after it ends, and the same timer that serves a real server performs every one of those steps. What sets a rehearsal server apart is a clock offset. The timer beats that server at the real time plus its offset, and `/rehearse next` moves the offset forward to the next instant at which the timer has something to do. Because every rehearsal night is followed by another the next day, each `next` after the first shows one night closing and the following night's post going up in the same beat, which is the sequence a real server only produces on a Wednesday or a Saturday.
+A rehearsal event is an ordinary event whose sessions fall on every calendar day at 23:30 UTC for 4 hours. Nothing else differs: its post still goes up 24 hours ahead, still closes when the session starts and is still deleted 30 minutes after it ends, and the same timer that serves a real server performs every one of those steps. What sets a rehearsal server apart is a clock offset. The timer beats that server at the real time plus its offset, and `/rehearse next` moves the offset forward to the next instant at which the timer has something to do. Because every rehearsal session is followed by another the next day, each `next` after the first shows one session closing and the following session's post going up in the same beat, which is the sequence a Clan Battles event only produces on a Wednesday or a Saturday.
 
 Three commands exist only in a server the section names. The bot registers a command list per server every time it starts, so a server the section does not name is sent a list without them and they do not appear in its command list. All three also refuse to run in a server the section does not name, so the guard does not depend on the registration being right.
 
 Taking a server out of `[rehearsal]` while leaving it in `commands.guilds` removes the commands on the next start. Removing it from `commands.guilds` as well does not: the bot never writes to a server it is not told about, so that server keeps the list it was last given until you clear its commands by hand. Take it out of `[rehearsal]`, start the bot once, and only then remove it from `commands.guilds`.
 
-- `/rehearse start` sets up a rehearsal season that posts in this channel. It takes the season number, an optional codename, up to five ping roles as `/cb season start` does, and how many nights to run: three by default, seven at most. The nights start tomorrow, so the first post goes up a genuine 24 hours before its night rather than retroactively. Everything else is what `/cb season start` checks: a text channel, the bot's permissions there, the six-month window on the dates, and the number and overlap rules. Starting a rehearsal also resets that server's clock, so a fresh rehearsal always begins from the real time.
-- `/rehearse next` moves the server's clock to the next moment at which the timer would post, close or remove a sign-up, runs that beat, and says what it did. Once the last night's post has been removed it replies that nothing is waiting.
-- `/rehearse reset` deletes every Clan Battle season, sign-up post and answer in that server, including seasons that have already ended, and clears the server's clock offset. If any post cannot be removed from Discord, no season and no answer is deleted, and the reply says how many posts had already been cleared before it stopped. The silhouette game's rounds and solves are left alone.
+- `/rehearse start` sets up a rehearsal event that posts in this channel. It takes the event's `name`, up to five roles to ping as `ping_role`, then `ping_role_2` to `ping_role_5`, and `sessions`, how many sessions to run: three by default, seven at most. The sessions start tomorrow, so the first post goes up a genuine 24 hours before its session rather than retroactively. Everything else is what `/event create` checks: a text channel, the bot's permissions there, the name rule and the ping rules. Only one rehearsal runs in a server at a time. Starting a rehearsal also resets that server's clock, so a fresh rehearsal always begins from the real time.
+- `/rehearse next` moves the server's clock to the next moment at which the timer would post, close or remove a sign-up, runs that beat, and says what it did. Once the last session's post has been removed it replies that nothing is waiting.
+- `/rehearse reset` deletes every event, sign-up post and answer in that server, including events that have already ended, and clears the server's clock offset. If any post cannot be removed from Discord, no event and no answer is deleted, and the reply says how many posts had already been cleared before it stopped. The silhouette game's rounds and solves are left alone.
 
-A full rehearsal is `/rehearse start number:99`, then `/rehearse next` to watch the first post appear with its ping, some clicks, `/cb season edit`, `/cb season move` in another channel, `/rehearse next` to watch the first night close and the second night's post appear together, `/rehearse next` to watch the first post deleted, `/rehearse next` twice more to walk the second night through the same two steps, and finally `/rehearse reset`. Do not list a real clan server here: a reset deletes its seasons without asking which of them mattered.
+A full rehearsal is `/rehearse start name:Drill`, then `/rehearse next` to watch the first post appear with its ping, some clicks, `/event edit` with a new name or roles, `/event edit` with `channel` set to another channel, `/rehearse next` to watch the first session close and the second session's post appear together, `/rehearse next` to watch the first post deleted, `/rehearse next` twice more to walk the second session through the same two steps, and finally `/rehearse reset`. Do not list a real clan server here: a reset deletes its events without asking which of them mattered.
 
 ## Join to Create voice channels
 

@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.97"
 license = "Apache-2.0"
@@ -21,7 +21,7 @@ deunicode = "1"
 dotenvy = "0.15"
 gettext = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
-jiff = { version = "0.2", default-features = false, features = ["std"] }
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
 poise = "0.7"
 rand = "0.10"
 serde = { version = "1", features = ["derive"] }

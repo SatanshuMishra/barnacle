@@ -28,6 +28,8 @@ pub const CB_HARNESS: &str = include_str!("../../../../migrations/0004_cb_rehear
 pub const CB_PING_ROLES: &str = include_str!("../../../../migrations/0006_cb_ping_roles.sql");
 pub const CB_PING_ROLES_DOWN: &str =
     include_str!("../../../../migrations/0006_cb_ping_roles.down.sql");
+pub const CB_EVENTS: &str = include_str!("../../../../migrations/0008_events.sql");
+pub const CB_EVENTS_DOWN: &str = include_str!("../../../../migrations/0008_events.down.sql");
 const CLI_DIRECTIVE: &str = ".bail on\n";
 pub const BUILD: u32 = 13187581;
 
@@ -115,7 +117,14 @@ pub async fn solves() -> Solves {
     Solves::with_pool(migrated_pool().await).await.unwrap()
 }
 
-pub async fn attendance_pool() -> SqlitePool {
+pub async fn run_script(pool: &SqlitePool, script: &'static str) -> Result<(), sqlx::Error> {
+    sqlx::raw_sql(script.trim_start_matches(CLI_DIRECTIVE))
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+
+pub async fn seasons_pool() -> SqlitePool {
     let pool = memory_pool().await;
     sqlx::raw_sql(CB_MIGRATION).execute(&pool).await.unwrap();
     sqlx::raw_sql(CB_CONTROLS.trim_start_matches(CLI_DIRECTIVE))
@@ -127,6 +136,15 @@ pub async fn attendance_pool() -> SqlitePool {
         .await
         .unwrap();
     sqlx::raw_sql(CB_PING_ROLES.trim_start_matches(CLI_DIRECTIVE))
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool
+}
+
+pub async fn attendance_pool() -> SqlitePool {
+    let pool = seasons_pool().await;
+    sqlx::raw_sql(CB_EVENTS.trim_start_matches(CLI_DIRECTIVE))
         .execute(&pool)
         .await
         .unwrap();

@@ -123,15 +123,24 @@ pub enum StartupError {
         #[source]
         source: UpdatesStoreError,
     },
+    #[error(
+        "the event columns are missing from {path}; back the file up, then add them with `sqlite3 {path} < migrations/0008_events.sql`"
+    )]
+    Events {
+        path: PathBuf,
+        #[source]
+        source: AttendanceError,
+    },
 }
 
 fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
     let path = path.to_owned();
     match source {
         AttendanceError::MissingPingRoles => StartupError::PingRoles { path, source },
-        AttendanceError::UnexpectedColumns { .. } | AttendanceError::MissingIndex { .. } => {
-            StartupError::SeasonControls { path, source }
+        AttendanceError::BeforeEvents | AttendanceError::MissingIndex { .. } => {
+            StartupError::Events { path, source }
         }
+        AttendanceError::UnexpectedColumns { .. } => StartupError::SeasonControls { path, source },
         source => StartupError::Attendance { path, source },
     }
 }
@@ -244,9 +253,13 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
         .await
         .map_err(|source| database(SolvesError::Database(source)))?;
     let solves = Solves::with_pool(pool.clone()).await.map_err(database)?;
-    let attendance = Attendance::with_pool(pool.clone())
-        .await
-        .map_err(|source| attendance_error(path, source))?;
+    let attendance = match Attendance::with_pool(pool.clone()).await {
+        Ok(attendance) => Ok(attendance),
+        Err(source) => match attendance_error(path, source) {
+            events @ StartupError::Events { .. } => Err(events),
+            other => return Err(other),
+        },
+    };
     let voice = VoiceStore::with_pool(pool.clone())
         .await
         .map_err(|source| StartupError::VoiceRooms {
@@ -259,6 +272,7 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
             path: path.to_owned(),
             source,
         })?;
+    let attendance = attendance?;
     Ok(Stores {
         solves,
         attendance,

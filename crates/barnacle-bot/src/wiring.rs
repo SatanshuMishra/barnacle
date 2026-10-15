@@ -1,16 +1,24 @@
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
 
 use barnacle_catalog::Tier;
 use barnacle_guess::RoundOptions;
 use barnacle_guess::SeriesLength;
+use jiff::civil::Date;
 
 use crate::attendance::Delivery;
 use crate::attendance::Target;
+use crate::attendance::listed_events;
+use crate::attendance_store::AttendanceError;
+use crate::attendance_store::Event;
+use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::Ping;
 use crate::ids::RoleId;
 use crate::schedule::Hour;
-use crate::schedule::Night;
+use crate::schedule::Hours;
+use crate::schedule::parse_day;
 use crate::solves::Ranking;
 
 const CANCEL_PREFIX: &str = "barnacle-cancel:";
@@ -23,11 +31,20 @@ pub const ENDED_SKIP_BUTTON_ID: &str = "barnacle-skip:ended";
 pub const ENDED_END_BUTTON_ID: &str = "barnacle-end:ended";
 pub const DEFAULT_LEADERBOARD_SIZE: u32 = 10;
 pub const SIGNUP_PREFIX: &str = "barnacle-cb:";
+pub const CHOOSE_PREFIX: &str = "barnacle-cb-pick:";
+pub const HOURS_PREFIX: &str = "barnacle-cb-hours:";
+pub const PANEL_PREFIX: &str = "barnacle-event:";
+pub const EVENT_NAME_LIMIT: usize = 100;
 
 const ALL_TARGET: &str = "all";
 const ATTENDING_CHOICE: &str = "in";
 const NOPE_CHOICE: &str = "out";
 const SIGNUP_FIELDS: usize = 4;
+const SESSION_FIELDS: usize = 2;
+const PANEL_FIELDS: usize = 2;
+pub const SUGGESTION_LIMIT: usize = 25;
+const CHOICE_LABEL_LIMIT: usize = 100;
+const CUT_MARK: char = '…';
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, poise::ChoiceParameter)]
 pub enum SortChoice {
@@ -172,41 +189,224 @@ fn id_number(custom_id: &str, prefix: &str) -> Option<u64> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SignupClick {
-    pub season: i64,
-    pub night: Night,
+    pub event: i64,
+    pub date: Date,
     pub target: Target,
     pub attending: bool,
 }
 
-pub fn signup_button_id(season: i64, night: Night, target: Target, attending: bool) -> String {
+pub fn signup_button_id(event: i64, date: Date, target: Target, attending: bool) -> String {
     format!(
         "{}{}:{}",
-        signup_tag_prefix(season, night),
+        signup_tag_prefix(event, date),
         target_text(target),
         choice_text(attending)
     )
 }
 
-pub fn signup_tag_prefix(season: i64, night: Night) -> String {
-    format!("{SIGNUP_PREFIX}{season}:{}:", night.label())
+pub fn signup_tag_prefix(event: i64, date: Date) -> String {
+    format!("{SIGNUP_PREFIX}{event}:{date}:")
 }
 
 pub fn signup_click(custom_id: &str) -> Option<SignupClick> {
     let fields: Vec<&str> = custom_id.strip_prefix(SIGNUP_PREFIX)?.split(':').collect();
-    let [season, night, target, choice] = <[&str; SIGNUP_FIELDS]>::try_from(fields).ok()?;
+    let [event, date, target, choice] = <[&str; SIGNUP_FIELDS]>::try_from(fields).ok()?;
     Some(SignupClick {
-        season: canonical_season(season)?,
-        night: Night::parse(night)?,
+        event: canonical_id(event)?,
+        date: parse_day(date)?,
         target: parse_target(target)?,
         attending: parse_choice(choice)?,
     })
 }
 
-fn canonical_season(text: &str) -> Option<i64> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionRef {
+    pub event: i64,
+    pub date: Date,
+}
+
+pub fn choose_button_id(event: i64, date: Date) -> String {
+    format!("{CHOOSE_PREFIX}{event}:{date}")
+}
+
+pub fn hours_menu_id(event: i64, date: Date) -> String {
+    format!("{HOURS_PREFIX}{event}:{date}")
+}
+
+pub fn choose_press(custom_id: &str) -> Option<SessionRef> {
+    session_ref(custom_id, CHOOSE_PREFIX)
+}
+
+pub fn hours_menu(custom_id: &str) -> Option<SessionRef> {
+    session_ref(custom_id, HOURS_PREFIX)
+}
+
+fn session_ref(custom_id: &str, prefix: &str) -> Option<SessionRef> {
+    let fields: Vec<&str> = custom_id.strip_prefix(prefix)?.split(':').collect();
+    let [event, date] = <[&str; SESSION_FIELDS]>::try_from(fields).ok()?;
+    Some(SessionRef {
+        event: canonical_id(event)?,
+        date: parse_day(date)?,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelPart {
+    Days,
+    Roles,
+    Everyone,
+    Save,
+    Cancel,
+}
+
+impl PanelPart {
+    const ALL: [PanelPart; 5] = [
+        PanelPart::Days,
+        PanelPart::Roles,
+        PanelPart::Everyone,
+        PanelPart::Save,
+        PanelPart::Cancel,
+    ];
+
+    fn text(self) -> &'static str {
+        match self {
+            PanelPart::Days => "days",
+            PanelPart::Roles => "roles",
+            PanelPart::Everyone => "everyone",
+            PanelPart::Save => "save",
+            PanelPart::Cancel => "cancel",
+        }
+    }
+}
+
+pub fn panel_id(panel: u64, part: PanelPart) -> String {
+    format!("{PANEL_PREFIX}{panel}:{}", part.text())
+}
+
+pub fn panel_part(custom_id: &str) -> Option<(u64, PanelPart)> {
+    let fields: Vec<&str> = custom_id.strip_prefix(PANEL_PREFIX)?.split(':').collect();
+    let [panel, part] = <[&str; PANEL_FIELDS]>::try_from(fields).ok()?;
+    let panel = canonical_id(panel).and_then(|id| u64::try_from(id).ok())?;
+    let part = PanelPart::ALL
+        .into_iter()
+        .find(|known| known.text() == part)?;
+    Some((panel, part))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FoundChannel {
+    pub guild: GuildId,
+    pub id: ChannelId,
+    pub text: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelProblem {
+    Unknown,
+    NotText,
+}
+
+pub fn event_channel(
+    guild: GuildId,
+    found: Option<FoundChannel>,
+) -> Result<ChannelId, ChannelProblem> {
+    match found {
+        Some(found) if found.guild == guild && found.text => Ok(found.id),
+        Some(found) if found.guild == guild => Err(ChannelProblem::NotText),
+        Some(_) | None => Err(ChannelProblem::Unknown),
+    }
+}
+
+pub fn hour_choices(values: &[String], hours: Hours) -> Option<Vec<Hour>> {
+    let chosen: Vec<Hour> = values
+        .iter()
+        .map(|value| parse_hour(value).filter(|hour| hours.holds(*hour)))
+        .collect::<Option<Vec<Hour>>>()?;
+    let distinct: BTreeSet<Hour> = chosen.iter().copied().collect();
+    (distinct.len() == chosen.len()).then(|| distinct.into_iter().collect())
+}
+
+fn canonical_id(text: &str) -> Option<i64> {
     if text.starts_with('0') || !text.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
-    text.parse().ok().filter(|season| *season > 0)
+    text.parse().ok().filter(|id| *id > 0)
+}
+
+pub fn event_name(text: &str) -> Option<String> {
+    let name = text.trim();
+    (1..=EVENT_NAME_LIMIT)
+        .contains(&name.chars().count())
+        .then(|| name.to_owned())
+}
+
+pub fn same_name(a: &str, b: &str) -> bool {
+    a.to_lowercase() == b.to_lowercase()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventChoice {
+    pub label: String,
+    pub value: String,
+}
+
+pub fn event_choices(events: &[Event], typed: &str, now_unix: i64) -> Vec<EventChoice> {
+    if typed.chars().count() > EVENT_NAME_LIMIT {
+        return Vec::new();
+    }
+    let wanted = typed.to_lowercase();
+    listed_events(events, now_unix)
+        .into_iter()
+        .filter(|event| event.name.to_lowercase().contains(&wanted))
+        .map(|event| ((event.span.first_day(), event.id), event))
+        .collect::<BTreeMap<(Date, i64), &Event>>()
+        .into_values()
+        .take(SUGGESTION_LIMIT)
+        .map(event_choice)
+        .collect()
+}
+
+fn event_choice(event: &Event) -> EventChoice {
+    let dates = format!(" · {} to {}", event.span.first_day(), event.span.last_day());
+    let room = CHOICE_LABEL_LIMIT - dates.chars().count();
+    let name = if event.name.chars().count() > room {
+        event
+            .name
+            .chars()
+            .take(room - 1)
+            .chain(std::iter::once(CUT_MARK))
+            .collect()
+    } else {
+        event.name.clone()
+    };
+    EventChoice {
+        label: format!("{name}{dates}"),
+        value: event.id.to_string(),
+    }
+}
+
+pub fn event_suggestions(
+    read: Result<Vec<Event>, AttendanceError>,
+    typed: &str,
+    now_unix: i64,
+) -> Vec<EventChoice> {
+    read.map(|events| event_choices(&events, typed, now_unix))
+        .unwrap_or_default()
+}
+
+pub fn chosen_event<'a>(events: &'a [Event], text: &str, now_unix: i64) -> Option<&'a Event> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let running = listed_events(events, now_unix);
+    canonical_id(text)
+        .and_then(|id| running.iter().copied().find(|event| event.id == id))
+        .or_else(|| {
+            running
+                .into_iter()
+                .find(|event| same_name(&event.name, text))
+        })
 }
 
 pub fn missing_signup_permissions(access: ChannelAccess) -> Vec<&'static str> {
@@ -242,10 +442,14 @@ fn parse_target(text: &str) -> Option<Target> {
     if text == ALL_TARGET {
         return Some(Target::All);
     }
-    Hour::ALL
-        .into_iter()
-        .find(|hour| hour.get().to_string() == text)
-        .map(Target::One)
+    parse_hour(text).map(Target::One)
+}
+
+fn parse_hour(text: &str) -> Option<Hour> {
+    text.parse()
+        .ok()
+        .and_then(Hour::new)
+        .filter(|hour| hour.get().to_string() == text)
 }
 
 fn parse_choice(text: &str) -> Option<bool> {

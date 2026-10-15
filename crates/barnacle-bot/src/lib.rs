@@ -2,6 +2,7 @@ pub mod attendance;
 pub mod attendance_store;
 pub mod config;
 pub mod discord;
+pub mod event_draft;
 pub mod failure;
 pub mod ids;
 pub mod info;

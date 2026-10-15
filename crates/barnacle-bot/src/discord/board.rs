@@ -34,7 +34,7 @@ impl DiscordBoard {
 
 fn signup_embed(view: &SignupView) -> serenity::CreateEmbed {
     serenity::CreateEmbed::new()
-        .title(text::signup_title(view.number, view.codename.as_deref()))
+        .title(text::signup_title(&view.name))
         .description(text::signup_description(view))
         .colour(text::EMBED_COLOUR)
 }
@@ -70,8 +70,8 @@ fn signup_button(
         serenity::ButtonStyle::Danger
     };
     serenity::CreateButton::new(wiring::signup_button_id(
-        view.season,
-        view.night,
+        view.event,
+        view.session.date(),
         target,
         attending,
     ))
@@ -80,29 +80,74 @@ fn signup_button(
     .disabled(!view.open)
 }
 
-fn signup_rows(view: &SignupView) -> Vec<serenity::CreateActionRow> {
-    let everything = serenity::CreateActionRow::Buttons(vec![
-        signup_button(view, Target::All, true, text::ATTEND_ALL_LABEL.to_owned()),
-        signup_button(view, Target::All, false, text::NOPE_ALL_LABEL.to_owned()),
-    ]);
+pub fn signup_rows(view: &SignupView) -> Vec<serenity::CreateActionRow> {
+    let hours = view.session.hours();
+    let choose = (!text::short_event(hours)).then(|| {
+        serenity::CreateButton::new(wiring::choose_button_id(view.event, view.session.date()))
+            .label(text::CHOOSE_HOURS_LABEL)
+            .style(serenity::ButtonStyle::Secondary)
+            .disabled(!view.open)
+    });
+    let everything = serenity::CreateActionRow::Buttons(
+        [
+            signup_button(view, Target::All, true, text::ATTEND_ALL_LABEL.to_owned()),
+            signup_button(view, Target::All, false, text::NOPE_ALL_LABEL.to_owned()),
+        ]
+        .into_iter()
+        .chain(choose)
+        .collect(),
+    );
     std::iter::once(everything)
-        .chain(Hour::ALL.into_iter().map(|hour| {
-            serenity::CreateActionRow::Buttons(vec![
-                signup_button(
-                    view,
-                    Target::One(hour),
-                    true,
-                    text::hour_button_label(hour, true),
-                ),
-                signup_button(
-                    view,
-                    Target::One(hour),
-                    false,
-                    text::hour_button_label(hour, false),
-                ),
-            ])
-        }))
+        .chain(
+            hours
+                .each()
+                .filter(|_| text::short_event(hours))
+                .map(|hour| {
+                    serenity::CreateActionRow::Buttons(vec![
+                        signup_button(
+                            view,
+                            Target::One(hour),
+                            true,
+                            text::hour_button_label(hour, true),
+                        ),
+                        signup_button(
+                            view,
+                            Target::One(hour),
+                            false,
+                            text::hour_button_label(hour, false),
+                        ),
+                    ])
+                }),
+        )
         .collect()
+}
+
+pub fn hours_menu_reply(
+    view: &SignupView,
+    attending: &[Hour],
+) -> serenity::CreateInteractionResponseMessage {
+    let hours = view.session.hours();
+    let options = hours
+        .each()
+        .map(|hour| {
+            serenity::CreateSelectMenuOption::new(
+                format!("Hour {}", hour.get()),
+                hour.get().to_string(),
+            )
+            .default_selection(attending.contains(&hour))
+        })
+        .collect();
+    let menu = serenity::CreateSelectMenu::new(
+        wiring::hours_menu_id(view.event, view.session.date()),
+        serenity::CreateSelectMenuKind::String { options },
+    )
+    .min_values(0)
+    .max_values(hours.get());
+    serenity::CreateInteractionResponseMessage::new()
+        .ephemeral(true)
+        .allowed_mentions(serenity::CreateAllowedMentions::new())
+        .content(text::hours_menu_text(view))
+        .components(vec![serenity::CreateActionRow::SelectMenu(menu)])
 }
 
 fn tagged(message: &serenity::Message, prefix: &str) -> bool {
@@ -184,7 +229,7 @@ impl Board for DiscordBoard {
         channel: ChannelId,
         tag: PostTag,
     ) -> Result<Option<Snowflake>, BoardError> {
-        let prefix = wiring::signup_tag_prefix(tag.season, tag.night);
+        let prefix = wiring::signup_tag_prefix(tag.event, tag.session.date());
         let recent = channel_id(channel)?
             .messages(
                 &self.http,

@@ -5,8 +5,6 @@ use std::sync::Arc;
 use barnacle_guess::RoundOptions;
 use barnacle_guess::Snowflake;
 use barnacle_guess::UserId;
-use jiff::ToSpan;
-use jiff::civil::Date;
 use poise::serenity_prelude as serenity;
 
 use super::Context;
@@ -21,18 +19,21 @@ use super::rooms::MISSING_PERMISSIONS;
 use super::rooms::UNKNOWN_CHANNEL;
 use super::rooms::refused;
 use crate::attendance::ClearScope;
+use crate::attendance::RehearsalOutcome;
 use crate::attendance::RepostOutcome;
 use crate::attendance::RepostPing;
+use crate::attendance::listed_events;
 use crate::attendance::next_moment;
 use crate::attendance::next_post_at;
 use crate::attendance_store::Attendance;
-use crate::attendance_store::CreateOutcome;
-use crate::attendance_store::EditOutcome;
 use crate::attendance_store::EndOutcome;
-use crate::attendance_store::NewSeason;
+use crate::attendance_store::Event;
+use crate::attendance_store::NewEvent;
 use crate::attendance_store::Post;
-use crate::attendance_store::Season;
-use crate::attendance_store::SeasonChange;
+use crate::event_draft;
+use crate::event_draft::CreateOptions;
+use crate::event_draft::Draft;
+use crate::event_draft::EditOptions;
 use crate::failure;
 use crate::failure::Failure;
 use crate::failure::Scope;
@@ -43,9 +44,6 @@ use crate::ids::Place;
 use crate::ids::RoleId;
 use crate::info;
 use crate::schedule;
-use crate::schedule::Night;
-use crate::schedule::Range;
-use crate::schedule::parse_day;
 use crate::solves::Standing;
 use crate::table::COUNTDOWN_SECONDS;
 use crate::table::StartOutcome;
@@ -60,6 +58,8 @@ use crate::voice_store::Hub;
 use crate::voice_text;
 use crate::wiring;
 use crate::wiring::ChannelAccess;
+use crate::wiring::ChannelProblem;
+use crate::wiring::FoundChannel;
 use crate::wiring::LeaderboardRequest;
 use crate::wiring::PingChoiceProblem;
 use crate::wiring::PingReach;
@@ -69,9 +69,6 @@ use crate::wiring::SortChoice;
 
 const UNKNOWN_MEMBER: isize = 10007;
 const MILLIS_PER_SECOND: u64 = 1000;
-const REHEARSAL_NIGHTS: u32 = 3;
-const REHEARSAL_NIGHTS_MAX: u32 = 7;
-const CODENAME_LIMIT: usize = 100;
 const CLOCK_BEFORE_1970: &str = "the clock reads before 1970";
 const CLOCK_OUT_OF_RANGE: &str = "the clock reads a time outside the supported calendar";
 const SIGNUP_ACCESS: serenity::Permissions = serenity::Permissions::VIEW_CHANNEL
@@ -113,49 +110,41 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
             ..about()
         },
         poise::Command {
-            description: Some("Clan Battle sign-ups".into()),
-            subcommands: vec![poise::Command {
-                description: Some("Clan Battle seasons for this server".into()),
-                subcommands: vec![
-                    poise::Command {
-                        description: Some(
-                            "Set up a season and post its sign-ups in this channel".into(),
-                        ),
-                        ..season_start()
-                    },
-                    poise::Command {
-                        description: Some(
-                            "Change a season's number, dates, codename or ping roles".into(),
-                        ),
-                        ..season_edit()
-                    },
-                    poise::Command {
-                        description: Some(
-                            "Send a season's open sign-up post again at the bottom of its channel"
-                                .into(),
-                        ),
-                        ..season_repost()
-                    },
-                    poise::Command {
-                        description: Some("Move a season's sign-up posts to this channel".into()),
-                        ..season_move()
-                    },
-                    poise::Command {
-                        description: Some("End a season now and clear its sign-up posts".into()),
-                        ..season_end()
-                    },
-                    poise::Command {
-                        description: Some(
-                            "List this server's seasons and when each posts next".into(),
-                        ),
-                        ..season_show()
-                    },
-                ],
-                subcommand_required: true,
-                ..season()
-            }],
+            description: Some("Schedule events and their sign-ups".into()),
+            subcommands: vec![
+                poise::Command {
+                    description: Some(
+                        "Set up an event in this channel, then settle its weekdays and pings"
+                            .into(),
+                    ),
+                    ..event_create()
+                },
+                poise::Command {
+                    description: Some(
+                        "Change an event, then settle its weekdays and pings before saving".into(),
+                    ),
+                    ..event_edit()
+                },
+                poise::Command {
+                    description: Some(
+                        "Send an event's open sign-up post again at the bottom of its channel"
+                            .into(),
+                    ),
+                    ..event_repost()
+                },
+                poise::Command {
+                    description: Some(
+                        "End an event now and remove its sign-up posts, keeping the answers".into(),
+                    ),
+                    ..event_end()
+                },
+                poise::Command {
+                    description: Some("List this server's running events".into()),
+                    ..event_list()
+                },
+            ],
             subcommand_required: true,
-            ..cb()
+            ..event()
         },
         poise::Command {
             description: Some("Join to Create voice channels".into()),
@@ -210,11 +199,11 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
 
 pub fn rehearsal() -> Vec<poise::Command<Data, Error>> {
     vec![poise::Command {
-        description: Some("Drive a Clan Battle rehearsal in this server".into()),
+        description: Some("Drive a sign-up rehearsal in this server".into()),
         subcommands: vec![
             poise::Command {
                 description: Some(
-                    "Set up a rehearsal season of nightly sign-ups, starting tomorrow".into(),
+                    "Set up a rehearsal event with one session a day, starting tomorrow".into(),
                 ),
                 ..rehearse_start()
             },
@@ -225,9 +214,7 @@ pub fn rehearsal() -> Vec<poise::Command<Data, Error>> {
                 ..rehearse_next()
             },
             poise::Command {
-                description: Some(
-                    "Delete every Clan Battle season, post and answer in this server".into(),
-                ),
+                description: Some("Delete every event, post and answer in this server".into()),
                 ..rehearse_reset()
             },
         ],
@@ -288,11 +275,11 @@ fn missing_in(names: Vec<&'static str>, channel: Option<ChannelId>) -> Option<te
     (!names.is_empty()).then_some(text::Refusal::MissingBotPermissions { names, channel })
 }
 
-fn missing_in_season_channel(ctx: Context<'_>, season: &Season) -> Option<text::Refusal> {
-    let granted = failure::barnacle_permissions_in(ctx.cache(), season.guild, season.channel)?;
+fn missing_in_event_channel(ctx: Context<'_>, event: &Event) -> Option<text::Refusal> {
+    let granted = failure::barnacle_permissions_in(ctx.cache(), event.guild, event.channel)?;
     missing_in(
         (SIGNUP_ACCESS - granted).get_permission_names(),
-        Some(season.channel),
+        Some(event.channel),
     )
 }
 
@@ -378,63 +365,71 @@ fn grants_mention(granted: serenity::Permissions) -> bool {
     granted.intersects(MENTION_GRANT)
 }
 
-fn person_permissions_in(ctx: Context<'_>, season: &Season) -> Option<serenity::Permissions> {
+fn person_permissions_in(ctx: Context<'_>, event: &Event) -> Option<serenity::Permissions> {
     let poise::Context::Application(app) = ctx else {
         return None;
     };
     let member = app.interaction.member.as_deref()?;
-    if ctx.channel_id().get() == season.channel.get() {
+    if ctx.channel_id().get() == event.channel.get() {
         return member.permissions;
     }
     let guild = ctx.guild()?;
     let channel = guild
         .channels
         .get(&serenity::ChannelId::from(NonZeroU64::new(
-            season.channel.get(),
+            event.channel.get(),
         )?))?;
     Some(guild.user_permissions_in(channel, member))
 }
 
-fn role_mentionable(ctx: Context<'_>, ping: Ping) -> Option<bool> {
+pub(super) fn role_mentionable(
+    cache: &serenity::Cache,
+    guild: GuildId,
+    ping: Ping,
+) -> Option<bool> {
     match ping {
         Ping::Everyone => Some(false),
         Ping::Role(role) => {
             let role = serenity::RoleId::from(NonZeroU64::new(role.get())?);
-            ctx.guild()?.roles.get(&role).map(|role| role.mentionable)
+            cache
+                .guild(NonZeroU64::new(guild.get())?)?
+                .roles
+                .get(&role)
+                .map(|role| role.mentionable)
         }
     }
 }
 
-fn ping_reach(
-    ctx: Context<'_>,
+pub(super) fn ping_reach(
+    cache: &serenity::Cache,
     ping: Ping,
     guild: GuildId,
     channel_granted: Option<serenity::Permissions>,
 ) -> Option<PingReach> {
     Some(PingReach {
-        role_mentionable: role_mentionable(ctx, ping)?,
-        server_grant: grants_mention(failure::barnacle_permissions(ctx.cache(), guild)?),
+        role_mentionable: role_mentionable(cache, guild, ping)?,
+        server_grant: grants_mention(failure::barnacle_permissions(cache, guild)?),
         channel_grant: grants_mention(channel_granted?),
     })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CheckedPing {
-    ping: Ping,
-    verdict: PingVerdict,
+pub(super) struct CheckedPing {
+    pub(super) ping: Ping,
+    pub(super) verdict: PingVerdict,
     setup: SetupPing,
     reach: Option<PingReach>,
     place: Place,
 }
 
-fn judge_ping(
-    ctx: Context<'_>,
+pub(super) fn judge_ping(
+    cache: &serenity::Cache,
     ping: Ping,
     place: Place,
     channel_granted: Option<serenity::Permissions>,
     creating: bool,
 ) -> CheckedPing {
-    let reach = ping_reach(ctx, ping, place.guild, channel_granted);
+    let reach = ping_reach(cache, ping, place.guild, channel_granted);
     let verdict = wiring::ping_verdict(ping, reach);
     CheckedPing {
         ping,
@@ -445,8 +440,8 @@ fn judge_ping(
     }
 }
 
-fn judge_pings(
-    ctx: Context<'_>,
+pub(super) fn judge_pings(
+    cache: &serenity::Cache,
     pings: &[Ping],
     place: Place,
     channel_granted: Option<serenity::Permissions>,
@@ -454,34 +449,23 @@ fn judge_pings(
 ) -> Vec<CheckedPing> {
     pings
         .iter()
-        .map(|ping| judge_ping(ctx, *ping, place, channel_granted, creating))
+        .map(|ping| judge_ping(cache, *ping, place, channel_granted, creating))
         .collect()
 }
 
-fn log_ping_checks(ctx: Context<'_>, checked: &[CheckedPing], refused: bool) {
+pub(super) fn log_ping_checks(checked: &[CheckedPing], refused: bool, scope: &Scope) {
     for checked in checked {
         failure::ping_checked(
             checked.ping,
             checked.verdict,
             checked.reach,
             refused,
-            &Scope::of_command(ctx)
+            &scope
+                .clone()
                 .guild(checked.place.guild)
                 .channel(checked.place.channel),
         );
     }
-}
-
-fn check_pings(
-    ctx: Context<'_>,
-    pings: &[Ping],
-    place: Place,
-    channel_granted: Option<serenity::Permissions>,
-    creating: bool,
-) -> Vec<CheckedPing> {
-    let checked = judge_pings(ctx, pings, place, channel_granted, creating);
-    log_ping_checks(ctx, &checked, false);
-    checked
 }
 
 fn chosen_ping_roles(
@@ -501,8 +485,8 @@ fn pings_of(guild: GuildId, roles: &[RoleId]) -> Vec<Ping> {
     roles.iter().map(|role| Ping::of(guild, *role)).collect()
 }
 
-fn season_pings(season: &Season) -> Vec<Ping> {
-    pings_of(season.guild, &season.ping_roles)
+fn event_pings(event: &Event) -> Vec<Ping> {
+    pings_of(event.guild, &event.ping_roles)
 }
 
 fn ping_warning(checked: &[CheckedPing], channel: ChannelId) -> Option<String> {
@@ -511,13 +495,6 @@ fn ping_warning(checked: &[CheckedPing], channel: ChannelId) -> Option<String> {
         .map(|checked| (checked.ping, checked.verdict))
         .collect();
     text::silent_ping_warning(&verdicts, channel)
-}
-
-fn warned(warning: Option<String>, reply: String) -> String {
-    match warning {
-        Some(warning) => format!("{warning}\n\n{reply}"),
-        None => reply,
-    }
 }
 
 async fn refuse_blocked_ping(
@@ -533,7 +510,7 @@ async fn refuse_blocked_ping(
     if pings.is_empty() {
         return Ok(false);
     }
-    log_ping_checks(ctx, checked, true);
+    log_ping_checks(checked, true, &Scope::of_command(ctx));
     refuse(ctx, text::Refusal::PingBlockedByChannel { pings, channel }).await?;
     Ok(true)
 }
@@ -871,40 +848,124 @@ async fn about(ctx: Context<'_>) -> Result<(), Error> {
     default_member_permissions = "MANAGE_GUILD",
     required_permissions = "MANAGE_GUILD"
 )]
-async fn cb(_ctx: Context<'_>) -> Result<(), Error> {
+async fn event(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command)]
-async fn season(_ctx: Context<'_>) -> Result<(), Error> {
+async fn suggest_events(ctx: Context<'_>, partial: &str) -> serenity::CreateAutocompleteResponse {
+    let choices = match ctx.guild_id() {
+        Some(guild) => wiring::event_suggestions(
+            ctx.data()
+                .signups
+                .store()
+                .events_in(GuildId::new(guild.get()))
+                .await,
+            partial,
+            super::now_unix(),
+        ),
+        None => Vec::new(),
+    };
+    serenity::CreateAutocompleteResponse::new().set_choices(
+        choices
+            .into_iter()
+            .map(|choice| serenity::AutocompleteChoice::new(choice.label, choice.value))
+            .collect(),
+    )
+}
+
+async fn chosen(ctx: Context<'_>, guild: GuildId, text: &str) -> Result<Option<Event>, Error> {
+    let events = ctx.data().signups.store().events_in(guild).await?;
+    Ok(wiring::chosen_event(&events, text, super::now_unix()).cloned())
+}
+
+async fn suggest_dates(_ctx: Context<'_>, partial: &str) -> serenity::CreateAutocompleteResponse {
+    let choices = schedule::today(super::now_unix())
+        .map(|today| event_draft::date_suggestions(partial, today))
+        .unwrap_or_default();
+    serenity::CreateAutocompleteResponse::new().set_choices(
+        choices
+            .into_iter()
+            .map(|(label, value)| serenity::AutocompleteChoice::new(label, value))
+            .collect(),
+    )
+}
+
+async fn suggest_zones(ctx: Context<'_>, partial: &str) -> serenity::CreateAutocompleteResponse {
+    let zones = match ctx.guild_id() {
+        Some(guild) => event_draft::zone_choices(
+            partial,
+            ctx.data()
+                .signups
+                .store()
+                .events_in(GuildId::new(guild.get()))
+                .await,
+            super::now_unix(),
+        ),
+        None => Vec::new(),
+    };
+    serenity::CreateAutocompleteResponse::new().set_choices(
+        zones
+            .into_iter()
+            .map(|zone| serenity::AutocompleteChoice::new(zone.clone(), zone))
+            .collect(),
+    )
+}
+
+async fn open_panel(ctx: Context<'_>, draft: Draft) -> Result<(), Error> {
+    let Some(now_ms) = super::now_ms() else {
+        return fail(ctx, Failure::internal(CLOCK_BEFORE_1970)).await;
+    };
+    let panel = ctx.id();
+    let view = draft.panel(panel, super::now_unix());
+    ctx.data().drafts.open(panel, draft, now_ms);
+    ctx.send(
+        poise::CreateReply::default()
+            .content(view.content)
+            .components(view.components)
+            .allowed_mentions(serenity::CreateAllowedMentions::new())
+            .ephemeral(true),
+    )
+    .await?;
     Ok(())
 }
 
-#[poise::command(slash_command, rename = "start")]
+fn found_channel(ctx: Context<'_>, channel: serenity::ChannelId) -> Option<FoundChannel> {
+    let guild = ctx.guild()?;
+    let held = guild.channels.get(&channel)?;
+    Some(FoundChannel {
+        guild: GuildId::new(held.guild_id.get()),
+        id: ChannelId::new(held.id.get()),
+        text: held.kind == serenity::ChannelType::Text,
+    })
+}
+
+#[poise::command(slash_command, rename = "create")]
 #[allow(clippy::too_many_arguments)]
-async fn season_start(
+async fn event_create(
     ctx: Context<'_>,
-    #[description = "Which CB season this is, for example 35"]
-    #[min = 1]
-    number: u32,
-    #[description = "First CB day, as 2026-09-16"] first_day: String,
-    #[description = "Last CB day, as 2026-11-05"] last_day: String,
-    #[description = "The season's codename, for example Komodo Dragon"]
+    #[description = "The event's name, for example Ranked Sprint"]
     #[max_length = 100]
-    codename: Option<String>,
-    #[description = "Role to ping when a sign-up is posted"] ping_role: Option<serenity::RoleId>,
-    #[description = "Another role to ping when a sign-up is posted"] ping_role_2: Option<
-        serenity::RoleId,
-    >,
-    #[description = "Another role to ping when a sign-up is posted"] ping_role_3: Option<
-        serenity::RoleId,
-    >,
-    #[description = "Another role to ping when a sign-up is posted"] ping_role_4: Option<
-        serenity::RoleId,
-    >,
-    #[description = "Another role to ping when a sign-up is posted"] ping_role_5: Option<
-        serenity::RoleId,
-    >,
+    name: String,
+    #[description = "The first day, written YYYY-MM-DD"]
+    #[autocomplete = "suggest_dates"]
+    first_day: String,
+    #[description = "The last day, written YYYY-MM-DD"]
+    #[autocomplete = "suggest_dates"]
+    last_day: String,
+    #[description = "Fill in the start, hours and time zone from a template"]
+    #[choices("Clan Battles")]
+    template: Option<&'static str>,
+    #[description = "When each session starts, on a 24-hour clock, for example 17:00"]
+    #[max_length = 8]
+    start: Option<String>,
+    #[description = "How many hours each session runs, from 1 to 24"]
+    #[min = 1]
+    #[max = 24]
+    hours: Option<i64>,
+    #[description = "The time zone of the start time, for example America/Denver"]
+    #[max_length = 64]
+    #[autocomplete = "suggest_zones"]
+    time_zone: Option<String>,
 ) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -915,291 +976,143 @@ async fn season_start(
     if let Some(refusal) = missing_here(wiring::missing_signup_permissions(channel_access(ctx))) {
         return refuse(ctx, refusal).await;
     }
-    let (Some(first), Some(last)) = (parse_day(&first_day), parse_day(&last_day)) else {
-        return refuse(ctx, text::Refusal::DateFormat).await;
+    let options = CreateOptions {
+        name,
+        first_day,
+        last_day,
+        template: template.map(str::to_owned),
+        start,
+        hours,
+        time_zone,
     };
-    let Some(range) = Range::new(first, last) else {
-        return refuse(ctx, text::Refusal::LastDayBeforeFirst).await;
-    };
-    let now_unix = super::now_unix();
-    let Some(today) = schedule::today(now_unix) else {
-        return fail(ctx, Failure::internal(CLOCK_OUT_OF_RANGE)).await;
-    };
-    if !range.near(today) {
-        return refuse(ctx, text::Refusal::DatesTooFar).await;
-    }
-    let nights_left = range.nights_left(now_unix);
-    if nights_left == 0 {
-        return refuse(ctx, text::Refusal::NoNightsLeft).await;
-    }
-    let Some(created_at_ms) = super::now_ms() else {
-        return fail(ctx, Failure::internal(CLOCK_BEFORE_1970)).await;
-    };
-    let ping_roles = match chosen_ping_roles(
+    match Draft::create(
+        &options,
         place.guild,
-        [
-            ping_role,
-            ping_role_2,
-            ping_role_3,
-            ping_role_4,
-            ping_role_5,
-        ],
+        place.channel,
+        UserId::new(ctx.author().id.get()),
+        super::now_unix(),
     ) {
-        Ok(roles) => roles,
-        Err(refusal) => return refuse(ctx, refusal).await,
-    };
-    let checked = judge_pings(
-        ctx,
-        &pings_of(place.guild, &ping_roles),
-        place,
-        app_permissions(ctx),
-        true,
-    );
-    if refuse_blocked_ping(ctx, &checked, place.channel).await? {
-        return Ok(());
+        Ok(draft) => open_panel(ctx, draft).await,
+        Err(refusal) => refuse(ctx, refusal).await,
     }
-    let new = NewSeason {
-        guild: place.guild,
-        channel: place.channel,
-        number,
-        codename: clipped_codename(codename),
-        range,
-        created_by: UserId::new(ctx.author().id.get()),
-        created_at_ms,
-        ping_roles,
-    };
-    match ctx.data().signups.store().create_season(&new).await? {
-        CreateOutcome::Created(season) => {
-            log_ping_checks(ctx, &checked, false);
-            let started = text::season_started(&season, nights_left, next_post_at(range, now_unix));
-            private(ctx, warned(ping_warning(&checked, place.channel), started)).await
-        }
-        CreateOutcome::NumberTaken => {
-            log_ping_checks(ctx, &checked, true);
-            refuse(ctx, text::Refusal::SeasonNumberTaken(number)).await
-        }
-        CreateOutcome::Overlaps(other) => {
-            log_ping_checks(ctx, &checked, true);
-            refuse(ctx, text::Refusal::SeasonOverlaps(other)).await
-        }
-    }
-}
-
-#[poise::command(slash_command, rename = "show")]
-async fn season_show(ctx: Context<'_>) -> Result<(), Error> {
-    let Some(place) = place(ctx) else {
-        return Ok(());
-    };
-    let now_unix = super::now_unix();
-    let seasons = ctx.data().signups.store().seasons_in(place.guild).await?;
-    let lines: Vec<String> = seasons
-        .iter()
-        .filter(|season| {
-            season
-                .range
-                .last_moment_unix()
-                .is_some_and(|last| last > now_unix)
-        })
-        .map(|season| {
-            text::season_line(
-                season,
-                season.range.nights_left(now_unix),
-                next_post_at(season.range, now_unix),
-            )
-        })
-        .collect();
-    if lines.is_empty() {
-        return private(ctx, text::NO_SEASON_HERE).await;
-    }
-    private(ctx, text::season_list(&lines)).await
 }
 
 #[poise::command(slash_command, rename = "edit")]
 #[allow(clippy::too_many_arguments)]
-async fn season_edit(
+async fn event_edit(
     ctx: Context<'_>,
-    #[description = "Which season to change, for example 35"]
-    #[min = 1]
-    number: u32,
-    #[description = "Change the season number"]
-    #[min = 1]
-    new_number: Option<u32>,
-    #[description = "New first CB day, as 2026-09-16"] first_day: Option<String>,
-    #[description = "New last CB day, as 2026-11-05"] last_day: Option<String>,
-    #[description = "New codename, for example Komodo Dragon"]
+    #[description = "The event, picked from the list"]
+    #[autocomplete = "suggest_events"]
+    event: String,
+    #[description = "A new name"]
     #[max_length = 100]
-    codename: Option<String>,
-    #[description = "Role to ping when a sign-up is posted"] ping_role: Option<serenity::RoleId>,
-    #[description = "Another role to ping when a sign-up is posted"] ping_role_2: Option<
-        serenity::RoleId,
-    >,
-    #[description = "Another role to ping when a sign-up is posted"] ping_role_3: Option<
-        serenity::RoleId,
-    >,
-    #[description = "Another role to ping when a sign-up is posted"] ping_role_4: Option<
-        serenity::RoleId,
-    >,
-    #[description = "Another role to ping when a sign-up is posted"] ping_role_5: Option<
-        serenity::RoleId,
-    >,
-    #[description = "Remove the codename"] clear_codename: Option<bool>,
-    #[description = "Stop pinging every role"] clear_ping_role: Option<bool>,
+    name: Option<String>,
+    #[description = "A new first day, written YYYY-MM-DD"]
+    #[autocomplete = "suggest_dates"]
+    first_day: Option<String>,
+    #[description = "A new last day, written YYYY-MM-DD"]
+    #[autocomplete = "suggest_dates"]
+    last_day: Option<String>,
+    #[description = "A new start time, on a 24-hour clock, for example 17:00"]
+    #[max_length = 8]
+    start: Option<String>,
+    #[description = "How many hours each session runs, from 1 to 24"]
+    #[min = 1]
+    #[max = 24]
+    hours: Option<i64>,
+    #[description = "A new time zone for the start time, for example America/Denver"]
+    #[max_length = 64]
+    #[autocomplete = "suggest_zones"]
+    time_zone: Option<String>,
+    #[description = "A text channel to move the sign-up posts to"]
+    #[channel_types("Text")]
+    channel: Option<serenity::ChannelId>,
 ) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
     };
-    let clearing_codename = clear_codename.unwrap_or(false);
-    let clearing_ping_role = clear_ping_role.unwrap_or(false);
-    let given_ping_roles = [
-        ping_role,
-        ping_role_2,
-        ping_role_3,
-        ping_role_4,
-        ping_role_5,
-    ];
-    let naming_ping_roles = given_ping_roles.iter().any(Option::is_some);
-    let named = new_number.is_some()
-        || first_day.is_some()
-        || last_day.is_some()
-        || codename.is_some()
-        || naming_ping_roles
-        || clearing_codename
-        || clearing_ping_role;
-    if !named {
-        return refuse(ctx, text::Refusal::NothingToChange).await;
-    }
-    if codename.is_some() && clearing_codename {
-        return refuse(ctx, text::Refusal::CodenameBothWays).await;
-    }
-    if naming_ping_roles && clearing_ping_role {
-        return refuse(ctx, text::Refusal::PingBothWays).await;
-    }
-    let chosen_roles = match chosen_ping_roles(place.guild, given_ping_roles) {
-        Ok(roles) => roles,
-        Err(refusal) => return refuse(ctx, refusal).await,
+    let Some(event) = chosen(ctx, place.guild, &event).await? else {
+        return refuse(ctx, text::Refusal::EventNotFound).await;
     };
-    let first = first_day.as_deref().map(parse_day);
-    let last = last_day.as_deref().map(parse_day);
-    if matches!(first, Some(None)) || matches!(last, Some(None)) {
-        return refuse(ctx, text::Refusal::DateFormat).await;
-    }
-    let change = SeasonChange {
-        number: new_number,
-        first_day: first.flatten(),
-        last_day: last.flatten(),
-        codename: if clearing_codename {
-            Some(None)
-        } else {
-            codename.map(Some)
-        },
-        ping_roles: if clearing_ping_role {
-            Some(Vec::new())
-        } else {
-            naming_ping_roles.then_some(chosen_roles)
-        },
-    };
-    let now_unix = super::now_unix();
-    let Some(today) = schedule::today(now_unix) else {
-        return fail(ctx, Failure::internal(CLOCK_OUT_OF_RANGE)).await;
-    };
-    let signups = &ctx.data().signups;
-    let Some(season) = signups.store().live_season(place.guild, number).await? else {
-        return refuse(ctx, text::Refusal::SeasonNotFound(number)).await;
-    };
-    if let Some(refusal) = missing_in_season_channel(ctx, &season) {
+    if let Some(refusal) = missing_in_event_channel(ctx, &event) {
         return refuse(ctx, refusal).await;
     }
-    let outcome = signups
-        .store()
-        .edit_season(place.guild, number, &change, today)
-        .await?;
-    match outcome {
-        EditOutcome::Edited { after, .. } => {
-            ctx.defer_ephemeral().await?;
-            let cleared = signups
-                .clear_posts(&after, ClearScope::OutsideRange, now_unix)
-                .await;
-            let refreshed = signups.refresh_posts(&after, now_unix).await;
-            let edited = text::season_edited(
-                &after,
-                after.range.nights_left(now_unix),
-                next_post_at(after.range, now_unix),
-                cleared.touched,
-            );
-            let posts_in = Place {
-                guild: after.guild,
-                channel: after.channel,
-            };
-            let checked = check_pings(
-                ctx,
-                &season_pings(&after),
-                posts_in,
-                failure::barnacle_permissions_in(ctx.cache(), after.guild, after.channel),
-                false,
-            );
-            private(
-                ctx,
-                warned(
-                    ping_warning(&checked, after.channel),
-                    text::season_edit_reached(&edited, &cleared, &refreshed),
-                ),
-            )
-            .await
+    let channel = match channel {
+        None => None,
+        Some(channel) => match wiring::event_channel(place.guild, found_channel(ctx, channel)) {
+            Ok(channel) => Some(channel),
+            Err(ChannelProblem::Unknown) => {
+                return refuse(ctx, text::Refusal::ChannelUnknown).await;
+            }
+            Err(ChannelProblem::NotText) => {
+                return refuse(ctx, text::Refusal::WrongChannelType).await;
+            }
+        },
+    };
+    if let Some(channel) = channel {
+        let missing = failure::barnacle_permissions_in(ctx.cache(), place.guild, channel)
+            .map(|granted| wiring::missing_signup_permissions(access_of(granted, false)))
+            .unwrap_or_default();
+        if let Some(refusal) = missing_in(missing, Some(channel)) {
+            return refuse(ctx, refusal).await;
         }
-        EditOutcome::NumberTaken => {
-            refuse(
-                ctx,
-                text::Refusal::SeasonNumberTaken(new_number.unwrap_or(number)),
-            )
-            .await
-        }
-        EditOutcome::Overlaps(other) => refuse(ctx, text::Refusal::SeasonOverlaps(other)).await,
-        EditOutcome::BadRange => refuse(ctx, text::Refusal::LastDayBeforeFirst).await,
-        EditOutcome::TooFar => refuse(ctx, text::Refusal::DatesTooFar).await,
-        EditOutcome::NotFound => refuse(ctx, text::Refusal::SeasonNotFound(number)).await,
+    }
+    let options = EditOptions {
+        name,
+        first_day,
+        last_day,
+        start,
+        hours,
+        time_zone,
+        channel,
+    };
+    match Draft::edit(
+        &event,
+        &options,
+        UserId::new(ctx.author().id.get()),
+        super::now_unix(),
+    ) {
+        Ok(draft) => open_panel(ctx, draft).await,
+        Err(refusal) => refuse(ctx, refusal).await,
     }
 }
 
 #[poise::command(slash_command, rename = "repost")]
-async fn season_repost(
+async fn event_repost(
     ctx: Context<'_>,
-    #[description = "Which season to repost, for example 35"]
-    #[min = 1]
-    number: u32,
-    #[description = "Ping the season's roles again"] ping_again: Option<bool>,
+    #[description = "The event, picked from the list"]
+    #[autocomplete = "suggest_events"]
+    event: String,
+    #[description = "Ping the event's roles again"] ping_again: Option<bool>,
 ) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
     };
     let pinging_again = ping_again.unwrap_or(false);
-    let signups = &ctx.data().signups;
-    let Some(season) = signups.store().live_season(place.guild, number).await? else {
-        return refuse(ctx, text::Refusal::SeasonNotFound(number)).await;
+    let Some(event) = chosen(ctx, place.guild, &event).await? else {
+        return refuse(ctx, text::Refusal::EventNotFound).await;
     };
-    if let Some(refusal) = missing_in_season_channel(ctx, &season) {
+    if let Some(refusal) = missing_in_event_channel(ctx, &event) {
         return refuse(ctx, refusal).await;
     }
-    let pings = season_pings(&season);
+    let pings = event_pings(&event);
     let checked = if pinging_again {
-        if pings.is_empty() {
-            return refuse(ctx, text::Refusal::RepostNothingToPing).await;
-        }
         let mentionable: Vec<bool> = pings
             .iter()
-            .map(|ping| role_mentionable(ctx, *ping).unwrap_or(false))
+            .map(|ping| role_mentionable(ctx.cache(), event.guild, *ping).unwrap_or(false))
             .collect();
-        let person = person_permissions_in(ctx, &season).map(grants_mention);
-        if !wiring::may_ping_again(&pings, person, &mentionable) {
+        let person = person_permissions_in(ctx, &event).map(grants_mention);
+        if !pings.is_empty() && !wiring::may_ping_again(&pings, person, &mentionable) {
             return refuse(ctx, text::Refusal::RepostPingNotAllowed).await;
         }
         judge_pings(
-            ctx,
+            ctx.cache(),
             &pings,
             Place {
-                guild: season.guild,
-                channel: season.channel,
+                guild: event.guild,
+                channel: event.channel,
             },
-            failure::barnacle_permissions_in(ctx.cache(), season.guild, season.channel),
+            failure::barnacle_permissions_in(ctx.cache(), event.guild, event.channel),
             false,
         )
     } else {
@@ -1211,138 +1124,79 @@ async fn season_repost(
     let now_unix = super::now_unix();
     let ping = if pinging_again {
         RepostPing::Again {
-            checked: season.ping_roles.clone(),
-            channel: season.channel,
+            checked: event.ping_roles.clone(),
+            channel: event.channel,
         }
     } else {
         RepostPing::Quiet
     };
     ctx.defer_ephemeral().await?;
-    match signups
-        .repost(place.guild, number, ping, now_unix, now_ms)
+    match ctx
+        .data()
+        .signups
+        .repost(place.guild, event.id, ping, now_unix, now_ms)
         .await
     {
         RepostOutcome::Reposted {
-            night,
+            session,
             adopted,
             pinged,
             ..
         } => {
-            log_ping_checks(ctx, &checked, false);
+            log_ping_checks(&checked, false, &Scope::of_command(ctx));
             private(
                 ctx,
-                warned(
-                    ping_warning(&checked, season.channel),
-                    text::reposted(&season, night, adopted, &pinged),
+                text::warned(
+                    ping_warning(&checked, event.channel),
+                    text::reposted(&event, session, adopted, &pinged),
                 ),
             )
             .await
         }
         RepostOutcome::NotFound => {
-            log_ping_checks(ctx, &checked, true);
-            refuse(ctx, text::Refusal::SeasonNotFound(number)).await
+            log_ping_checks(&checked, true, &Scope::of_command(ctx));
+            refuse(ctx, text::Refusal::EventNotFound).await
         }
         RepostOutcome::NothingOpen {
             next_post_at,
-            nights_left,
+            sessions_left,
         } => {
-            log_ping_checks(ctx, &checked, true);
+            log_ping_checks(&checked, true, &Scope::of_command(ctx));
             refuse(
                 ctx,
                 text::Refusal::NothingToRepost {
-                    number,
+                    name: event.name.clone(),
                     next_post_at,
-                    nights_left,
+                    sessions_left,
                 },
             )
             .await
         }
+        RepostOutcome::NothingToPing => {
+            log_ping_checks(&checked, true, &Scope::of_command(ctx));
+            refuse(ctx, text::Refusal::RepostNothingToPing).await
+        }
         RepostOutcome::PingsChanged => {
-            log_ping_checks(ctx, &checked, true);
+            log_ping_checks(&checked, true, &Scope::of_command(ctx));
             refuse(ctx, text::Refusal::RepostPingsChanged).await
         }
         RepostOutcome::Superseded => {
-            log_ping_checks(ctx, &checked, true);
+            log_ping_checks(&checked, true, &Scope::of_command(ctx));
             refuse(ctx, text::Refusal::RepostSuperseded).await
         }
         RepostOutcome::Failed(failure) => {
-            log_ping_checks(ctx, &checked, false);
+            log_ping_checks(&checked, false, &Scope::of_command(ctx));
             fail(ctx, failure).await
         }
     }
 }
 
-#[poise::command(slash_command, rename = "move")]
-async fn season_move(
-    ctx: Context<'_>,
-    #[description = "Which season to move here, for example 35"]
-    #[min = 1]
-    number: u32,
-) -> Result<(), Error> {
-    let Some(place) = place(ctx) else {
-        return Ok(());
-    };
-    if channel_kind(ctx) != Some(serenity::ChannelType::Text) {
-        return refuse(ctx, text::Refusal::WrongChannelType).await;
-    }
-    if let Some(refusal) = missing_here(wiring::missing_signup_permissions(channel_access(ctx))) {
-        return refuse(ctx, refusal).await;
-    }
-    let signups = &ctx.data().signups;
-    let Some(season) = signups.store().live_season(place.guild, number).await? else {
-        return refuse(ctx, text::Refusal::SeasonNotFound(number)).await;
-    };
-    if season.channel == place.channel {
-        return refuse(ctx, text::Refusal::SeasonAlreadyHere(number)).await;
-    }
-    if let Some(refusal) = missing_in_season_channel(ctx, &season) {
-        return refuse(ctx, refusal).await;
-    }
-    let now_unix = super::now_unix();
-    ctx.defer_ephemeral().await?;
-    let cleared = signups
-        .clear_posts(&season, ClearScope::All, now_unix)
-        .await;
-    if cleared.failures > 0 {
-        return private(
-            ctx,
-            text::failures_noted(text::CLEAR_FAILED_MOVE, cleared.failures),
-        )
-        .await;
-    }
-    if !signups
-        .store()
-        .move_season(place.guild, season.id, place.channel)
-        .await?
-    {
-        return refuse(ctx, text::Refusal::SeasonNotFound(number)).await;
-    }
-    let after = Season {
-        channel: place.channel,
-        ..season
-    };
-    let moved = text::season_moved(
-        &after,
-        after.range.nights_left(now_unix),
-        cleared.touched,
-        next_post_at(after.range, now_unix),
-    );
-    let checked = check_pings(
-        ctx,
-        &season_pings(&after),
-        place,
-        app_permissions(ctx),
-        false,
-    );
-    private(ctx, warned(ping_warning(&checked, place.channel), moved)).await
-}
-
 #[poise::command(slash_command, rename = "end")]
-async fn season_end(
+async fn event_end(
     ctx: Context<'_>,
-    #[description = "Which season to end, for example 35"]
-    #[min = 1]
-    number: u32,
+    #[description = "The event, picked from the list"]
+    #[autocomplete = "suggest_events"]
+    event: String,
 ) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -1352,16 +1206,14 @@ async fn season_end(
     };
     let now_unix = super::now_unix();
     let signups = &ctx.data().signups;
-    let Some(season) = signups.store().live_season(place.guild, number).await? else {
-        return refuse(ctx, text::Refusal::SeasonNotFound(number)).await;
+    let Some(event) = chosen(ctx, place.guild, &event).await? else {
+        return refuse(ctx, text::Refusal::EventNotFound).await;
     };
-    if let Some(refusal) = missing_in_season_channel(ctx, &season) {
+    if let Some(refusal) = missing_in_event_channel(ctx, &event) {
         return refuse(ctx, refusal).await;
     }
     ctx.defer_ephemeral().await?;
-    let cleared = signups
-        .clear_posts(&season, ClearScope::All, now_unix)
-        .await;
+    let cleared = signups.clear_posts(&event, ClearScope::All, now_unix).await;
     if cleared.failures > 0 {
         return private(
             ctx,
@@ -1371,13 +1223,32 @@ async fn season_end(
     }
     match signups
         .store()
-        .end_season(place.guild, number, now_ms)
+        .end_event(place.guild, event.id, now_ms)
         .await?
     {
-        EndOutcome::Removed => private(ctx, text::season_removed(number)).await,
-        EndOutcome::Ended { .. } => private(ctx, text::season_ended(number, cleared.touched)).await,
-        EndOutcome::NotFound => refuse(ctx, text::Refusal::SeasonNotFound(number)).await,
+        EndOutcome::Removed => private(ctx, text::event_removed(&event.name)).await,
+        EndOutcome::Ended { .. } => {
+            private(ctx, text::event_ended(&event.name, cleared.touched)).await
+        }
+        EndOutcome::NotFound => refuse(ctx, text::Refusal::EventNotFound).await,
     }
+}
+
+#[poise::command(slash_command, rename = "list")]
+async fn event_list(ctx: Context<'_>) -> Result<(), Error> {
+    let Some(place) = place(ctx) else {
+        return Ok(());
+    };
+    let now_unix = super::now_unix();
+    let events = ctx.data().signups.store().events_in(place.guild).await?;
+    let lines: Vec<String> = listed_events(&events, now_unix)
+        .into_iter()
+        .map(|event| text::event_line(event, now_unix))
+        .collect();
+    if lines.is_empty() {
+        return private(ctx, text::NO_EVENT_HERE).await;
+    }
+    private(ctx, text::event_list(&lines)).await
 }
 
 #[poise::command(
@@ -1394,26 +1265,10 @@ fn rehearsing(ctx: Context<'_>, guild: GuildId) -> bool {
     ctx.data().rehearsal.contains(&guild)
 }
 
-fn clipped_codename(codename: Option<String>) -> Option<String> {
-    codename.map(|text| text.chars().take(CODENAME_LIMIT).collect())
-}
-
-fn rehearsal_range(today: Date, nights: u32, now_unix: i64) -> Option<Range> {
-    let nights = nights.clamp(1, REHEARSAL_NIGHTS_MAX);
-    let mut first = today.checked_add(1.day()).ok()?;
-    if Night::on(first).is_some_and(|night| night.post_at_unix() <= now_unix) {
-        first = first.checked_add(1.day()).ok()?;
-    }
-    let last = first
-        .checked_add(i64::from(nights.saturating_sub(1)).days())
-        .ok()?;
-    Range::every_day(first, last)
-}
-
-async fn posts_of(store: &Attendance, seasons: &[Season]) -> Result<Vec<(i64, Vec<Post>)>, Error> {
-    let mut posts = Vec::with_capacity(seasons.len());
-    for season in seasons {
-        posts.push((season.id, store.posts(season.id).await?));
+async fn posts_of(store: &Attendance, events: &[Event]) -> Result<Vec<(i64, Vec<Post>)>, Error> {
+    let mut posts = Vec::with_capacity(events.len());
+    for event in events {
+        posts.push((event.id, store.posts(event).await?));
     }
     Ok(posts)
 }
@@ -1422,12 +1277,9 @@ async fn posts_of(store: &Attendance, seasons: &[Season]) -> Result<Vec<(i64, Ve
 #[allow(clippy::too_many_arguments)]
 async fn rehearse_start(
     ctx: Context<'_>,
-    #[description = "Which CB season this is, for example 99"]
-    #[min = 1]
-    number: u32,
-    #[description = "The season's codename, for example Komodo Dragon"]
+    #[description = "The event's name, for example Drill"]
     #[max_length = 100]
-    codename: Option<String>,
+    name: String,
     #[description = "Role to ping when a sign-up is posted"] ping_role: Option<serenity::RoleId>,
     #[description = "Another role to ping when a sign-up is posted"] ping_role_2: Option<
         serenity::RoleId,
@@ -1441,10 +1293,10 @@ async fn rehearse_start(
     #[description = "Another role to ping when a sign-up is posted"] ping_role_5: Option<
         serenity::RoleId,
     >,
-    #[description = "How many nights to rehearse, one per day from tomorrow (default 3)"]
+    #[description = "How many sessions to rehearse, one per day from tomorrow (default 3)"]
     #[min = 1]
     #[max = 7]
-    nights: Option<u32>,
+    sessions: Option<u32>,
 ) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -1458,21 +1310,29 @@ async fn rehearse_start(
     if let Some(refusal) = missing_here(wiring::missing_signup_permissions(channel_access(ctx))) {
         return refuse(ctx, refusal).await;
     }
+    let Some(name) = wiring::event_name(&name) else {
+        return refuse(ctx, text::Refusal::NameFormat).await;
+    };
     let now_unix = super::now_unix();
     let Some(today) = schedule::today(now_unix) else {
         return fail(ctx, Failure::internal(CLOCK_OUT_OF_RANGE)).await;
     };
-    let Some(range) = rehearsal_range(today, nights.unwrap_or(REHEARSAL_NIGHTS), now_unix) else {
+    let Some(span) = schedule::rehearsal_span(
+        today,
+        sessions.unwrap_or(schedule::REHEARSAL_SESSIONS),
+        now_unix,
+    ) else {
         return fail(
             ctx,
-            Failure::internal("the rehearsal nights fall outside the supported calendar"),
+            Failure::internal("the rehearsal sessions fall outside the supported calendar"),
         )
         .await;
     };
-    if !range.near(today) {
+    if !span.near(today) {
         return refuse(ctx, text::Refusal::DatesTooFar).await;
     }
-    let nights_left = range.nights_left(now_unix);
+    let sessions_left = span.sessions_left(now_unix);
+    let post_at_unix = next_post_at(&span, now_unix);
     let Some(created_at_ms) = super::now_ms() else {
         return fail(ctx, Failure::internal(CLOCK_BEFORE_1970)).await;
     };
@@ -1490,7 +1350,7 @@ async fn rehearse_start(
         Err(refusal) => return refuse(ctx, refusal).await,
     };
     let checked = judge_pings(
-        ctx,
+        ctx.cache(),
         &pings_of(place.guild, &ping_roles),
         place,
         app_permissions(ctx),
@@ -1499,30 +1359,36 @@ async fn rehearse_start(
     if refuse_blocked_ping(ctx, &checked, place.channel).await? {
         return Ok(());
     }
-    let new = NewSeason {
+    let new = NewEvent {
         guild: place.guild,
         channel: place.channel,
-        number,
-        codename: clipped_codename(codename),
-        range,
+        name: name.clone(),
+        span,
         created_by: UserId::new(ctx.author().id.get()),
         created_at_ms,
         ping_roles,
     };
-    match ctx.data().signups.store().create_season(&new).await? {
-        CreateOutcome::Created(season) => {
-            log_ping_checks(ctx, &checked, false);
-            let started =
-                text::rehearsal_started(&season, nights_left, next_post_at(range, now_unix));
-            private(ctx, warned(ping_warning(&checked, place.channel), started)).await
+    match ctx.data().signups.start_rehearsal(new, now_unix).await {
+        RehearsalOutcome::Started(event) => {
+            log_ping_checks(&checked, false, &Scope::of_command(ctx));
+            let started = text::rehearsal_started(&event, sessions_left, post_at_unix);
+            private(
+                ctx,
+                text::warned(ping_warning(&checked, place.channel), started),
+            )
+            .await
         }
-        CreateOutcome::NumberTaken => {
-            log_ping_checks(ctx, &checked, true);
-            refuse(ctx, text::Refusal::SeasonNumberTaken(number)).await
+        RehearsalOutcome::Running => {
+            log_ping_checks(&checked, true, &Scope::of_command(ctx));
+            refuse(ctx, text::Refusal::RehearsalRunning).await
         }
-        CreateOutcome::Overlaps(other) => {
-            log_ping_checks(ctx, &checked, true);
-            refuse(ctx, text::Refusal::SeasonOverlaps(other)).await
+        RehearsalOutcome::NameTaken => {
+            log_ping_checks(&checked, true, &Scope::of_command(ctx));
+            refuse(ctx, text::Refusal::NameTaken(name)).await
+        }
+        RehearsalOutcome::Failed(failure) => {
+            log_ping_checks(&checked, true, &Scope::of_command(ctx));
+            fail(ctx, failure).await
         }
     }
 }
@@ -1546,9 +1412,9 @@ async fn rehearse_next(ctx: Context<'_>) -> Result<(), Error> {
         )
         .await;
     };
-    let seasons = store.seasons_in(place.guild).await?;
-    let posts = posts_of(store, &seasons).await?;
-    let Some(moment) = next_moment(&seasons, &posts, rehearsal_now) else {
+    let events = store.events_in(place.guild).await?;
+    let posts = posts_of(store, &events).await?;
+    let Some(moment) = next_moment(&events, &posts, rehearsal_now) else {
         return refuse(ctx, text::Refusal::NothingPending).await;
     };
     let Some(moment_ms) = u64::try_from(moment)
@@ -1688,7 +1554,7 @@ fn update_ping_verdict(
     place: Place,
     granted: Option<serenity::Permissions>,
 ) -> Option<PingVerdict> {
-    ping.map(|ping| judge_ping(ctx, ping, place, granted, false).verdict)
+    ping.map(|ping| judge_ping(ctx.cache(), ping, place, granted, false).verdict)
 }
 
 fn send_row(version: &str) -> serenity::CreateActionRow {
