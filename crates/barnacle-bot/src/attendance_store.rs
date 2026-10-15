@@ -333,6 +333,20 @@ struct NameHolders {
     others: Vec<Result<Event, AttendanceError>>,
 }
 
+struct EditPlan {
+    outcome: EditOutcome,
+    finished: Vec<Event>,
+}
+
+impl EditPlan {
+    fn refused(outcome: EditOutcome) -> Self {
+        Self {
+            outcome,
+            finished: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Attendance {
     pool: SqlitePool,
@@ -571,6 +585,30 @@ impl Attendance {
         Ok(outcome)
     }
 
+    pub async fn judge_edit(
+        &self,
+        guild: GuildId,
+        id: i64,
+        created_at_ms: u64,
+        change: &EventChange,
+        today: Date,
+        now_unix: i64,
+    ) -> Result<EditOutcome, AttendanceError> {
+        let mut transaction = self.pool.begin().await?;
+        let plan = plan_edit(
+            &mut transaction,
+            guild,
+            id,
+            created_at_ms,
+            change,
+            today,
+            now_unix,
+        )
+        .await?;
+        transaction.rollback().await?;
+        Ok(plan.outcome)
+    }
+
     pub async fn edit_event(
         &self,
         guild: GuildId,
@@ -580,58 +618,24 @@ impl Attendance {
         today: Date,
         now_unix: i64,
     ) -> Result<EditOutcome, AttendanceError> {
-        let guild_id = to_integer(guild.get().into())?;
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let found: Option<EventRow> = sqlx::query_as(EVENT_LIVE_BY_CREATION)
-            .bind(guild_id)
-            .bind(id)
-            .bind(to_integer(created_at_ms.into())?)
-            .fetch_optional(&mut *transaction)
-            .await?;
-        let Some(row) = found else {
-            return Ok(EditOutcome::NotFound);
-        };
-        let before = event_from(&mut *transaction, row).await?;
-        let held = before.span.schedule();
-        let schedule = Schedule::new(
-            change.weekdays.unwrap_or(held.weekdays()),
-            change.start.unwrap_or(held.start()),
-            change.zone.clone().unwrap_or_else(|| held.zone().clone()),
-            change.hours.unwrap_or(held.hours()),
-        );
-        let Some(span) = Span::new(
-            change.first_day.unwrap_or(before.span.first_day()),
-            change.last_day.unwrap_or(before.span.last_day()),
-            schedule,
-        ) else {
-            return Ok(EditOutcome::BadRange);
-        };
-        if !span.near(today) {
-            return Ok(EditOutcome::TooFar);
-        }
-        let after = Event {
-            channel: change.channel.unwrap_or(before.channel),
-            name: change.name.clone().unwrap_or_else(|| before.name.clone()),
-            span,
-            ping_roles: change
-                .ping_roles
-                .clone()
-                .unwrap_or_else(|| before.ping_roles.clone()),
-            ..before.clone()
+        let plan = plan_edit(
+            &mut transaction,
+            guild,
+            id,
+            created_at_ms,
+            change,
+            today,
+            now_unix,
+        )
+        .await?;
+        let EditOutcome::Edited { after, .. } = &plan.outcome else {
+            return Ok(plan.outcome);
         };
         if change.name.is_some() {
-            let holders =
-                name_holders(&mut transaction, guild_id, &after.name, Some(before.id)).await?;
-            if holders
-                .namesakes
-                .iter()
-                .any(|event| event.running(now_unix))
-            {
-                return Ok(EditOutcome::NameTaken);
-            }
             let ended_at =
                 to_integer(u128::from(to_unsigned(now_unix)?) * u128::from(MILLIS_PER_SECOND))?;
-            end_finished(&mut transaction, &holders.namesakes, ended_at).await?;
+            end_finished(&mut transaction, &plan.finished, ended_at).await?;
         }
         let schedule = after.span.schedule();
         sqlx::query(
@@ -663,10 +667,7 @@ impl Attendance {
                 .await?;
         }
         transaction.commit().await?;
-        Ok(EditOutcome::Edited {
-            before: Box::new(before),
-            after: Box::new(after),
-        })
+        Ok(plan.outcome)
     }
 
     pub async fn purge_event(
@@ -1010,6 +1011,75 @@ async fn name_holders(
             .map(|(_, read)| read)
             .collect::<Result<Vec<Event>, AttendanceError>>()?,
         others: others.into_iter().map(|(_, read)| read).collect(),
+    })
+}
+
+async fn plan_edit(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    guild: GuildId,
+    id: i64,
+    created_at_ms: u64,
+    change: &EventChange,
+    today: Date,
+    now_unix: i64,
+) -> Result<EditPlan, AttendanceError> {
+    let guild_id = to_integer(guild.get().into())?;
+    let found: Option<EventRow> = sqlx::query_as(EVENT_LIVE_BY_CREATION)
+        .bind(guild_id)
+        .bind(id)
+        .bind(to_integer(created_at_ms.into())?)
+        .fetch_optional(&mut **transaction)
+        .await?;
+    let Some(row) = found else {
+        return Ok(EditPlan::refused(EditOutcome::NotFound));
+    };
+    let before = event_from(&mut **transaction, row).await?;
+    let held = before.span.schedule();
+    let schedule = Schedule::new(
+        change.weekdays.unwrap_or(held.weekdays()),
+        change.start.unwrap_or(held.start()),
+        change.zone.clone().unwrap_or_else(|| held.zone().clone()),
+        change.hours.unwrap_or(held.hours()),
+    );
+    let Some(span) = Span::new(
+        change.first_day.unwrap_or(before.span.first_day()),
+        change.last_day.unwrap_or(before.span.last_day()),
+        schedule,
+    ) else {
+        return Ok(EditPlan::refused(EditOutcome::BadRange));
+    };
+    if !span.near(today) {
+        return Ok(EditPlan::refused(EditOutcome::TooFar));
+    }
+    let after = Event {
+        channel: change.channel.unwrap_or(before.channel),
+        name: change.name.clone().unwrap_or_else(|| before.name.clone()),
+        span,
+        ping_roles: change
+            .ping_roles
+            .clone()
+            .unwrap_or_else(|| before.ping_roles.clone()),
+        ..before.clone()
+    };
+    let finished = if change.name.is_some() {
+        let holders = name_holders(transaction, guild_id, &after.name, Some(before.id)).await?;
+        if holders
+            .namesakes
+            .iter()
+            .any(|event| event.running(now_unix))
+        {
+            return Ok(EditPlan::refused(EditOutcome::NameTaken));
+        }
+        holders.namesakes
+    } else {
+        Vec::new()
+    };
+    Ok(EditPlan {
+        outcome: EditOutcome::Edited {
+            before: Box::new(before),
+            after: Box::new(after),
+        },
+        finished,
     })
 }
 

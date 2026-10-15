@@ -7,9 +7,9 @@ use super::events::Answer;
 use super::events::acknowledge;
 use super::events::tell;
 use crate::attendance::EditReport;
+use crate::event_draft::Applied;
 use crate::event_draft::Draft;
 use crate::event_draft::Purpose;
-use crate::event_draft::Ready;
 use crate::failure;
 use crate::failure::Failure;
 use crate::failure::Scope;
@@ -17,7 +17,6 @@ use crate::ids::GuildId;
 use crate::ids::Ping;
 use crate::ids::Place;
 use crate::ids::RoleId;
-use crate::schedule;
 use crate::text;
 use crate::text::Refusal;
 use crate::wiring::PanelPart;
@@ -25,7 +24,6 @@ use crate::wiring::PingVerdict;
 
 const PANEL_FAILED: &str = "The event was not saved";
 const CLOCK_BEFORE_1970: &str = "the clock reads before 1970";
-const CLOCK_OUT_OF_RANGE: &str = "the clock reads a time outside the supported calendar";
 
 pub(super) async fn pressed(
     data: &Data,
@@ -224,39 +222,23 @@ async fn saved(
         .collect();
     let answer = match draft.ready(now_unix, &verdicts) {
         Err(refusal) => Err(refusal_text(&refusal, scope)),
-        Ok(Ready::Create { new, warning }) => match data.signups.store().create_event(&new).await {
-            Ok(outcome) => draft
+        Ok(ready) => match ready.apply(&data.signups, draft.guild(), now_unix).await {
+            Applied::Create {
+                outcome: Ok(outcome),
+                warning,
+            } => draft
                 .saved_reply(&outcome, warning, now_unix)
                 .map_err(|refusal| refusal_text(&refusal, scope)),
-            Err(error) => Err(save_failed(
+            Applied::Create {
+                outcome: Err(error),
+                ..
+            } => Err(save_failed(
                 "an event could not be saved",
                 &Failure::from_error(&error),
                 scope,
             )),
+            Applied::Edit { report, warning } => edit_answer(report, draft, warning, scope),
         },
-        Ok(Ready::Edit {
-            event,
-            created_at_ms,
-            change,
-            warning,
-        }) => {
-            let report = match schedule::today(now_unix) {
-                Some(today) => {
-                    data.signups
-                        .edit_event(
-                            draft.guild(),
-                            event,
-                            created_at_ms,
-                            &change,
-                            today,
-                            now_unix,
-                        )
-                        .await
-                }
-                None => EditReport::Failed(Failure::internal(CLOCK_OUT_OF_RANGE)),
-            };
-            edit_answer(report, draft, warning, scope)
-        }
     };
     commands::log_ping_checks(&checked, answer.is_err(), scope);
     answer

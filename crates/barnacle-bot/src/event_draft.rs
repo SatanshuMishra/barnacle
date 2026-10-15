@@ -2,6 +2,7 @@ use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::PoisonError;
@@ -12,6 +13,9 @@ use jiff::civil::Date;
 use jiff::civil::Weekday;
 use poise::serenity_prelude as serenity;
 
+use crate::attendance::Board;
+use crate::attendance::EditReport;
+use crate::attendance::Signups;
 use crate::attendance::listed_events;
 use crate::attendance::next_post_at;
 use crate::attendance_store::AttendanceError;
@@ -19,6 +23,7 @@ use crate::attendance_store::CreateOutcome;
 use crate::attendance_store::Event;
 use crate::attendance_store::EventChange;
 use crate::attendance_store::NewEvent;
+use crate::failure::Failure;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::Ping;
@@ -46,6 +51,7 @@ pub const PANEL_LIFETIME_MINUTES: u64 = 15;
 pub const PANEL_LIFETIME_MS: u64 = PANEL_LIFETIME_MINUTES * MILLIS_PER_MINUTE;
 
 const MILLIS_PER_SECOND: u64 = 1_000;
+const CLOCK_OUT_OF_RANGE: &str = "the clock reads a time outside the supported calendar";
 const MILLIS_PER_MINUTE: u64 = 60 * MILLIS_PER_SECOND;
 const ROLE_MENU_MAX: u8 = 5;
 const WEEKDAY_MENU_MAX: u8 = 7;
@@ -165,6 +171,50 @@ pub enum Ready {
         change: EventChange,
         warning: Option<String>,
     },
+}
+
+#[derive(Debug)]
+pub enum Applied {
+    Create {
+        outcome: Result<CreateOutcome, AttendanceError>,
+        warning: Option<String>,
+    },
+    Edit {
+        report: EditReport,
+        warning: Option<String>,
+    },
+}
+
+impl Ready {
+    pub async fn apply<B: Board>(
+        self,
+        signups: &Arc<Signups<B>>,
+        guild: GuildId,
+        now_unix: i64,
+    ) -> Applied {
+        match self {
+            Ready::Create { new, warning } => Applied::Create {
+                outcome: signups.create_event(&new).await,
+                warning,
+            },
+            Ready::Edit {
+                event,
+                created_at_ms,
+                change,
+                warning,
+            } => {
+                let report = match schedule::today(now_unix) {
+                    Some(today) => {
+                        signups
+                            .edit_event(guild, event, created_at_ms, &change, today, now_unix)
+                            .await
+                    }
+                    None => EditReport::Failed(Failure::internal(CLOCK_OUT_OF_RANGE)),
+                };
+                Applied::Edit { report, warning }
+            }
+        }
+    }
 }
 
 impl Draft {

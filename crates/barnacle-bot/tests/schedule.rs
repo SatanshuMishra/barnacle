@@ -54,6 +54,10 @@ fn labels(span: &Span) -> Vec<String> {
     span.sessions().map(Session::label).collect()
 }
 
+fn due(span: &Span, now_unix: i64) -> Vec<String> {
+    span.due_sessions(now_unix).map(Session::label).collect()
+}
+
 fn local(unix: i64, zone: &str) -> String {
     Timestamp::from_second(unix)
         .unwrap()
@@ -240,7 +244,7 @@ fn before_the_first_post_nothing_is_due() {
         week.next_session(now).map(Session::label).as_deref(),
         Some("2026-10-14")
     );
-    assert_eq!(week.due_session(now), None);
+    assert!(due(&week, now).is_empty());
 }
 
 #[test]
@@ -252,10 +256,7 @@ fn at_the_first_post_time_the_first_session_is_due() {
         week.next_session(now).map(Session::label).as_deref(),
         Some("2026-10-14")
     );
-    assert_eq!(
-        week.due_session(now).map(Session::label).as_deref(),
-        Some("2026-10-14")
-    );
+    assert_eq!(due(&week, now), ["2026-10-14"]);
 }
 
 #[test]
@@ -267,7 +268,7 @@ fn after_a_start_the_following_session_is_next() {
         week.next_session(now).map(Session::label).as_deref(),
         Some("2026-10-17")
     );
-    assert_eq!(week.due_session(now), None);
+    assert!(due(&week, now).is_empty());
 }
 
 #[test]
@@ -276,7 +277,7 @@ fn after_the_last_start_nothing_is_left() {
     let now = 1_792_366_201;
     assert_eq!(week.sessions_left(now), 0);
     assert_eq!(week.next_session(now), None);
-    assert_eq!(week.due_session(now), None);
+    assert!(due(&week, now).is_empty());
     assert_eq!(week.last_moment_unix(), Some(1_792_382_400));
 }
 
@@ -287,6 +288,24 @@ fn after_the_last_deletion_the_last_moment_has_passed() {
     assert_eq!(week.sessions_left(now), 0);
     assert_eq!(week.last_moment_unix(), Some(1_792_382_400));
     assert!(week.last_moment_unix().unwrap() < now);
+}
+
+#[test]
+fn across_spring_forward_two_sessions_are_due() {
+    let week = span(
+        "2027-03-13",
+        "2027-03-14",
+        &[Weekday::Saturday, Weekday::Sunday],
+        "17:00",
+        "America/Denver",
+    );
+    let now = 1_804_978_800;
+    assert_eq!(week.sessions_left(now), 2);
+    assert_eq!(
+        week.next_session(now).map(Session::label).as_deref(),
+        Some("2027-03-13")
+    );
+    assert_eq!(due(&week, now), ["2027-03-13", "2027-03-14"]);
 }
 
 #[test]
@@ -436,21 +455,17 @@ fn parse_day_is_strict() {
 }
 
 #[test]
-fn due_session_walks_the_boundaries() {
+fn due_sessions_walk_the_boundaries() {
     let span = season_35();
-    let rows = [
-        (1_790_078_400_i64, None),
-        (1_790_121_600, Some("2026-09-23")),
-        (1_790_206_140, Some("2026-09-23")),
-        (1_790_206_200, Some("2026-09-24")),
-        (1_793_921_400, None),
+    let rows: [(i64, &[&str]); 5] = [
+        (1_790_078_400, &[]),
+        (1_790_121_600, &["2026-09-23"]),
+        (1_790_206_140, &["2026-09-23"]),
+        (1_790_206_200, &["2026-09-24"]),
+        (1_793_921_400, &[]),
     ];
     for (now, expected) in rows {
-        assert_eq!(
-            span.due_session(now).map(Session::label),
-            expected.map(str::to_owned),
-            "due session at {now}"
-        );
+        assert_eq!(due(&span, now), expected, "due sessions at {now}");
     }
 }
 
@@ -458,18 +473,13 @@ fn due_session_walks_the_boundaries() {
 fn an_event_set_up_late_starts_from_the_next_session() {
     let span = season_35();
     let late = 1_790_078_400;
-    assert_eq!(span.due_session(late), None);
+    assert!(due(&span, late).is_empty());
     assert_eq!(
         span.next_session(late).map(Session::label).as_deref(),
         Some("2026-09-23")
     );
     assert_eq!(span.sessions_left(late), 26);
-    assert_eq!(
-        span.due_session(1_790_119_800)
-            .map(Session::label)
-            .as_deref(),
-        Some("2026-09-23")
-    );
+    assert_eq!(due(&span, 1_790_119_800), ["2026-09-23"]);
     assert_eq!(
         span.last_moment_unix(),
         Some(clan_battles_session("2026-11-05").remove_at_unix())
@@ -538,12 +548,7 @@ fn a_session_can_fall_on_any_day_when_the_schedule_says_so() {
             .as_deref(),
         Some("2026-09-18")
     );
-    assert_eq!(
-        week.due_session(thursday_start)
-            .map(Session::label)
-            .as_deref(),
-        Some("2026-09-18")
-    );
+    assert_eq!(due(&week, thursday_start), ["2026-09-18"]);
     assert_eq!(week.sessions_left(thursday_start), 3);
     assert_eq!(
         week.last_moment_unix(),
@@ -575,7 +580,7 @@ fn a_clan_battles_span_still_holds_only_clan_battle_sessions() {
             .as_deref(),
         Some("2026-09-19")
     );
-    assert_eq!(week.due_session(thursday_start), None);
+    assert!(due(&week, thursday_start).is_empty());
     assert!(season_35().holds(day("2026-09-16")));
     assert_eq!(season_35().sessions_left(0), 30);
     assert_eq!(

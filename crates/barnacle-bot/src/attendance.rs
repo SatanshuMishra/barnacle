@@ -331,6 +331,7 @@ impl<B: Board> Signups<B> {
     }
 
     pub async fn tick(self: &Arc<Self>, now_unix: i64, now_ms: u64) -> TickReport {
+        let _beating = self.beats.lock().await;
         let live = match self.store.live_events(now_unix).await {
             Ok(live) => live,
             Err(error) => {
@@ -403,6 +404,7 @@ impl<B: Board> Signups<B> {
         now_unix: i64,
         now_ms: u64,
     ) -> TickReport {
+        let _beating = self.beats.lock().await;
         let live = match self.store.live_events(now_unix).await {
             Ok(live) => live,
             Err(error) => {
@@ -536,7 +538,6 @@ impl<B: Board> Signups<B> {
     }
 
     async fn beat(&self, events: Vec<Event>, now_unix: i64, now_ms: u64) -> TickReport {
-        let _beating = self.beats.lock().await;
         let mut report = TickReport::default();
         for event in &events {
             let posts = match self.store.posts(event).await {
@@ -601,118 +602,126 @@ impl<B: Board> Signups<B> {
                     }
                 }
             }
-            let Some(session) = event.span.due_session(now_unix) else {
-                continue;
-            };
-            let tag = PostTag {
-                event: event.id,
-                session,
-            };
-            let scope = post_scope(event, session);
-            let delivery = match self.store.post(event, session.date()).await {
-                Ok(Some(post)) if post.state != PostState::Removed => continue,
-                Ok(Some(_)) => Delivery::Redraw,
-                Ok(None) => Delivery::New,
-                Err(error) => {
-                    post_failed("a due sign-up post could not be looked up", &error, &scope);
-                    report.failures += 1;
-                    continue;
-                }
-            };
-            let event = &match self.store.event(event.id).await {
-                Ok(Some(fresh)) if fresh.ended_at_ms.is_none() => fresh,
-                Ok(_) => continue,
-                Err(error) => {
-                    post_failed(
-                        "an event could not be read before publishing its sign-up post",
-                        &error,
-                        &scope,
-                    );
-                    report.failures += 1;
-                    continue;
-                }
-            };
-            let scope = post_scope(event, session);
-            match self.board.find_post(event.channel, tag).await {
-                Ok(Some(message)) => {
-                    let scope = scope.message(message);
-                    if self
-                        .record(event.id, session, message, now_ms, &scope)
-                        .await
-                    {
-                        failure::record(
-                            "signup.post.published",
-                            "a sign-up post already in the channel was adopted",
+            for session in event.span.due_sessions(now_unix) {
+                let tag = PostTag {
+                    event: event.id,
+                    session,
+                };
+                let scope = post_scope(event, session);
+                let delivery = match self.store.post(event, session.date()).await {
+                    Ok(Some(post)) if post.state != PostState::Removed => continue,
+                    Ok(Some(_)) => Delivery::Redraw,
+                    Ok(None) => Delivery::New,
+                    Err(error) => {
+                        post_failed("a due sign-up post could not be looked up", &error, &scope);
+                        report.failures += 1;
+                        continue;
+                    }
+                };
+                let event = &match self.store.event(event.id).await {
+                    Ok(Some(fresh)) if fresh.ended_at_ms.is_none() => fresh,
+                    Ok(_) => continue,
+                    Err(error) => {
+                        post_failed(
+                            "an event could not be read before publishing its sign-up post",
+                            &error,
                             &scope,
                         );
-                        report.adopted.push(tag);
-                    } else {
                         report.failures += 1;
+                        continue;
                     }
-                }
-                Ok(None) => {
-                    let view = match self.view(event, session, now_unix).await {
-                        Ok(view) => view,
-                        Err(error) => {
-                            post_failed(
-                                "the roster for a new sign-up post could not be read",
-                                &error,
+                };
+                let scope = post_scope(event, session);
+                match self.board.find_post(event.channel, tag).await {
+                    Ok(Some(message)) => {
+                        let scope = scope.message(message);
+                        if self
+                            .record(event.id, session, message, now_ms, &scope)
+                            .await
+                        {
+                            failure::record(
+                                "signup.post.published",
+                                "a sign-up post already in the channel was adopted",
                                 &scope,
                             );
+                            report.adopted.push(tag);
+                        } else {
                             report.failures += 1;
-                            continue;
                         }
-                    };
-                    match self.board.send_post(event.channel, &view, delivery).await {
-                        Ok(sent) => {
-                            let scope = scope.message(sent.message);
-                            let pings = match delivery {
-                                Delivery::New => view.pings.clone(),
-                                Delivery::Redraw => Vec::new(),
-                            };
-                            if !pings.is_empty() && !sent.unheard.is_empty() {
-                                failure::ping_silent(&pings, &sent.unheard, &scope);
+                    }
+                    Ok(None) => {
+                        let view = match self.view(event, session, now_unix).await {
+                            Ok(view) => view,
+                            Err(error) => {
+                                post_failed(
+                                    "the roster for a new sign-up post could not be read",
+                                    &error,
+                                    &scope,
+                                );
+                                report.failures += 1;
+                                continue;
                             }
-                            if self
-                                .record(event.id, session, sent.message, now_ms, &scope)
-                                .await
-                            {
-                                if pings.is_empty() {
-                                    failure::record(
-                                        "signup.post.published",
-                                        "a sign-up post was published",
-                                        &scope,
-                                    );
-                                } else {
-                                    failure::ping_published(
-                                        "a sign-up post was published",
-                                        &pings,
-                                        sent.unheard.is_empty(),
-                                        &scope,
-                                    );
+                        };
+                        match self.board.send_post(event.channel, &view, delivery).await {
+                            Ok(sent) => {
+                                let scope = scope.message(sent.message);
+                                let pings = match delivery {
+                                    Delivery::New => view.pings.clone(),
+                                    Delivery::Redraw => Vec::new(),
+                                };
+                                if !pings.is_empty() && !sent.unheard.is_empty() {
+                                    failure::ping_silent(&pings, &sent.unheard, &scope);
                                 }
-                                report.posted.push(tag);
-                            } else {
+                                if self
+                                    .record(event.id, session, sent.message, now_ms, &scope)
+                                    .await
+                                {
+                                    if pings.is_empty() {
+                                        failure::record(
+                                            "signup.post.published",
+                                            "a sign-up post was published",
+                                            &scope,
+                                        );
+                                    } else {
+                                        failure::ping_published(
+                                            "a sign-up post was published",
+                                            &pings,
+                                            sent.unheard.is_empty(),
+                                            &scope,
+                                        );
+                                    }
+                                    report.posted.push(tag);
+                                } else {
+                                    report.failures += 1;
+                                }
+                            }
+                            Err(error) => {
+                                post_failed(
+                                    "a sign-up post could not be published",
+                                    &error,
+                                    &scope,
+                                );
                                 report.failures += 1;
                             }
                         }
-                        Err(error) => {
-                            post_failed("a sign-up post could not be published", &error, &scope);
-                            report.failures += 1;
-                        }
                     }
-                }
-                Err(error) => {
-                    post_failed(
-                        "the channel could not be searched for an existing sign-up post",
-                        &error,
-                        &scope,
-                    );
-                    report.failures += 1;
+                    Err(error) => {
+                        post_failed(
+                            "the channel could not be searched for an existing sign-up post",
+                            &error,
+                            &scope,
+                        );
+                        report.failures += 1;
+                    }
                 }
             }
         }
         report
+    }
+
+    pub async fn create_event(&self, new: &NewEvent) -> Result<CreateOutcome, AttendanceError> {
+        let _beating = self.beats.lock().await;
+        self.store.create_event(new).await
     }
 
     pub async fn clear_posts(
@@ -722,6 +731,10 @@ impl<B: Board> Signups<B> {
         _now_unix: i64,
     ) -> PostsReport {
         let _beating = self.beats.lock().await;
+        self.clear_held(event, scope).await
+    }
+
+    async fn clear_held(&self, event: &Event, scope: ClearScope) -> PostsReport {
         let posts = match self.store.posts(event).await {
             Ok(posts) => posts,
             Err(error) => {
@@ -763,18 +776,26 @@ impl<B: Board> Signups<B> {
         today: Date,
         now_unix: i64,
     ) -> EditReport {
+        let _beating = self.beats.lock().await;
         let moved = match change.channel {
             None => PostsReport::default(),
             Some(channel) => {
-                let held = match self.store.live_event(guild, id).await {
-                    Ok(Some(event)) if event.created_at_ms == created_at_ms => event,
-                    Ok(_) => return EditReport::NotFound,
+                let held = match self
+                    .store
+                    .judge_edit(guild, id, created_at_ms, change, today, now_unix)
+                    .await
+                {
+                    Ok(EditOutcome::Edited { before, .. }) => before,
+                    Ok(EditOutcome::NameTaken) => return EditReport::NameTaken,
+                    Ok(EditOutcome::BadRange) => return EditReport::BadRange,
+                    Ok(EditOutcome::TooFar) => return EditReport::TooFar,
+                    Ok(EditOutcome::NotFound) => return EditReport::NotFound,
                     Err(error) => return EditReport::Failed(Failure::from_error(&error)),
                 };
                 if held.channel == channel {
                     PostsReport::default()
                 } else {
-                    let cleared = self.clear_posts(&held, ClearScope::All, now_unix).await;
+                    let cleared = self.clear_held(&held, ClearScope::All).await;
                     if cleared.failures > 0 {
                         return EditReport::ClearFailed {
                             failures: cleared.failures,
@@ -790,9 +811,7 @@ impl<B: Board> Signups<B> {
             .await
         {
             Ok(EditOutcome::Edited { before, after }) => {
-                let outside = self
-                    .clear_posts(&after, ClearScope::OutsideSchedule, now_unix)
-                    .await;
+                let outside = self.clear_held(&after, ClearScope::OutsideSchedule).await;
                 let refreshed = self.refresh_posts(&after, now_unix).await;
                 EditReport::Edited {
                     before,
@@ -829,6 +848,25 @@ impl<B: Board> Signups<B> {
         };
         let mut report = PostsReport::default();
         for post in posts.iter().filter(|post| post.state != PostState::Removed) {
+            let state = if now_unix < post.session.start_unix() {
+                PostState::Open
+            } else {
+                PostState::Closed
+            };
+            if state != post.state
+                && let Err(error) = self
+                    .store
+                    .set_post_state(event.id, post.session.date(), state)
+                    .await
+            {
+                post_failed(
+                    "an edited sign-up post's state could not be saved",
+                    &error,
+                    &post_scope(event, post.session).message(post.message),
+                );
+                report.failures += 1;
+                continue;
+            }
             if self
                 .redraw(event, post.session, post.message, now_unix)
                 .await
@@ -1353,7 +1391,8 @@ pub fn listed_events(events: &[Event], now_unix: i64) -> Vec<&Event> {
 }
 
 pub fn next_post_at(span: &Span, now_unix: i64) -> Option<i64> {
-    span.due_session(now_unix)
+    span.due_sessions(now_unix)
+        .next()
         .is_none()
         .then(|| span.next_session(now_unix).map(Session::post_at_unix))
         .flatten()

@@ -395,9 +395,10 @@ impl Span {
             .find(|session| session.start_unix() > now_unix)
     }
 
-    pub fn due_session(&self, now_unix: i64) -> Option<Session> {
-        self.next_session(now_unix)
-            .filter(|session| session.post_at_unix() <= now_unix)
+    pub fn due_sessions(&self, now_unix: i64) -> impl Iterator<Item = Session> + '_ {
+        self.sessions()
+            .filter(move |session| session.start_unix() > now_unix)
+            .filter(move |session| session.post_at_unix() <= now_unix)
     }
 
     pub fn last_moment_unix(&self) -> Option<i64> {

@@ -1,7 +1,10 @@
 mod common;
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use barnacle_bot::attendance::Board;
+use barnacle_bot::attendance::BoardError;
 use barnacle_bot::attendance::Cell;
 use barnacle_bot::attendance::ChooseOutcome;
 use barnacle_bot::attendance::ClearScope;
@@ -16,8 +19,10 @@ use barnacle_bot::attendance::PostsReport;
 use barnacle_bot::attendance::PurgeReport;
 use barnacle_bot::attendance::ROSTER_LIMIT;
 use barnacle_bot::attendance::RehearsalOutcome;
+use barnacle_bot::attendance::Removal;
 use barnacle_bot::attendance::RepostOutcome;
 use barnacle_bot::attendance::RepostPing;
+use barnacle_bot::attendance::Sent;
 use barnacle_bot::attendance::SignupView;
 use barnacle_bot::attendance::Signups;
 use barnacle_bot::attendance::Target;
@@ -32,6 +37,8 @@ use barnacle_bot::attendance_store::EventChange;
 use barnacle_bot::attendance_store::NewEvent;
 use barnacle_bot::attendance_store::Post;
 use barnacle_bot::attendance_store::PostState;
+use barnacle_bot::event_draft::Applied;
+use barnacle_bot::event_draft::Ready;
 use barnacle_bot::failure::Kind;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
@@ -56,6 +63,7 @@ use common::fakes::FakeBoard;
 use jiff::civil::Date;
 use jiff::civil::Weekday;
 use sqlx::sqlite::SqlitePool;
+use tokio::sync::Semaphore;
 
 const GUILD: GuildId = GuildId::new(1);
 const REHEARSAL: GuildId = GuildId::new(2);
@@ -2892,6 +2900,52 @@ async fn an_unreadable_event_does_not_stop_the_others() {
 }
 
 #[tokio::test]
+async fn a_spring_forward_session_posts_a_full_day_ahead() {
+    let board = FakeBoard::new();
+    let weekend = named(
+        "Ranked Sprint",
+        "2027-03-13",
+        "2027-03-14",
+        schedule(
+            Weekdays::new(&[Weekday::Saturday, Weekday::Sunday]).unwrap(),
+            "17:00",
+            "America/Denver",
+            4,
+        ),
+    );
+    let (signups, event, store) = single_event(board.clone(), &weekend).await;
+    let first = signups.tick(1_804_896_000, millis(1_804_896_000)).await;
+    assert_eq!(first.posted, vec![tag(&event, day("2027-03-13"))]);
+    let second = signups.tick(1_804_978_800, millis(1_804_978_800)).await;
+    assert_eq!(second.posted, vec![tag(&event, day("2027-03-14"))]);
+    let sent: Vec<(Date, i64)> = board
+        .sends()
+        .iter()
+        .map(|view| (view.session.date(), view.session.start_unix()))
+        .collect();
+    assert_eq!(
+        sent,
+        vec![
+            (day("2027-03-13"), 1_804_982_400),
+            (day("2027-03-14"), 1_805_065_200)
+        ]
+    );
+    assert_eq!(
+        state_of(&store, &event, day("2027-03-14")).await,
+        PostState::Open
+    );
+    let posted_at_ms = store
+        .posts(&event)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|post| post.session.date() == day("2027-03-14"))
+        .expect("the 2027-03-14 post was recorded")
+        .posted_at_ms;
+    assert_eq!(posted_at_ms, 1_804_978_800_000);
+}
+
+#[tokio::test]
 async fn a_button_from_before_0008_still_records() {
     let pool = common::seasons_pool().await;
     sqlx::raw_sql("INSERT INTO cb_seasons (id, guild_id, channel_id, number, codename, first_day, last_day, created_by, created_at_ms) VALUES (1, 1, 10, 35, NULL, '2026-10-14', '2026-10-18', 100, 0); INSERT INTO cb_posts (season_id, night, message_id, state, posted_at_ms) VALUES (1, '2026-10-14', 7, 'open', 1791934200000)")
@@ -3905,5 +3959,509 @@ async fn moving_an_event_clears_the_old_channel_first() {
             .unwrap()
             .channel,
         OTHER_CHANNEL
+    );
+}
+
+fn sprint_on(weekdays: &[Weekday], last: &str) -> NewEvent {
+    named(
+        "Ranked Sprint",
+        "2026-10-14",
+        last,
+        schedule(
+            Weekdays::new(weekdays).unwrap(),
+            "17:00",
+            "America/Denver",
+            4,
+        ),
+    )
+}
+
+fn last_drawn(board: &FakeBoard, wanted: Snowflake) -> SignupView {
+    board
+        .calls()
+        .into_iter()
+        .rev()
+        .find_map(|call| match call {
+            BoardCall::Edited { message, view, .. } if message == wanted => Some(view),
+            _ => None,
+        })
+        .expect("the post was redrawn")
+}
+
+#[tokio::test]
+async fn a_reopened_session_closes_at_its_new_start() {
+    let board = FakeBoard::new();
+    let new = sprint_on(&[Weekday::Wednesday], "2026-10-14");
+    let (signups, event, store) = ready_from(board.clone(), &new).await;
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    signups.tick(1_792_018_800, millis(1_792_018_800)).await;
+    let message = message_for(&store, &event, day("2026-10-14")).await;
+    assert_eq!(
+        state_of(&store, &event, day("2026-10-14")).await,
+        PostState::Closed
+    );
+    let later = EventChange {
+        start: Some(StartTime::parse("19:00").unwrap()),
+        ..EventChange::default()
+    };
+    let EditReport::Edited { after, .. } = signups
+        .edit_event(
+            GUILD,
+            event.id,
+            event.created_at_ms,
+            &later,
+            day("2026-10-14"),
+            1_792_020_600,
+        )
+        .await
+    else {
+        panic!("the start was not saved");
+    };
+    let reopened = last_drawn(&board, message);
+    assert!(reopened.open);
+    assert_eq!(reopened.session.start_unix(), 1_792_026_000);
+    assert_eq!(
+        state_of(&store, &after, day("2026-10-14")).await,
+        PostState::Open
+    );
+    let closed = signups.tick(1_792_026_000, millis(1_792_026_000)).await;
+    assert_eq!(closed.closed, vec![tag(&after, day("2026-10-14"))]);
+    let redrawn = last_drawn(&board, message);
+    assert!(!redrawn.open);
+    assert_eq!(redrawn.session.start_unix(), 1_792_026_000);
+    assert_eq!(
+        state_of(&store, &after, day("2026-10-14")).await,
+        PostState::Closed
+    );
+}
+
+#[tokio::test]
+async fn an_edit_closes_a_session_moved_before_now() {
+    let board = FakeBoard::new();
+    let new = sprint_on(&[Weekday::Wednesday, Weekday::Saturday], "2026-10-17");
+    let (signups, event, store) = ready_from(board.clone(), &new).await;
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    let message = message_for(&store, &event, day("2026-10-14")).await;
+    assert_eq!(
+        state_of(&store, &event, day("2026-10-14")).await,
+        PostState::Open
+    );
+    let earlier = EventChange {
+        start: Some(StartTime::parse("15:00").unwrap()),
+        ..EventChange::default()
+    };
+    let EditReport::Edited { after, .. } = signups
+        .edit_event(
+            GUILD,
+            event.id,
+            event.created_at_ms,
+            &earlier,
+            day("2026-10-14"),
+            1_792_015_200,
+        )
+        .await
+    else {
+        panic!("the start was not saved");
+    };
+    let redrawn = last_drawn(&board, message);
+    assert!(!redrawn.open);
+    assert_eq!(redrawn.session.start_unix(), 1_792_011_600);
+    assert_eq!(
+        state_of(&store, &after, day("2026-10-14")).await,
+        PostState::Closed
+    );
+}
+
+#[derive(Clone)]
+struct HeldDeletes {
+    board: FakeBoard,
+    reached: Arc<Semaphore>,
+    gate: Arc<Semaphore>,
+}
+
+impl HeldDeletes {
+    fn new(board: FakeBoard) -> Self {
+        Self {
+            board,
+            reached: Arc::new(Semaphore::new(0)),
+            gate: Arc::new(Semaphore::new(0)),
+        }
+    }
+
+    async fn reached(&self) {
+        self.reached.acquire().await.unwrap().forget();
+    }
+
+    fn open(&self) {
+        self.gate.close();
+    }
+}
+
+impl Board for HeldDeletes {
+    async fn send_post(
+        &self,
+        channel: ChannelId,
+        view: &SignupView,
+        delivery: Delivery,
+    ) -> Result<Sent, BoardError> {
+        self.board.send_post(channel, view, delivery).await
+    }
+
+    async fn find_post(
+        &self,
+        channel: ChannelId,
+        tag: PostTag,
+    ) -> Result<Option<Snowflake>, BoardError> {
+        self.board.find_post(channel, tag).await
+    }
+
+    async fn edit_post(
+        &self,
+        channel: ChannelId,
+        message: Snowflake,
+        view: &SignupView,
+    ) -> Result<(), BoardError> {
+        self.board.edit_post(channel, message, view).await
+    }
+
+    async fn delete_post(
+        &self,
+        channel: ChannelId,
+        message: Snowflake,
+    ) -> Result<Removal, BoardError> {
+        self.reached.add_permits(1);
+        let _opened = self.gate.acquire().await;
+        self.board.delete_post(channel, message).await
+    }
+}
+
+async fn lands_within_a_second(landed: impl AsyncFn() -> bool) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    while tokio::time::Instant::now() < deadline {
+        if landed().await {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    landed().await
+}
+
+async fn store_of(events: &[NewEvent]) -> (Attendance, Vec<Event>) {
+    let store = Attendance::with_pool(attendance_pool().await)
+        .await
+        .unwrap();
+    let mut held = Vec::new();
+    for new in events {
+        held.push(created(&store, new).await);
+    }
+    (store, held)
+}
+
+fn saving(event: &Event, change: EventChange) -> Ready {
+    Ready::Edit {
+        event: event.id,
+        created_at_ms: event.created_at_ms,
+        change,
+        warning: None,
+    }
+}
+
+fn to_finals_in(channel: Option<ChannelId>) -> EventChange {
+    EventChange {
+        name: Some("Ranked Finals".to_owned()),
+        channel,
+        ..EventChange::default()
+    }
+}
+
+async fn edit_report<B: Board>(
+    ready: Ready,
+    signups: &Arc<Signups<B>>,
+    now_unix: i64,
+) -> EditReport {
+    match ready.apply(signups, GUILD, now_unix).await {
+        Applied::Edit { report, .. } => report,
+        other => panic!("expected an edit, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_beat_during_a_save_acts_on_the_saved_event() {
+    let fake = FakeBoard::new();
+    let board = HeldDeletes::new(fake.clone());
+    let (store, held) = store_of(&[sprint_on(&[Weekday::Wednesday], "2026-10-14")]).await;
+    let event = held[0].clone();
+    let signups = Signups::new(board.clone(), store.clone());
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    signups.tick(1_792_018_800, millis(1_792_018_800)).await;
+    assert_eq!(
+        state_of(&store, &event, day("2026-10-14")).await,
+        PostState::Closed
+    );
+    let earlier = fake.calls().len();
+    let save = {
+        let signups = Arc::clone(&signups);
+        let ready = saving(
+            &event,
+            EventChange {
+                start: Some(StartTime::parse("19:00").unwrap()),
+                channel: Some(OTHER_CHANNEL),
+                ..EventChange::default()
+            },
+        );
+        tokio::spawn(async move { edit_report(ready, &signups, 1_792_020_600).await })
+    };
+    board.reached().await;
+    let beat = {
+        let signups = Arc::clone(&signups);
+        tokio::spawn(async move { signups.tick(1_792_020_600, millis(1_792_020_600)).await })
+    };
+    assert!(
+        !lands_within_a_second(async || fake.sends().len() > 1).await,
+        "a beat must wait for a Save in progress"
+    );
+    board.open();
+    let EditReport::Edited { after, .. } = save.await.unwrap() else {
+        panic!("the Save was not saved");
+    };
+    let beaten = beat.await.unwrap();
+    assert_eq!(
+        after.span.schedule().start(),
+        StartTime::parse("19:00").unwrap()
+    );
+    assert_eq!(after.channel, OTHER_CHANNEL);
+    let saved = store.live_event(GUILD, event.id).await.unwrap().unwrap();
+    assert_eq!(
+        saved.span.schedule().start(),
+        StartTime::parse("19:00").unwrap()
+    );
+    assert_eq!(saved.channel, OTHER_CHANNEL);
+    assert_eq!(beaten.posted, vec![tag(&saved, day("2026-10-14"))]);
+    let sent: Vec<(ChannelId, Delivery, Date, bool, i64)> = fake.calls()[earlier..]
+        .iter()
+        .filter_map(|call| match call {
+            BoardCall::Sent {
+                channel,
+                view,
+                delivery,
+            } => Some((
+                *channel,
+                *delivery,
+                view.session.date(),
+                view.open,
+                view.session.start_unix(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        vec![(
+            OTHER_CHANNEL,
+            Delivery::Redraw,
+            day("2026-10-14"),
+            true,
+            1_792_026_000
+        )]
+    );
+}
+
+#[tokio::test]
+async fn a_move_to_a_taken_name_deletes_nothing() {
+    let board = FakeBoard::new();
+    let (store, held) = store_of(&[
+        sprint_on(&[Weekday::Wednesday], "2026-10-14"),
+        NewEvent {
+            name: "Ranked Finals".to_owned(),
+            ..sprint_on(&[Weekday::Wednesday], "2026-10-14")
+        },
+    ])
+    .await;
+    let (sprint, finals) = (held[0].clone(), held[1].clone());
+    let signups = Signups::new(board.clone(), store.clone());
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    let ready = saving(&sprint, to_finals_in(Some(OTHER_CHANNEL)));
+    assert_eq!(
+        edit_report(ready, &signups, 1_791_932_460).await,
+        EditReport::NameTaken
+    );
+    assert!(board.deletes().is_empty());
+    assert_eq!(
+        state_of(&store, &sprint, day("2026-10-14")).await,
+        PostState::Open
+    );
+    assert_eq!(
+        state_of(&store, &finals, day("2026-10-14")).await,
+        PostState::Open
+    );
+    let kept = store.live_event(GUILD, sprint.id).await.unwrap().unwrap();
+    assert_eq!(kept.name, "Ranked Sprint");
+    assert_eq!(kept.channel, CHANNEL);
+}
+
+#[tokio::test]
+async fn a_move_with_a_last_day_before_the_first_deletes_nothing() {
+    let board = FakeBoard::new();
+    let (store, held) = store_of(&[sprint_on(&[Weekday::Wednesday], "2026-10-21")]).await;
+    let sprint = held[0].clone();
+    let signups = Signups::new(board.clone(), store.clone());
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    let ready = saving(
+        &sprint,
+        EventChange {
+            last_day: Some(day("2026-10-13")),
+            channel: Some(OTHER_CHANNEL),
+            ..EventChange::default()
+        },
+    );
+    assert_eq!(
+        edit_report(ready, &signups, 1_791_932_460).await,
+        EditReport::BadRange
+    );
+    assert!(board.deletes().is_empty());
+    assert_eq!(
+        state_of(&store, &sprint, day("2026-10-14")).await,
+        PostState::Open
+    );
+    let kept = store.live_event(GUILD, sprint.id).await.unwrap().unwrap();
+    assert_eq!(kept.span.last_day(), day("2026-10-21"));
+    assert_eq!(kept.channel, CHANNEL);
+}
+
+#[tokio::test]
+async fn a_move_with_dates_too_far_deletes_nothing() {
+    let board = FakeBoard::new();
+    let (store, held) = store_of(&[sprint_on(&[Weekday::Wednesday], "2026-10-21")]).await;
+    let sprint = held[0].clone();
+    let signups = Signups::new(board.clone(), store.clone());
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    let ready = saving(
+        &sprint,
+        EventChange {
+            last_day: Some(day("2027-04-15")),
+            channel: Some(OTHER_CHANNEL),
+            ..EventChange::default()
+        },
+    );
+    assert_eq!(
+        edit_report(ready, &signups, 1_791_932_460).await,
+        EditReport::TooFar
+    );
+    assert!(board.deletes().is_empty());
+    assert_eq!(
+        state_of(&store, &sprint, day("2026-10-14")).await,
+        PostState::Open
+    );
+    let kept = store.live_event(GUILD, sprint.id).await.unwrap().unwrap();
+    assert_eq!(kept.span.last_day(), day("2026-10-21"));
+    assert_eq!(kept.channel, CHANNEL);
+}
+
+#[tokio::test]
+async fn a_namesake_created_during_a_move_waits_for_it() {
+    let fake = FakeBoard::new();
+    let board = HeldDeletes::new(fake.clone());
+    let (store, held) = store_of(&[sprint_on(&[Weekday::Wednesday], "2026-10-14")]).await;
+    let sprint = held[0].clone();
+    let signups = Signups::new(board.clone(), store.clone());
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    let old = message_for(&store, &sprint, day("2026-10-14")).await;
+    let moving = {
+        let signups = Arc::clone(&signups);
+        let ready = saving(&sprint, to_finals_in(Some(OTHER_CHANNEL)));
+        tokio::spawn(async move { edit_report(ready, &signups, 1_791_932_460).await })
+    };
+    board.reached().await;
+    let creating = {
+        let signups = Arc::clone(&signups);
+        let ready = Ready::Create {
+            new: NewEvent {
+                name: "Ranked Finals".to_owned(),
+                created_at_ms: millis(1_791_932_460),
+                ..sprint_on(&[Weekday::Wednesday], "2026-10-14")
+            },
+            warning: None,
+        };
+        tokio::spawn(async move { ready.apply(&signups, GUILD, 1_791_932_460).await })
+    };
+    assert!(
+        !lands_within_a_second(async || store.events_in(GUILD).await.unwrap().len() > 1).await,
+        "a create must wait for a moving Save"
+    );
+    board.open();
+    let EditReport::Edited { after, .. } = moving.await.unwrap() else {
+        panic!("the moving Save was not saved");
+    };
+    assert_eq!(after.name, "Ranked Finals");
+    assert_eq!(after.channel, OTHER_CHANNEL);
+    let saved = store.live_event(GUILD, sprint.id).await.unwrap().unwrap();
+    assert_eq!(saved.name, "Ranked Finals");
+    assert_eq!(saved.channel, OTHER_CHANNEL);
+    assert_eq!(fake.deletes_in(CHANNEL), vec![old]);
+    let Applied::Create { outcome, .. } = creating.await.unwrap() else {
+        panic!("the create was not applied as a create");
+    };
+    assert_eq!(outcome.unwrap(), CreateOutcome::NameTaken);
+    assert_eq!(store.events_in(GUILD).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_rename_saved_during_a_move_waits_for_it() {
+    let fake = FakeBoard::new();
+    let board = HeldDeletes::new(fake.clone());
+    let (store, held) = store_of(&[
+        sprint_on(&[Weekday::Wednesday], "2026-10-14"),
+        named(
+            "Drill",
+            "2026-10-17",
+            "2026-10-17",
+            schedule(
+                Weekdays::new(&[Weekday::Saturday]).unwrap(),
+                "17:00",
+                "America/Denver",
+                4,
+            ),
+        ),
+    ])
+    .await;
+    let (sprint, drill) = (held[0].clone(), held[1].clone());
+    let signups = Signups::new(board.clone(), store.clone());
+    signups.tick(1_791_932_400, millis(1_791_932_400)).await;
+    let moving = {
+        let signups = Arc::clone(&signups);
+        let ready = saving(&sprint, to_finals_in(Some(OTHER_CHANNEL)));
+        tokio::spawn(async move { edit_report(ready, &signups, 1_791_932_460).await })
+    };
+    board.reached().await;
+    let renaming = {
+        let signups = Arc::clone(&signups);
+        let ready = saving(&drill, to_finals_in(None));
+        tokio::spawn(async move { edit_report(ready, &signups, 1_791_932_460).await })
+    };
+    assert!(
+        !lands_within_a_second(async || {
+            store.event(drill.id).await.unwrap().unwrap().name == "Ranked Finals"
+        })
+        .await,
+        "another Save must wait for a moving Save"
+    );
+    board.open();
+    let EditReport::Edited { after, .. } = moving.await.unwrap() else {
+        panic!("the moving Save was not saved");
+    };
+    assert_eq!(after.name, "Ranked Finals");
+    assert_eq!(after.channel, OTHER_CHANNEL);
+    let saved = store.live_event(GUILD, sprint.id).await.unwrap().unwrap();
+    assert_eq!(saved.name, "Ranked Finals");
+    assert_eq!(saved.channel, OTHER_CHANNEL);
+    assert_eq!(renaming.await.unwrap(), EditReport::NameTaken);
+    assert_eq!(
+        store
+            .live_event(GUILD, drill.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .name,
+        "Drill"
     );
 }
