@@ -958,6 +958,9 @@ pub fn event_line(event: &Event, now_unix: i64) -> String {
 }
 
 pub fn event_list(lines: &[String]) -> String {
+    if lines.is_empty() {
+        return NO_EVENT_HERE.to_string();
+    }
     let kept: Vec<&str> = lines
         .iter()
         .scan(None::<usize>, |length, line| {

@@ -1861,6 +1861,14 @@ fn an_empty_list_says_no_event_is_set_up() {
 }
 
 #[test]
+fn the_list_text_of_no_line_says_no_event_is_set_up() {
+    assert_eq!(
+        text::event_list(&[] as &[String]),
+        "No event is set up here."
+    );
+}
+
+#[test]
 fn no_event_list_text_says_night_or_season() {
     let ahead = text::event_line(&listed_sprint(), BEFORE_THE_SPRINT);
     let none_ahead = text::event_line(&listed_sprint(), AFTER_THE_SPRINT);

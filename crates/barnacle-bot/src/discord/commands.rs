@@ -1252,9 +1252,6 @@ pub fn event_list_reply(events: &[Event], now_unix: i64) -> poise::CreateReply {
         .into_iter()
         .map(|event| text::event_line(event, now_unix))
         .collect();
-    if lines.is_empty() {
-        return private_reply(text::NO_EVENT_HERE);
-    }
     private_reply(text::event_list(&lines))
 }
 
