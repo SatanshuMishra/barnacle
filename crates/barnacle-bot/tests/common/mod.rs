@@ -4,7 +4,11 @@ pub mod fakes;
 pub mod logs;
 
 use barnacle_bot::attendance_store::Attendance;
+use barnacle_bot::ids::ChannelId;
+use barnacle_bot::ids::Ping;
+use barnacle_bot::ids::RoleId;
 use barnacle_bot::solves::Solves;
+use barnacle_bot::text::Refusal;
 use barnacle_catalog::Catalog;
 use barnacle_catalog::Nation;
 use barnacle_catalog::ParamId;
@@ -17,6 +21,7 @@ use barnacle_catalog::ShipName;
 use barnacle_catalog::Silhouette;
 use barnacle_catalog::Tier;
 use barnacle_catalog::curation::CurationConfig;
+use barnacle_guess::RoundOptions;
 use barnacle_guess::Snowflake;
 use sqlx::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
@@ -155,4 +160,104 @@ pub async fn attendance() -> Attendance {
     Attendance::with_pool(attendance_pool().await)
         .await
         .unwrap()
+}
+
+pub fn every_refusal() -> Vec<Refusal> {
+    let refusals = vec![
+        Refusal::WrongChannelType,
+        Refusal::MissingBotPermissions {
+            names: vec!["Send Messages"],
+            channel: Some(ChannelId::new(10)),
+        },
+        Refusal::DateFormat,
+        Refusal::LastDayBeforeFirst,
+        Refusal::DatesTooFar,
+        Refusal::NoSessionsLeft,
+        Refusal::NameTaken("Ranked Sprint".to_owned()),
+        Refusal::NameFormat,
+        Refusal::EventNotFound,
+        Refusal::NothingToChange,
+        Refusal::RehearsalOnly,
+        Refusal::RehearsalRunning,
+        Refusal::NothingPending,
+        Refusal::RoundAlreadyRunning,
+        Refusal::EmptyPool(RoundOptions::default()),
+        Refusal::NoShipMatches,
+        Refusal::NameEmpty,
+        Refusal::NameTooLong { limit: 100 },
+        Refusal::NotAHub,
+        Refusal::CategoryAndTopLevel,
+        Refusal::HubNothingToChange,
+        Refusal::PingBlockedByChannel {
+            pings: vec![Ping::Role(RoleId::new(4))],
+            channel: ChannelId::new(10),
+        },
+        Refusal::PingMixesEveryone,
+        Refusal::NothingToRepost {
+            name: "Ranked Sprint".to_owned(),
+            next_post_at: Some(1_790_811_000),
+            sessions_left: 3,
+        },
+        Refusal::RepostNothingToPing,
+        Refusal::RepostPingNotAllowed,
+        Refusal::RepostPingsChanged,
+        Refusal::RepostSuperseded,
+        Refusal::SeriesRoundsOutOfRange,
+        Refusal::TemplateUnknown,
+        Refusal::MissingOptions(vec!["name", "first_day"]),
+        Refusal::StartFormat,
+        Refusal::HoursOutOfRange,
+        Refusal::ZoneUnknown,
+        Refusal::WeekdaysInvalid,
+        Refusal::TooManyRoles,
+        Refusal::PanelUnknown,
+        Refusal::PanelNotYours,
+        Refusal::PanelExpired,
+        Refusal::ChannelUnknown,
+    ];
+    for refusal in &refusals {
+        match refusal {
+            Refusal::WrongChannelType
+            | Refusal::MissingBotPermissions { .. }
+            | Refusal::DateFormat
+            | Refusal::LastDayBeforeFirst
+            | Refusal::DatesTooFar
+            | Refusal::NoSessionsLeft
+            | Refusal::NameTaken(_)
+            | Refusal::NameFormat
+            | Refusal::EventNotFound
+            | Refusal::NothingToChange
+            | Refusal::RehearsalOnly
+            | Refusal::RehearsalRunning
+            | Refusal::NothingPending
+            | Refusal::RoundAlreadyRunning
+            | Refusal::EmptyPool(_)
+            | Refusal::NoShipMatches
+            | Refusal::NameEmpty
+            | Refusal::NameTooLong { .. }
+            | Refusal::NotAHub
+            | Refusal::CategoryAndTopLevel
+            | Refusal::HubNothingToChange
+            | Refusal::PingBlockedByChannel { .. }
+            | Refusal::PingMixesEveryone
+            | Refusal::NothingToRepost { .. }
+            | Refusal::RepostNothingToPing
+            | Refusal::RepostPingNotAllowed
+            | Refusal::RepostPingsChanged
+            | Refusal::RepostSuperseded
+            | Refusal::SeriesRoundsOutOfRange
+            | Refusal::TemplateUnknown
+            | Refusal::MissingOptions(_)
+            | Refusal::StartFormat
+            | Refusal::HoursOutOfRange
+            | Refusal::ZoneUnknown
+            | Refusal::WeekdaysInvalid
+            | Refusal::TooManyRoles
+            | Refusal::PanelUnknown
+            | Refusal::PanelNotYours
+            | Refusal::PanelExpired
+            | Refusal::ChannelUnknown => {}
+        }
+    }
+    refusals
 }

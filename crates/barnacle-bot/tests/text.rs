@@ -38,6 +38,7 @@ use barnacle_guess::SeriesLength;
 use barnacle_guess::Tally;
 use barnacle_guess::Timing;
 use barnacle_guess::UserId;
+use common::every_refusal;
 use common::index;
 use common::tier;
 
@@ -233,61 +234,6 @@ fn about_names_the_data_and_carries_the_wargaming_notice() {
     assert!(about.contains("wowsunpack 0.45.0 and wows-data-mgr 0.21.0"));
     assert!(about.contains("Barnacle 0.1.0"));
     assert!(about.ends_with(text::WARGAMING_NOTICE));
-}
-
-fn every_refusal() -> Vec<Refusal> {
-    vec![
-        Refusal::WrongChannelType,
-        Refusal::MissingBotPermissions {
-            names: vec!["Embed Links"],
-            channel: None,
-        },
-        Refusal::DateFormat,
-        Refusal::LastDayBeforeFirst,
-        Refusal::DatesTooFar,
-        Refusal::NoSessionsLeft,
-        Refusal::NameTaken("Ranked Sprint".to_owned()),
-        Refusal::NameFormat,
-        Refusal::EventNotFound,
-        Refusal::NothingToChange,
-        Refusal::RehearsalOnly,
-        Refusal::RehearsalRunning,
-        Refusal::NothingPending,
-        Refusal::RoundAlreadyRunning,
-        Refusal::EmptyPool(RoundOptions::default()),
-        Refusal::NoShipMatches,
-        Refusal::NameEmpty,
-        Refusal::NameTooLong { limit: 90 },
-        Refusal::NotAHub,
-        Refusal::CategoryAndTopLevel,
-        Refusal::HubNothingToChange,
-        Refusal::PingBlockedByChannel {
-            pings: vec![Ping::Everyone],
-            channel: ChannelId::new(123),
-        },
-        Refusal::PingMixesEveryone,
-        Refusal::NothingToRepost {
-            name: "Ranked Sprint".to_owned(),
-            next_post_at: None,
-            sessions_left: 0,
-        },
-        Refusal::RepostNothingToPing,
-        Refusal::RepostPingNotAllowed,
-        Refusal::RepostPingsChanged,
-        Refusal::RepostSuperseded,
-        Refusal::SeriesRoundsOutOfRange,
-        Refusal::TemplateUnknown,
-        Refusal::MissingOptions(vec!["start", "hours", "time_zone"]),
-        Refusal::StartFormat,
-        Refusal::HoursOutOfRange,
-        Refusal::ZoneUnknown,
-        Refusal::WeekdaysInvalid,
-        Refusal::TooManyRoles,
-        Refusal::PanelUnknown,
-        Refusal::PanelNotYours,
-        Refusal::PanelExpired,
-        Refusal::ChannelUnknown,
-    ]
 }
 
 fn variant(refusal: &Refusal) -> usize {
@@ -1329,33 +1275,14 @@ fn no_event_text_says_night_or_season() {
         text::CLEAR_FAILED_MOVE.to_owned(),
     ];
     texts.extend(
-        [
-            Refusal::DatesTooFar,
-            Refusal::NoSessionsLeft,
-            Refusal::NameTaken("Ranked Sprint".to_owned()),
-            Refusal::NameFormat,
-            Refusal::EventNotFound,
-            Refusal::NothingToChange,
-            Refusal::RehearsalOnly,
-            Refusal::RehearsalRunning,
-            Refusal::NothingPending,
-            Refusal::NothingToRepost {
-                name: "Ranked Sprint".to_owned(),
-                next_post_at: Some(1_790_811_000),
-                sessions_left: 3,
-            },
-            Refusal::NothingToRepost {
+        every_refusal()
+            .iter()
+            .chain(&[Refusal::NothingToRepost {
                 name: "Ranked Sprint".to_owned(),
                 next_post_at: None,
                 sessions_left: 0,
-            },
-            Refusal::RepostNothingToPing,
-            Refusal::RepostPingNotAllowed,
-            Refusal::RepostPingsChanged,
-            Refusal::RepostSuperseded,
-        ]
-        .iter()
-        .map(Refusal::message),
+            }])
+            .map(Refusal::message),
     );
     for text in texts {
         assert!(!holds_night_or_season(&text), "{text}");
