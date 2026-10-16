@@ -4,21 +4,27 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use barnacle_bot::attendance::Cell;
+use barnacle_bot::attendance::Delivery;
 use barnacle_bot::attendance::HourTally;
 use barnacle_bot::attendance::PostTag;
-use barnacle_bot::attendance::PostsReport;
 use barnacle_bot::attendance::PurgeReport;
 use barnacle_bot::attendance::RosterRow;
 use barnacle_bot::attendance::SignupView;
 use barnacle_bot::attendance::TickReport;
-use barnacle_bot::attendance_store::Season;
+use barnacle_bot::attendance_store::Event;
+use barnacle_bot::discord;
 use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::Ping;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::schedule::Hour;
-use barnacle_bot::schedule::Night;
-use barnacle_bot::schedule::Range;
+use barnacle_bot::schedule::Hours;
+use barnacle_bot::schedule::Schedule;
+use barnacle_bot::schedule::Session;
+use barnacle_bot::schedule::Span;
+use barnacle_bot::schedule::StartTime;
+use barnacle_bot::schedule::Weekdays;
+use barnacle_bot::schedule::Zone;
 use barnacle_bot::schedule::parse_day;
 use barnacle_bot::solves::Ranking;
 use barnacle_bot::solves::Standing;
@@ -34,8 +40,10 @@ use barnacle_guess::SeriesLength;
 use barnacle_guess::Tally;
 use barnacle_guess::Timing;
 use barnacle_guess::UserId;
+use common::every_refusal;
 use common::index;
 use common::tier;
+use poise::serenity_prelude as serenity;
 
 fn yamato() -> Reveal {
     Reveal {
@@ -231,52 +239,6 @@ fn about_names_the_data_and_carries_the_wargaming_notice() {
     assert!(about.ends_with(text::WARGAMING_NOTICE));
 }
 
-fn every_refusal() -> Vec<Refusal> {
-    vec![
-        Refusal::WrongChannelType,
-        Refusal::MissingBotPermissions {
-            names: vec!["Embed Links"],
-            channel: None,
-        },
-        Refusal::DateFormat,
-        Refusal::LastDayBeforeFirst,
-        Refusal::DatesTooFar,
-        Refusal::NoNightsLeft,
-        Refusal::SeasonNumberTaken(35),
-        Refusal::SeasonOverlaps(season(34, None, "2026-06-10", "2026-08-02")),
-        Refusal::SeasonNotFound(35),
-        Refusal::SeasonAlreadyHere(35),
-        Refusal::NothingToChange,
-        Refusal::CodenameBothWays,
-        Refusal::PingBothWays,
-        Refusal::RehearsalOnly,
-        Refusal::NothingPending,
-        Refusal::RoundAlreadyRunning,
-        Refusal::EmptyPool(RoundOptions::default()),
-        Refusal::NoShipMatches,
-        Refusal::NameEmpty,
-        Refusal::NameTooLong { limit: 90 },
-        Refusal::NotAHub,
-        Refusal::CategoryAndTopLevel,
-        Refusal::HubNothingToChange,
-        Refusal::PingBlockedByChannel {
-            pings: vec![Ping::Everyone],
-            channel: ChannelId::new(123),
-        },
-        Refusal::PingMixesEveryone,
-        Refusal::NothingToRepost {
-            number: 35,
-            next_post_at: None,
-            nights_left: 0,
-        },
-        Refusal::RepostNothingToPing,
-        Refusal::RepostPingNotAllowed,
-        Refusal::RepostPingsChanged,
-        Refusal::RepostSuperseded,
-        Refusal::SeriesRoundsOutOfRange,
-    ]
-}
-
 fn variant(refusal: &Refusal) -> usize {
     match refusal {
         Refusal::WrongChannelType => 0,
@@ -284,36 +246,45 @@ fn variant(refusal: &Refusal) -> usize {
         Refusal::DateFormat => 2,
         Refusal::LastDayBeforeFirst => 3,
         Refusal::DatesTooFar => 4,
-        Refusal::NoNightsLeft => 5,
-        Refusal::SeasonNumberTaken(_) => 6,
-        Refusal::SeasonOverlaps(_) => 7,
-        Refusal::SeasonNotFound(_) => 8,
-        Refusal::SeasonAlreadyHere(_) => 9,
-        Refusal::NothingToChange => 10,
-        Refusal::CodenameBothWays => 11,
-        Refusal::PingBothWays => 12,
-        Refusal::RehearsalOnly => 13,
-        Refusal::NothingPending => 14,
-        Refusal::RoundAlreadyRunning => 15,
-        Refusal::EmptyPool(_) => 16,
-        Refusal::NoShipMatches => 17,
-        Refusal::NameEmpty => 18,
-        Refusal::NameTooLong { .. } => 19,
-        Refusal::NotAHub => 20,
-        Refusal::CategoryAndTopLevel => 21,
-        Refusal::HubNothingToChange => 22,
-        Refusal::PingBlockedByChannel { .. } => 23,
-        Refusal::PingMixesEveryone => 24,
-        Refusal::NothingToRepost { .. } => 25,
-        Refusal::RepostNothingToPing => 26,
-        Refusal::RepostPingNotAllowed => 27,
-        Refusal::RepostPingsChanged => 28,
-        Refusal::RepostSuperseded => 29,
-        Refusal::SeriesRoundsOutOfRange => 30,
+        Refusal::NoSessionsLeft => 5,
+        Refusal::NameTaken(_) => 6,
+        Refusal::NameFormat => 7,
+        Refusal::EventNotFound => 8,
+        Refusal::NothingToChange => 9,
+        Refusal::RehearsalOnly => 10,
+        Refusal::RehearsalRunning => 11,
+        Refusal::NothingPending => 12,
+        Refusal::RoundAlreadyRunning => 13,
+        Refusal::EmptyPool(_) => 14,
+        Refusal::NoShipMatches => 15,
+        Refusal::NameEmpty => 16,
+        Refusal::NameTooLong { .. } => 17,
+        Refusal::NotAHub => 18,
+        Refusal::CategoryAndTopLevel => 19,
+        Refusal::HubNothingToChange => 20,
+        Refusal::PingBlockedByChannel { .. } => 21,
+        Refusal::PingMixesEveryone => 22,
+        Refusal::NothingToRepost { .. } => 23,
+        Refusal::RepostNothingToPing => 24,
+        Refusal::RepostPingNotAllowed => 25,
+        Refusal::RepostPingsChanged => 26,
+        Refusal::RepostSuperseded => 27,
+        Refusal::SeriesRoundsOutOfRange => 28,
+        Refusal::TemplateUnknown => 29,
+        Refusal::MissingOptions(_) => 30,
+        Refusal::StartFormat => 31,
+        Refusal::HoursOutOfRange => 32,
+        Refusal::ZoneUnknown => 33,
+        Refusal::WeekdaysInvalid => 34,
+        Refusal::TooManyRoles => 35,
+        Refusal::PanelUnknown => 36,
+        Refusal::PanelNotYours => 37,
+        Refusal::PanelExpired => 38,
+        Refusal::ChannelUnknown => 39,
     }
 }
 
-const REFUSAL_VARIANTS: usize = 31;
+const REFUSAL_VARIANTS: usize = 40;
 
 #[test]
 fn every_refusal_code_is_unique_and_snake_case() {
@@ -350,7 +321,12 @@ fn every_refusal_code_is_unique_and_snake_case() {
         "missing_bot_permissions"
     );
     assert_eq!(Refusal::DateFormat.code(), "date_format");
-    assert_eq!(Refusal::SeasonNotFound(35).code(), "season_not_found");
+    assert_eq!(Refusal::EventNotFound.code(), "event_not_found");
+    assert_eq!(Refusal::NoSessionsLeft.code(), "no_sessions_left");
+    assert_eq!(
+        Refusal::NameTaken("Ranked Sprint".to_owned()).code(),
+        "name_taken"
+    );
 }
 
 #[test]
@@ -397,23 +373,19 @@ fn every_refusal_says_what_to_do_next() {
     );
     assert_eq!(
         Refusal::DatesTooFar.message(),
-        "A season has to sit within six months either side of today. Pick dates closer to today."
+        "An event has to sit within six months either side of today. Pick dates closer to today."
     );
     assert_eq!(
-        Refusal::NoNightsLeft.message(),
-        "That range has no CB nights left. Pick dates with a CB night still ahead."
+        Refusal::NoSessionsLeft.message(),
+        "Those dates hold no session still ahead. Pick dates with a session still ahead."
     );
     assert_eq!(
         Refusal::NothingToChange.message(),
-        "Nothing to change. Give a new_number, first_day, last_day, codename or ping_role, or use clear_codename or clear_ping_role."
+        "Nothing to change. Give a new name, dates, start, hours, time zone or channel, or change the weekdays or pings in the panel."
     );
     assert_eq!(
-        Refusal::CodenameBothWays.message(),
-        "Pass a codename or clear it, not both."
-    );
-    assert_eq!(
-        Refusal::PingBothWays.message(),
-        "Pass a ping role or clear it, not both."
+        Refusal::NameFormat.message(),
+        "An event's name is 1 to 100 characters. Run the command again with a name that long."
     );
     assert_eq!(
         Refusal::RehearsalOnly.message(),
@@ -421,7 +393,7 @@ fn every_refusal_says_what_to_do_next() {
     );
     assert_eq!(
         Refusal::NothingPending.message(),
-        "Nothing is waiting to happen in this rehearsal. /rehearse start sets up another rehearsal season."
+        "Nothing is waiting to happen in this rehearsal. /rehearse start sets up another rehearsal."
     );
     assert_eq!(
         Refusal::RoundAlreadyRunning.message(),
@@ -811,69 +783,128 @@ fn a_full_board_of_long_names_is_split_within_discords_limits() {
     assert_eq!(pages.join("\n"), lines.join("\n"));
 }
 
-const NIGHT_START: i64 = 1_790_206_200;
+const SESSION_START: i64 = 1_790_206_200;
 const ROSTER_CELLS: usize = 20;
+const SEASON_35: &str = "Clan Battles · Season 35: Komodo Dragon";
 
-fn signup_night() -> Night {
-    Night::parse("2026-09-23").unwrap()
+fn hour(value: u8) -> Hour {
+    Hour::new(value).unwrap()
 }
 
-fn tallies() -> [HourTally; 4] {
-    let counts = [(6, 1), (7, 1), (5, 2), (3, 3)];
-    std::array::from_fn(|index| HourTally {
-        hour: Hour::ALL[index],
-        attending: counts[index].0,
-        nope: counts[index].1,
-    })
+fn hours(count: i64) -> Hours {
+    Hours::new(count).unwrap()
+}
+
+fn schedule(weekdays: Weekdays, start: &str, zone: &str, count: i64) -> Schedule {
+    Schedule::new(
+        weekdays,
+        StartTime::parse(start).unwrap(),
+        Zone::find(zone).unwrap(),
+        hours(count),
+    )
+}
+
+fn session_on(schedule: &Schedule, date: &str) -> Session {
+    schedule.session_at(parse_day(date).unwrap()).unwrap()
+}
+
+fn signup_session() -> Session {
+    session_on(&Schedule::clan_battles(), "2026-09-23")
+}
+
+fn denver(count: i64) -> Schedule {
+    schedule(
+        Weekdays::new(&[jiff::civil::Weekday::Wednesday]).unwrap(),
+        "17:00",
+        "America/Denver",
+        count,
+    )
+}
+
+fn tallies_for(session: Session, counts: &[(u32, u32)]) -> Vec<HourTally> {
+    session
+        .hours()
+        .each()
+        .zip(counts.iter().copied().chain(std::iter::repeat((0, 0))))
+        .map(|(hour, (attending, nope))| HourTally {
+            hour,
+            attending,
+            nope,
+        })
+        .collect()
+}
+
+fn tallies() -> Vec<HourTally> {
+    tallies_for(signup_session(), &[(6, 1), (7, 1), (5, 2), (3, 3)])
 }
 
 fn roster() -> Vec<RosterRow> {
     vec![
         RosterRow {
             user: UserId::new(11),
-            cells: [Cell::In, Cell::In, Cell::In, Cell::Out],
+            cells: vec![Cell::In, Cell::In, Cell::In, Cell::Out],
         },
         RosterRow {
             user: UserId::new(22),
-            cells: [Cell::In, Cell::In, Cell::Out, Cell::Out],
+            cells: vec![Cell::In, Cell::In, Cell::Out, Cell::Out],
         },
     ]
 }
 
-fn signup_view(open: bool, rows: Vec<RosterRow>, hidden: usize) -> SignupView {
+fn view_of(name: &str, session: Session, open: bool) -> SignupView {
     SignupView {
-        season: 1,
-        number: 35,
-        codename: Some("Komodo Dragon".to_owned()),
-        night: signup_night(),
+        event: 1,
+        name: name.to_owned(),
+        session,
         open,
         pings: Vec::new(),
-        hours: tallies(),
-        rows,
-        hidden,
+        hours: tallies_for(session, &[]),
+        rows: Vec::new(),
+        hidden: 0,
     }
 }
 
-fn season(number: u32, codename: Option<&str>, first_day: &str, last_day: &str) -> Season {
-    Season {
+fn signup_view(open: bool, rows: Vec<RosterRow>, hidden: usize) -> SignupView {
+    SignupView {
+        hours: tallies(),
+        rows,
+        hidden,
+        ..view_of(SEASON_35, signup_session(), open)
+    }
+}
+
+fn event(name: &str, first_day: &str, last_day: &str, schedule: Schedule) -> Event {
+    Event {
         id: 1,
         guild: GuildId::new(1),
         channel: ChannelId::new(123),
-        number,
-        codename: codename.map(str::to_owned),
-        range: Range::new(parse_day(first_day).unwrap(), parse_day(last_day).unwrap()).unwrap(),
+        name: name.to_owned(),
+        span: Span::new(
+            parse_day(first_day).unwrap(),
+            parse_day(last_day).unwrap(),
+            schedule,
+        )
+        .unwrap(),
         created_by: UserId::new(7),
         created_at_ms: 0,
         ping_roles: Vec::new(),
         ended_at_ms: None,
+        posts_up: false,
     }
 }
 
-fn pinging(season: &Season, role: u64) -> Season {
-    Season {
-        ping_roles: vec![RoleId::new(role)],
-        ..season.clone()
-    }
+fn ranked_sprint() -> Event {
+    event(
+        "Ranked Sprint",
+        "2026-09-16",
+        "2026-11-05",
+        Schedule::clan_battles(),
+    )
+}
+
+fn holds_night_or_season(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("night") || lower.contains("season")
 }
 
 #[test]
@@ -883,7 +914,7 @@ fn roster_rows_are_aligned_and_mention_the_player() {
         description,
         [
             "<t:1790206200:F> · starts <t:1790206200:R>",
-            "Sign-ups close when the night starts.",
+            "Sign-ups close when the session starts.",
             "",
             "**Hour 1** · <t:1790206200:t> – <t:1790209800:t> · 6 in · 1 out",
             "**Hour 2** · <t:1790209800:t> – <t:1790213400:t> · 7 in · 1 out",
@@ -902,7 +933,6 @@ fn roster_rows_are_aligned_and_mention_the_player() {
         .map(|line| line.split('`').nth(1).unwrap().chars().count())
         .collect();
     assert_eq!(spans, [ROSTER_CELLS; 3]);
-    assert_eq!(text::ROSTER_HEADER.chars().count(), ROSTER_CELLS);
 }
 
 #[test]
@@ -932,80 +962,342 @@ fn hidden_players_are_counted() {
 }
 
 #[test]
-fn a_title_without_a_codename_omits_the_colon() {
-    assert_eq!(text::signup_title(35, None), "Clan Battles · Season 35");
-    assert!(!text::signup_title(35, None).contains(':'));
-    assert_eq!(
-        text::signup_title(35, Some("Komodo Dragon")),
-        "Clan Battles · Season 35: Komodo Dragon"
-    );
+fn a_sign_up_post_is_titled_with_its_event_name() {
+    for (name, title) in [
+        ("*Ranked* Sprint", "\\*Ranked\\* Sprint"),
+        (
+            "Clan Battles · Season 35: Komodo Dragon",
+            "Clan Battles · Season 35: Komodo Dragon",
+        ),
+    ] {
+        let view = view_of(name, signup_session(), true);
+        let sent = serde_json::to_value(discord::signup_message(&view, Delivery::New)).unwrap();
+        assert_eq!(sent["embeds"][0]["title"], title, "{sent}");
+        let edited = serde_json::to_value(discord::signup_edit(&view)).unwrap();
+        assert_eq!(edited["embeds"][0]["title"], title, "{edited}");
+    }
 }
 
 #[test]
 fn hour_buttons_and_the_closed_notice_name_the_hour_and_the_time() {
+    assert_eq!(text::hour_button_label(hour(1), true), "Hour 1: Attending");
+    assert_eq!(text::hour_button_label(hour(4), false), "Hour 4: Nope");
     assert_eq!(
-        text::hour_button_label(Hour::ALL[0], true),
-        "Hour 1: Attending"
-    );
-    assert_eq!(text::hour_button_label(Hour::ALL[3], false), "Hour 4: Nope");
-    assert_eq!(
-        text::signups_closed_at(NIGHT_START),
-        "Sign-ups for this night closed at <t:1790206200:t>."
+        text::signups_closed_at(SESSION_START),
+        "Sign-ups for this session closed at <t:1790206200:t>."
     );
 }
 
 #[test]
-fn a_started_season_names_its_nights_and_its_first_post() {
-    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
+fn event_replies_name_the_event() {
     assert_eq!(
-        text::season_started(&komodo, 23, Some(1_790_811_000)),
-        "Season 35: Komodo Dragon will post here. 30 CB nights, 23 still ahead. First sign-up post: <t:1790811000:F> (<t:1790811000:R>)."
+        Refusal::NameTaken("*Ranked* Sprint".to_owned()).message(),
+        "An event named \\*Ranked\\* Sprint is still running here. Pick another name, or end that event first with /event end."
     );
     assert_eq!(
-        text::season_started(&season(35, None, "2026-09-16", "2026-11-05"), 23, None),
-        "Season 35 will post here. 30 CB nights, 23 still ahead. First sign-up post: within a minute."
+        text::event_removed("Ranked Sprint"),
+        "Ranked Sprint was removed. Nothing had been posted."
     );
     assert_eq!(
-        text::season_line(&komodo, 23, Some(1_790_811_000)),
-        "<#123> Season 35: Komodo Dragon, 2026-09-16 to 2026-11-05. 23 nights ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>)."
-    );
-}
-
-#[test]
-fn season_replies_name_the_season_and_its_dates() {
-    assert_eq!(
-        Refusal::SeasonNumberTaken(35).message(),
-        "Season 35 already exists. Use another number, or end that season first with /cb season end."
-    );
-    assert_eq!(
-        Refusal::SeasonOverlaps(season(34, None, "2026-06-10", "2026-08-02")).message(),
-        "That range overlaps Season 34 (2026-06-10 to 2026-08-02). Pick dates outside it, or change that season's dates with /cb season edit."
-    );
-    assert_eq!(
-        text::season_removed(35),
-        "Season 35 was removed. Nothing had been posted."
-    );
-    assert_eq!(
-        text::season_shortened(35, parse_day("2026-10-01").unwrap()),
-        "Season 35 ends after 2026-10-01. No more sign-up posts."
-    );
-    assert_eq!(
-        Refusal::SeasonNotFound(35).message(),
-        "No Season 35 is set up here. /cb season show lists the seasons that are."
+        Refusal::EventNotFound.message(),
+        "No running event here matches that. Pick one of the events suggested as you type; /event list shows the events that are set up."
     );
 }
 
 #[test]
-fn one_night_reads_as_singular() {
-    let single = season(35, None, "2026-09-16", "2026-09-16");
+fn the_description_lists_each_hour_of_the_event() {
+    let session = session_on(
+        &schedule(Weekdays::EVERY_DAY, "23:30", "UTC", 2),
+        "2026-09-23",
+    );
+    let description = text::signup_description(&view_of("Ranked Sprint", session, true));
+    let hour_lines: Vec<&str> = description
+        .lines()
+        .filter(|line| line.starts_with("**Hour "))
+        .collect();
     assert_eq!(
-        text::season_started(&single, 1, None),
-        "Season 35 will post here. 1 CB night, 1 still ahead. First sign-up post: within a minute."
+        hour_lines,
+        [
+            "**Hour 1** · <t:1790206200:t> – <t:1790209800:t> · 0 in · 0 out",
+            "**Hour 2** · <t:1790209800:t> – <t:1790213400:t> · 0 in · 0 out",
+        ]
+    );
+}
+
+#[test]
+fn a_sign_up_post_writes_times_as_timestamps() {
+    let session = session_on(&denver(4), "2026-10-14");
+    let description = text::signup_description(&view_of("Ranked Sprint", session, true));
+    for wanted in [
+        "<t:1792018800:F>",
+        "<t:1792018800:R>",
+        "<t:1792018800:t> – <t:1792022400:t>",
+        "<t:1792022400:t> – <t:1792026000:t>",
+        "<t:1792026000:t> – <t:1792029600:t>",
+        "<t:1792029600:t> – <t:1792033200:t>",
+    ] {
+        assert!(description.contains(wanted), "{description}");
+    }
+    assert!(!description.contains("17:00"), "{description}");
+    assert!(!description.contains("23:00"), "{description}");
+}
+
+fn long_session(count: i64) -> Session {
+    session_on(
+        &schedule(Weekdays::EVERY_DAY, "23:30", "UTC", count),
+        "2026-10-14",
+    )
+}
+
+fn cells_for(count: u8, attending: &[u8]) -> Vec<Cell> {
+    (1..=count)
+        .map(|number| {
+            if attending.contains(&number) {
+                Cell::In
+            } else {
+                Cell::Out
+            }
+        })
+        .collect()
+}
+
+fn member(user: u64, count: u8, attending: &[u8]) -> RosterRow {
+    RosterRow {
+        user: UserId::new(user),
+        cells: cells_for(count, attending),
+    }
+}
+
+#[test]
+fn a_24_hour_event_lists_24_hour_lines() {
+    let description = text::signup_description(&view_of("Ranked Sprint", long_session(24), true));
+    let hour_lines: Vec<&str> = description
+        .lines()
+        .filter(|line| line.starts_with("**Hour "))
+        .collect();
+    assert_eq!(hour_lines.len(), 24);
+    for (number, line) in (1..=24).zip(&hour_lines) {
+        assert!(line.starts_with(&format!("**Hour {number}** · ")), "{line}");
+    }
+}
+
+#[test]
+fn no_choose_hours_text_says_night_or_season() {
+    let view = view_of("Ranked Sprint", long_session(6), true);
+    for text in [
+        text::hours_menu_text(&view),
+        text::hours_saved(&[hour(2), hour(3), hour(5)]),
+        text::hours_saved(&[]),
+        text::HOURS_REFUSED.to_owned(),
+    ] {
+        assert!(!holds_night_or_season(&text), "{text}");
+    }
+}
+
+#[test]
+fn the_choose_hours_replies_read_as_written() {
+    assert_eq!(text::CHOOSE_HOURS_LABEL, "Choose hours");
+    assert_eq!(
+        text::hours_saved(&[hour(2), hour(3), hour(5)]),
+        "Saved. You attend hours 2–3, 5 of this session."
     );
     assert_eq!(
-        text::season_line(&single, 1, None),
-        "<#123> Season 35, 2026-09-16 to 2026-09-16. 1 night ahead. Next sign-up post: within a minute."
+        text::hours_saved(&[]),
+        "Saved. You attend no hour of this session."
     );
+    assert_eq!(
+        text::HOURS_REFUSED,
+        "Those hours are not part of this session. Nothing was saved."
+    );
+}
+
+#[test]
+fn a_long_event_lists_hours_as_ranges() {
+    let view = SignupView {
+        rows: vec![
+            member(1, 12, &[]),
+            member(2, 12, &[4]),
+            member(3, 12, &[1, 2, 3]),
+            member(4, 12, &[1, 2, 3, 6, 7, 8, 12]),
+            member(5, 12, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+        ],
+        ..view_of("Ranked Sprint", long_session(12), true)
+    };
+    let description = text::signup_description(&view);
+    let roster: Vec<&str> = description
+        .lines()
+        .filter(|line| line.starts_with('`'))
+        .collect();
+    assert_eq!(
+        roster,
+        [
+            "`out` <@1>",
+            "`4` <@2>",
+            "`1–3` <@3>",
+            "`1–3, 6–8, 12` <@4>",
+            "`1–12` <@5>",
+        ]
+    );
+}
+
+#[test]
+fn a_short_event_keeps_its_grid() {
+    let view = SignupView {
+        rows: vec![member(11, 2, &[1])],
+        ..view_of("Ranked Sprint", long_session(2), true)
+    };
+    let description = text::signup_description(&view);
+    let roster: Vec<&str> = description
+        .lines()
+        .filter(|line| line.starts_with('`'))
+        .collect();
+    assert_eq!(roster, ["`1    2    `", "`in   out  ` <@11>"]);
+}
+
+#[test]
+fn a_description_that_fits_lists_its_members() {
+    let view = SignupView {
+        rows: (1..=10)
+            .map(|user| member(user, 24, &[1, 2, 3, 6, 7, 8, 12]))
+            .collect(),
+        ..view_of("Ranked Sprint", long_session(24), true)
+    };
+    let description = text::signup_description(&view);
+    assert_eq!(
+        description
+            .lines()
+            .filter(|line| line.starts_with('`'))
+            .count(),
+        10
+    );
+    assert!(!description.contains(" more."), "{description}");
+    assert!(description.chars().count() <= 4_096);
+}
+
+#[test]
+fn a_long_roster_gives_way_to_fit() {
+    let odd: Vec<u8> = (1..=23).step_by(2).collect();
+    let session = long_session(24);
+    let view = SignupView {
+        hours: tallies_for(
+            session,
+            &(1..=24)
+                .map(|number| if number % 2 == 1 { (60, 0) } else { (0, 60) })
+                .collect::<Vec<(u32, u32)>>(),
+        ),
+        rows: (0..60)
+            .map(|index| member(100_000_000_000_000_000 + index, 24, &odd))
+            .collect(),
+        hidden: 100,
+        ..view_of("Ranked Sprint", session, true)
+    };
+    let description = text::signup_description(&view);
+    assert!(
+        description.chars().count() <= 4_096,
+        "{} characters",
+        description.chars().count()
+    );
+    let lines: Vec<&str> = description.lines().collect();
+    assert_eq!(lines[0], "<t:1792020600:F> · starts <t:1792020600:R>");
+    assert_eq!(lines[1], "Sign-ups close when the session starts.");
+    for number in 1..=24_i64 {
+        let start = 1_792_020_600 + (number - 1) * 3_600;
+        let counts = if number % 2 == 1 {
+            "60 in · 0 out"
+        } else {
+            "0 in · 60 out"
+        };
+        let wanted = format!(
+            "**Hour {number}** · <t:{start}:t> – <t:{}:t> · {counts}",
+            start + 3_600
+        );
+        assert!(lines.contains(&wanted.as_str()), "{wanted}");
+    }
+    let shown: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with('`'))
+        .collect();
+    assert!(!shown.is_empty() && shown.len() < 60, "{}", shown.len());
+    for (index, line) in shown.iter().enumerate() {
+        assert_eq!(
+            *line,
+            format!(
+                "`1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23` <@{}>",
+                100_000_000_000_000_000 + index
+            )
+        );
+    }
+    assert_eq!(
+        lines.last().copied(),
+        Some(format!("and {} more.", 100 + 60 - shown.len()).as_str())
+    );
+}
+
+#[test]
+fn the_rehearsal_running_refusal_names_reset() {
+    let message = Refusal::RehearsalRunning.message();
+    assert!(message.contains("/rehearse reset"), "{message}");
+    assert!(!holds_night_or_season(&message), "{message}");
+}
+
+#[test]
+fn no_event_text_says_night_or_season() {
+    let event = ranked_sprint();
+    let session = session_on(&Schedule::clan_battles(), "2026-09-23");
+    let rehearsal = event_every_day("Ranked Sprint", "2026-09-19", "2026-09-21");
+    let mut texts = vec![
+        text::signup_description(&view_of("Ranked Sprint", session, true)),
+        text::signup_description(&view_of("Ranked Sprint", session, false)),
+        text::signups_closed_at(SESSION_START),
+        text::SESSION_GONE.to_owned(),
+        text::rehearsal_started(&rehearsal, 3, Some(1_790_811_000)),
+        text::rehearsal_started(&rehearsal, 0, None),
+        text::stepped(
+            1_790_811_000,
+            &TickReport {
+                posted: tags(1),
+                adopted: tags(1),
+                closed: tags(1),
+                removed: tags(1),
+                failures: 1,
+            },
+        ),
+        text::stepped(1_790_811_000, &TickReport::default()),
+        text::reset_done(&PurgeReport {
+            events: 1,
+            messages: 2,
+            answers: 8,
+            failures: 0,
+        }),
+        text::reset_done(&PurgeReport::default()),
+        text::reset_blocked(&PurgeReport {
+            events: 0,
+            messages: 1,
+            answers: 0,
+            failures: 1,
+        }),
+        text::event_ended("Ranked Sprint", 0),
+        text::event_ended("Ranked Sprint", 2),
+        text::event_removed("Ranked Sprint"),
+        text::reposted(&event, session, false, &[]),
+        text::reposted(&event, session, true, &[Ping::Role(RoleId::new(4))]),
+        text::CLEAR_FAILED_END.to_owned(),
+        text::CLEAR_FAILED_MOVE.to_owned(),
+    ];
+    texts.extend(
+        every_refusal()
+            .iter()
+            .chain(&[Refusal::NothingToRepost {
+                name: "Ranked Sprint".to_owned(),
+                next_post_at: None,
+                sessions_left: 0,
+            }])
+            .map(Refusal::message),
+    );
+    for text in texts {
+        assert!(!holds_night_or_season(&text), "{text}");
+    }
 }
 
 #[test]
@@ -1013,7 +1305,7 @@ fn a_full_roster_fits_discords_description_limit() {
     let crowd: Vec<RosterRow> = (0..barnacle_bot::attendance::ROSTER_LIMIT)
         .map(|number| RosterRow {
             user: UserId::new(u64::MAX - u64::try_from(number).unwrap()),
-            cells: [Cell::Out, Cell::In, Cell::Out, Cell::Out],
+            cells: vec![Cell::Out, Cell::In, Cell::Out, Cell::Out],
         })
         .collect();
     let description = text::signup_description(&signup_view(true, crowd, 9_999));
@@ -1026,98 +1318,28 @@ fn a_full_roster_fits_discords_description_limit() {
 }
 
 #[test]
-fn a_long_season_list_is_capped_and_counted() {
-    let short = vec!["one".to_owned(), "two".to_owned()];
-    assert_eq!(text::season_list(&short), "one\ntwo");
-    let long: Vec<String> = (0..40)
-        .map(|number| format!("<#123> Season {number}, 2026-09-16 to 2026-11-05. 23 nights ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>)."))
-        .collect();
-    let rendered = text::season_list(&long);
-    assert!(rendered.encode_utf16().count() <= text::MESSAGE_CONTENT_LIMIT);
-    assert!(rendered.lines().last().unwrap().starts_with("and "));
-    assert!(rendered.lines().last().unwrap().ends_with(" more."));
-}
-
-#[test]
-fn an_edited_season_reports_what_is_left_and_what_was_cleared() {
-    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-10-21");
+fn an_ended_event_says_the_answers_are_kept() {
     assert_eq!(
-        text::season_edited(&komodo, 18, Some(1_790_811_000), 0),
-        "Season 35: Komodo Dragon updated. 21 CB nights, 18 still ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>). Manage it with number 35."
+        text::event_ended("Ranked Sprint", 2),
+        "Ranked Sprint has ended. 2 sign-up posts were cleared, and the answers are kept."
     );
     assert_eq!(
-        text::season_edited(&komodo, 18, Some(1_790_811_000), 2),
-        "Season 35: Komodo Dragon updated. 21 CB nights, 18 still ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>). 2 sign-up posts outside the new dates were cleared. Manage it with number 35."
+        text::event_ended("Ranked Sprint", 1),
+        "Ranked Sprint has ended. 1 sign-up post was cleared, and the answers are kept."
     );
     assert_eq!(
-        text::season_edited(&komodo, 18, None, 1),
-        "Season 35: Komodo Dragon updated. 21 CB nights, 18 still ahead. Next sign-up post: within a minute. 1 sign-up post outside the new dates was cleared. Manage it with number 35."
-    );
-    let single = season(35, None, "2026-09-16", "2026-09-16");
-    assert_eq!(
-        text::season_edited(&single, 1, None, 0),
-        "Season 35 updated. 1 CB night, 1 still ahead. Next sign-up post: within a minute. Manage it with number 35."
-    );
-    assert_eq!(
-        text::season_edited(&single, 0, None, 1),
-        "Season 35 updated. 1 CB night, 0 still ahead. Nothing further will post. 1 sign-up post outside the new dates was cleared. Manage it with number 35."
+        text::event_ended("*Ranked* Sprint", 0),
+        "\\*Ranked\\* Sprint has ended. The answers are kept."
     );
 }
 
 #[test]
-fn a_moved_season_names_the_new_channel_and_the_next_post() {
-    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
-    assert_eq!(
-        text::season_moved(&komodo, 4, 1, Some(1_790_811_000)),
-        "Season 35: Komodo Dragon now posts in this channel. 1 sign-up post was cleared from the old channel. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>)."
-    );
-    assert_eq!(
-        text::season_moved(&komodo, 4, 0, Some(1_790_811_000)),
-        "Season 35: Komodo Dragon now posts in this channel. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>)."
-    );
-    assert_eq!(
-        text::season_moved(&season(35, None, "2026-09-16", "2026-11-05"), 2, 2, None),
-        "Season 35 now posts in this channel. 2 sign-up posts were cleared from the old channel. Next sign-up post: within a minute."
-    );
-    assert_eq!(
-        text::season_moved(&komodo, 0, 1, None),
-        "Season 35: Komodo Dragon now posts in this channel. 1 sign-up post was cleared from the old channel. Nothing further will post."
-    );
-    assert_eq!(
-        Refusal::SeasonAlreadyHere(35).message(),
-        "Season 35 already posts in this channel. To move it, run this in the channel it should post in."
-    );
-}
-
-#[test]
-fn an_ended_season_says_the_answers_are_kept() {
-    assert_eq!(
-        text::season_ended(35, 2),
-        "Season 35 has ended. 2 sign-up posts were cleared, and the answers are kept."
-    );
-    assert_eq!(
-        text::season_ended(35, 1),
-        "Season 35 has ended. 1 sign-up post was cleared, and the answers are kept."
-    );
-    assert_eq!(
-        text::season_ended(35, 0),
-        "Season 35 has ended. The answers are kept."
-    );
-}
-
-#[test]
-fn a_season_line_names_its_ping_role() {
+fn a_pings_line_names_its_ping_role() {
     assert_eq!(
         text::pings_line(&[Ping::Role(RoleId::new(123))]),
         " Pings <@&123>."
     );
     assert_eq!(text::pings_line(&[]), "");
-    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
-    assert_eq!(
-        text::season_line(&pinging(&komodo, 456), 23, Some(1_790_811_000)),
-        "<#123> Season 35: Komodo Dragon, 2026-09-16 to 2026-11-05. 23 nights ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>). Pings <@&456>."
-    );
-    assert!(!text::season_line(&komodo, 23, Some(1_790_811_000)).contains("Pings"));
 }
 
 #[test]
@@ -1177,22 +1399,18 @@ fn a_channel_blocked_ping_refusal_names_the_override() {
 }
 
 #[test]
-fn a_season_line_names_everyone_as_plain_text() {
-    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
-    let line = text::season_line(&pinging(&komodo, 1), 23, Some(1_790_811_000));
-    assert!(line.ends_with(" Pings @everyone."), "{line}");
+fn a_pings_line_names_everyone_as_plain_text_and_lists_every_ping() {
+    let line = text::pings_line(&[Ping::Everyone]);
+    assert_eq!(line, " Pings @everyone.");
     assert!(!line.contains("<@&"), "{line}");
-}
-
-#[test]
-fn a_season_line_lists_every_ping() {
-    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
-    let three = Season {
-        ping_roles: vec![RoleId::new(4), RoleId::new(5), RoleId::new(6)],
-        ..komodo
-    };
-    let line = text::season_line(&three, 23, Some(1_790_811_000));
-    assert!(line.ends_with(" Pings <@&4>, <@&5> and <@&6>."), "{line}");
+    assert_eq!(
+        text::pings_line(&[
+            Ping::Role(RoleId::new(4)),
+            Ping::Role(RoleId::new(5)),
+            Ping::Role(RoleId::new(6))
+        ]),
+        " Pings <@&4>, <@&5> and <@&6>."
+    );
 }
 
 #[test]
@@ -1230,34 +1448,34 @@ fn a_mixed_everyone_refusal_says_to_pick_one_or_the_other() {
 
 #[test]
 fn a_repost_reply_says_what_was_done() {
-    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-11-05");
-    let night = signup_night();
-    let quiet = text::reposted(&komodo, night, false, &[]);
-    for wanted in [night.label().as_str(), "<#123>", "Season 35"] {
+    let sprint = ranked_sprint();
+    let session = signup_session();
+    let quiet = text::reposted(&sprint, session, false, &[]);
+    for wanted in ["2026-09-23", "<#123>", "Ranked Sprint"] {
         assert!(quiet.contains(wanted), "{quiet}");
     }
     assert!(!quiet.contains("<@&"), "{quiet}");
     assert!(!quiet.contains("ecovered"), "{quiet}");
     let pinged = text::reposted(
-        &komodo,
-        night,
+        &sprint,
+        session,
         false,
         &[Ping::Role(RoleId::new(4)), Ping::Role(RoleId::new(5))],
     );
     assert!(pinged.contains("<@&4>"), "{pinged}");
     assert!(pinged.contains("<@&5>"), "{pinged}");
-    let recovered = text::reposted(&komodo, night, true, &[]);
+    let recovered = text::reposted(&sprint, session, true, &[]);
     assert!(recovered.contains("Recovered"), "{recovered}");
     assert!(recovered.contains("<#123>"), "{recovered}");
-    assert!(recovered.contains(night.label().as_str()), "{recovered}");
+    assert!(recovered.contains("2026-09-23"), "{recovered}");
 }
 
 #[test]
 fn repost_refusals_name_their_reason() {
     let at = Refusal::NothingToRepost {
-        number: 35,
+        name: "Ranked Sprint".to_owned(),
         next_post_at: Some(1_790_811_000),
-        nights_left: 3,
+        sessions_left: 3,
     };
     assert_eq!(at.code(), "nothing_to_repost");
     assert!(
@@ -1266,16 +1484,16 @@ fn repost_refusals_name_their_reason() {
         at.message()
     );
     let soon = Refusal::NothingToRepost {
-        number: 35,
+        name: "Ranked Sprint".to_owned(),
         next_post_at: None,
-        nights_left: 3,
+        sessions_left: 3,
     }
     .message();
     assert!(soon.contains("within a minute"), "{soon}");
     let over = Refusal::NothingToRepost {
-        number: 35,
+        name: "Ranked Sprint".to_owned(),
         next_post_at: None,
-        nights_left: 0,
+        sessions_left: 0,
     }
     .message();
     assert!(over.contains("no sign-up posts left"), "{over}");
@@ -1306,52 +1524,57 @@ fn repost_refusals_name_their_reason() {
 fn tags(count: usize) -> Vec<PostTag> {
     (0..count)
         .map(|position| PostTag {
-            season: 1,
-            night: Night::parse(["2026-09-23", "2026-09-24", "2026-09-26"][position]).unwrap(),
+            event: 1,
+            session: session_on(
+                &Schedule::clan_battles(),
+                ["2026-09-23", "2026-09-24", "2026-09-26"][position],
+            ),
         })
         .collect()
 }
 
-fn rehearsal(number: u32, codename: Option<&str>) -> Season {
-    Season {
-        range: Range::every_day(
-            parse_day("2026-09-19").unwrap(),
-            parse_day("2026-09-21").unwrap(),
-        )
-        .unwrap(),
-        ..season(number, codename, "2026-09-19", "2026-09-21")
-    }
+fn event_every_day(name: &str, first_day: &str, last_day: &str) -> Event {
+    event(
+        name,
+        first_day,
+        last_day,
+        schedule(Weekdays::EVERY_DAY, "23:30", "UTC", 4),
+    )
 }
 
 #[test]
-fn a_rehearsal_start_names_the_season_and_the_next_post() {
+fn a_rehearsal_start_names_the_event_and_the_next_post() {
     assert_eq!(
         text::rehearsal_started(
-            &rehearsal(35, Some("Komodo Dragon")),
+            &event_every_day("Drill", "2026-09-19", "2026-09-21"),
             3,
             Some(1_790_811_000)
         ),
-        "Rehearsing season 35: Komodo Dragon. 3 CB nights, 3 still ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>). Manage it with number 35."
+        "Rehearsing Drill. 3 sessions, 3 still ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>)."
     );
     assert_eq!(
-        text::rehearsal_started(&rehearsal(99, None), 3, None),
-        "Rehearsing season 99. 3 CB nights, 3 still ahead. Next sign-up post: within a minute. Manage it with number 99."
-    );
-    let single = Season {
-        range: Range::every_day(
-            parse_day("2026-09-19").unwrap(),
-            parse_day("2026-09-19").unwrap(),
-        )
-        .unwrap(),
-        ..rehearsal(99, None)
-    };
-    assert_eq!(
-        text::rehearsal_started(&single, 1, Some(1_790_811_000)),
-        "Rehearsing season 99. 1 CB night, 1 still ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>). Manage it with number 99."
+        text::rehearsal_started(
+            &event_every_day("Drill", "2026-09-19", "2026-09-21"),
+            3,
+            None
+        ),
+        "Rehearsing Drill. 3 sessions, 3 still ahead. Next sign-up post: within a minute."
     );
     assert_eq!(
-        text::rehearsal_started(&rehearsal(35, Some("*Komodo*")), 3, None),
-        "Rehearsing season 35: \\*Komodo\\*. 3 CB nights, 3 still ahead. Next sign-up post: within a minute. Manage it with number 35."
+        text::rehearsal_started(
+            &event_every_day("Drill", "2026-09-19", "2026-09-19"),
+            1,
+            Some(1_790_811_000)
+        ),
+        "Rehearsing Drill. 1 session, 1 still ahead. Next sign-up post: <t:1790811000:F> (<t:1790811000:R>)."
+    );
+    assert_eq!(
+        text::rehearsal_started(
+            &event_every_day("*Drill*", "2026-09-19", "2026-09-21"),
+            3,
+            None
+        ),
+        "Rehearsing \\*Drill\\*. 3 sessions, 3 still ahead. Next sign-up post: within a minute."
     );
 }
 
@@ -1412,39 +1635,39 @@ fn a_step_reports_what_the_beat_did() {
 fn a_reset_reports_what_it_cleared() {
     assert_eq!(
         text::reset_done(&PurgeReport {
-            seasons: 1,
+            events: 1,
             messages: 2,
             answers: 8,
             failures: 0
         }),
-        "Cleared 1 season, 2 sign-up posts and 8 answers."
+        "Cleared 1 event, 2 sign-up posts and 8 answers."
     );
     assert_eq!(
         text::reset_done(&PurgeReport {
-            seasons: 1,
+            events: 1,
             messages: 1,
             answers: 0,
             failures: 0
         }),
-        "Cleared 1 season and 1 sign-up post."
+        "Cleared 1 event and 1 sign-up post."
     );
     assert_eq!(
         text::reset_done(&PurgeReport {
-            seasons: 2,
+            events: 2,
             messages: 0,
             answers: 1,
             failures: 0
         }),
-        "Cleared 2 seasons and 1 answer."
+        "Cleared 2 events and 1 answer."
     );
     assert_eq!(
         text::reset_done(&PurgeReport {
-            seasons: 1,
+            events: 1,
             messages: 0,
             answers: 0,
             failures: 0
         }),
-        "Cleared 1 season."
+        "Cleared 1 event."
     );
     assert_eq!(
         text::reset_done(&PurgeReport::default()),
@@ -1456,35 +1679,31 @@ fn a_reset_reports_what_it_cleared() {
 fn a_blocked_reset_says_what_it_had_already_cleared() {
     assert_eq!(
         text::reset_blocked(&PurgeReport {
-            seasons: 0,
+            events: 0,
             messages: 0,
             answers: 0,
             failures: 1
         }),
-        "Some sign-up posts could not be removed, so no season or answer was deleted. Check that the bot can manage messages here, then run this again."
+        "Some sign-up posts could not be removed, so no event or answer was deleted. Check that the bot can manage messages here, then run this again."
     );
     assert_eq!(
         text::reset_blocked(&PurgeReport {
-            seasons: 0,
+            events: 0,
             messages: 1,
             answers: 0,
             failures: 1
         }),
-        "Some sign-up posts could not be removed, so no season or answer was deleted. 1 sign-up post was already cleared. Check that the bot can manage messages here, then run this again."
+        "Some sign-up posts could not be removed, so no event or answer was deleted. 1 sign-up post was already cleared. Check that the bot can manage messages here, then run this again."
     );
     assert_eq!(
         text::reset_blocked(&PurgeReport {
-            seasons: 0,
+            events: 0,
             messages: 8,
             answers: 0,
             failures: 2
         }),
-        "Some sign-up posts could not be removed, so no season or answer was deleted. 8 sign-up posts were already cleared. Check that the bot can manage messages here, then run this again."
+        "Some sign-up posts could not be removed, so no event or answer was deleted. 8 sign-up posts were already cleared. Check that the bot can manage messages here, then run this again."
     );
-}
-
-fn posts(touched: usize, failures: usize) -> PostsReport {
-    PostsReport { touched, failures }
 }
 
 #[test]
@@ -1495,7 +1714,7 @@ fn a_bulk_step_with_failures_points_to_the_log() {
     );
     assert_eq!(
         text::failures_noted(text::CLEAR_FAILED_END, 1),
-        "Some sign-up posts could not be removed, so the season is still running. Check that the bot can manage messages in its channel, then run this again. Barnacle's log records the reason for each."
+        "Some sign-up posts could not be removed, so the event is still running. Check that the bot can manage messages in its channel, then run this again. Barnacle's log records the reason for each."
     );
     let stepped = text::stepped(
         1_790_811_000,
@@ -1510,7 +1729,7 @@ fn a_bulk_step_with_failures_points_to_the_log() {
         "Moved the rehearsal clock to <t:1790811000:F>. 1 sign-up post went up. 2 steps failed. Barnacle's log records the reason for each."
     );
     let blocked = text::reset_blocked(&PurgeReport {
-        seasons: 0,
+        events: 0,
         messages: 8,
         answers: 0,
         failures: 2,
@@ -1520,24 +1739,186 @@ fn a_bulk_step_with_failures_points_to_the_log() {
     assert_eq!(text::failures_noted(&stepped, 0), stepped);
 }
 
+const BEFORE_THE_SPRINT: i64 = 1_791_900_000;
+const AFTER_THE_SPRINT: i64 = 1_792_300_000;
+
+fn listed_sprint() -> Event {
+    Event {
+        channel: ChannelId::new(10),
+        ..event(
+            "Ranked Sprint",
+            "2026-10-14",
+            "2026-10-17",
+            schedule(
+                Weekdays::new(&[
+                    jiff::civil::Weekday::Wednesday,
+                    jiff::civil::Weekday::Saturday,
+                ])
+                .unwrap(),
+                "17:00",
+                "America/Denver",
+                4,
+            ),
+        )
+    }
+}
+
 #[test]
-fn a_season_edit_that_could_not_reach_every_post_says_so_and_keeps_its_counts() {
-    let komodo = season(35, Some("Komodo Dragon"), "2026-09-16", "2026-10-21");
-    let edited = text::season_edited(&komodo, 18, None, 2);
+fn an_event_line_shows_its_schedule() {
+    let line = text::event_line(&listed_sprint(), BEFORE_THE_SPRINT);
     assert_eq!(
-        text::season_edit_reached(&edited, &posts(2, 0), &posts(1, 0)),
-        edited
+        line,
+        "<#10> **Ranked Sprint**, 2026-10-14 to 2026-10-17. Wednesday and Saturday at <t:1792018800:t>, 4 hours, America/Denver. 2 sessions ahead. Next sign-up post: <t:1791932400:F> (<t:1791932400:R>)."
     );
+    for wanted in [
+        "<#10>",
+        "Ranked Sprint",
+        "2026-10-14 to 2026-10-17",
+        "Wednesday and Saturday",
+        "<t:1792018800:t>",
+        "4 hours",
+        "America/Denver",
+        "2 sessions ahead",
+        "<t:1791932400:F>",
+    ] {
+        assert!(line.contains(wanted), "{wanted} in {line}");
+    }
+}
+
+#[test]
+fn an_event_line_with_nothing_ahead_says_nothing_further_posts() {
     assert_eq!(
-        text::season_edit_reached(&edited, &posts(2, 0), &posts(0, 1)),
-        "Season 35: Komodo Dragon updated. 21 CB nights, 18 still ahead. Next sign-up post: within a minute. 2 sign-up posts outside the new dates were cleared. Manage it with number 35. Its sign-up post could not be updated; run this again once Barnacle can edit it. Barnacle's log records the reason for each."
+        text::event_line(&listed_sprint(), AFTER_THE_SPRINT),
+        "<#10> **Ranked Sprint**, 2026-10-14 to 2026-10-17. Wednesday and Saturday at <t:1792278000:t>, 4 hours, America/Denver. 0 sessions ahead. Nothing further will post."
     );
+}
+
+#[test]
+fn an_event_line_names_every_day_and_singulars() {
+    let single = Event {
+        span: Span::new(
+            parse_day("2026-10-14").unwrap(),
+            parse_day("2026-10-14").unwrap(),
+            schedule(Weekdays::EVERY_DAY, "23:30", "UTC", 1),
+        )
+        .unwrap(),
+        ..listed_sprint()
+    };
     assert_eq!(
-        text::season_edit_reached(&edited, &posts(2, 1), &posts(1, 0)),
-        "Season 35: Komodo Dragon updated. 21 CB nights, 18 still ahead. Next sign-up post: within a minute. 2 sign-up posts outside the new dates were cleared. Manage it with number 35. Some sign-up posts outside the new dates could not be cleared; run this again to retry. Barnacle's log records the reason for each."
+        text::event_line(&single, BEFORE_THE_SPRINT),
+        "<#10> **Ranked Sprint**, 2026-10-14 to 2026-10-14. every day at <t:1792020600:t>, 1 hour, UTC. 1 session ahead. Next sign-up post: <t:1791934200:F> (<t:1791934200:R>)."
     );
+    let four = Event {
+        span: Span::new(
+            parse_day("2026-10-14").unwrap(),
+            parse_day("2026-10-18").unwrap(),
+            Schedule::clan_battles(),
+        )
+        .unwrap(),
+        ..listed_sprint()
+    };
     assert!(
-        text::season_edit_reached(&edited, &posts(2, 1), &posts(0, 1))
-            .ends_with("could not be cleared; run this again to retry. Its sign-up post could not be updated; run this again once Barnacle can edit it. Barnacle's log records the reason for each.")
+        text::event_line(&four, BEFORE_THE_SPRINT)
+            .contains(". Wednesday, Thursday, Saturday and Sunday at <t:1792020600:t>, 4 hours, UTC. 4 sessions ahead.")
     );
+}
+
+#[test]
+fn an_event_line_writes_times_as_timestamps() {
+    let line = text::event_line(&listed_sprint(), BEFORE_THE_SPRINT);
+    assert!(line.contains("<t:1792018800:t>"), "{line}");
+    assert!(!line.contains("17:00"), "{line}");
+    assert!(!line.contains("23:00"), "{line}");
+}
+
+#[test]
+fn an_empty_list_says_no_event_is_set_up() {
+    let none = serde_json::to_value(
+        discord::event_list_reply(&[], 1_791_900_000)
+            .to_slash_initial_response(serenity::CreateInteractionResponseMessage::new()),
+    )
+    .unwrap();
+    assert_eq!(none["flags"], 64);
+    assert_eq!(
+        none["allowed_mentions"],
+        serde_json::to_value(serenity::CreateAllowedMentions::new()).unwrap()
+    );
+    assert_eq!(none["content"], "No event is set up here.");
+    let one = serde_json::to_value(
+        discord::event_list_reply(&[listed_sprint()], 1_791_900_000)
+            .to_slash_initial_response(serenity::CreateInteractionResponseMessage::new()),
+    )
+    .unwrap();
+    assert_eq!(one["flags"], 64);
+    assert_eq!(
+        one["allowed_mentions"],
+        serde_json::to_value(serenity::CreateAllowedMentions::new()).unwrap()
+    );
+    assert_eq!(
+        one["content"],
+        "<#10> **Ranked Sprint**, 2026-10-14 to 2026-10-17. Wednesday and Saturday at <t:1792018800:t>, 4 hours, America/Denver. 2 sessions ahead. Next sign-up post: <t:1791932400:F> (<t:1791932400:R>)."
+    );
+}
+
+#[test]
+fn the_list_text_of_no_line_says_no_event_is_set_up() {
+    assert_eq!(
+        text::event_list(&[] as &[String]),
+        "No event is set up here."
+    );
+}
+
+#[test]
+fn no_event_list_text_says_night_or_season() {
+    let ahead = text::event_line(&listed_sprint(), BEFORE_THE_SPRINT);
+    let none_ahead = text::event_line(&listed_sprint(), AFTER_THE_SPRINT);
+    let list = text::event_list(std::slice::from_ref(&ahead));
+    for written in [
+        ahead.as_str(),
+        none_ahead.as_str(),
+        list.as_str(),
+        text::NO_EVENT_HERE,
+    ] {
+        assert!(!holds_night_or_season(written), "{written}");
+    }
+}
+
+#[test]
+fn a_long_event_list_is_capped_and_counted() {
+    let short = vec!["one".to_owned(), "two".to_owned()];
+    assert_eq!(text::event_list(&short), "one\ntwo");
+    let long: Vec<String> = (0..40)
+        .map(|number| format!("<#10> **Ranked Sprint {number}**, 2026-10-14 to 2026-10-17. Wednesday and Saturday at <t:1792018800:t>, 4 hours, America/Denver. 2 sessions ahead. Next sign-up post: <t:1791932400:F> (<t:1791932400:R>)."))
+        .collect();
+    let rendered = text::event_list(&long);
+    assert!(rendered.encode_utf16().count() <= text::MESSAGE_CONTENT_LIMIT);
+    assert!(rendered.lines().last().unwrap().starts_with("and "));
+    assert!(rendered.lines().last().unwrap().ends_with(" more."));
+}
+
+#[test]
+fn an_event_line_names_its_pings() {
+    let one = Event {
+        ping_roles: vec![RoleId::new(456)],
+        ..listed_sprint()
+    };
+    assert!(
+        text::event_line(&one, BEFORE_THE_SPRINT).ends_with(" Pings <@&456>."),
+        "{}",
+        text::event_line(&one, BEFORE_THE_SPRINT)
+    );
+    let everyone = Event {
+        ping_roles: vec![RoleId::new(1)],
+        ..listed_sprint()
+    };
+    let line = text::event_line(&everyone, BEFORE_THE_SPRINT);
+    assert!(line.ends_with(" Pings @everyone."), "{line}");
+    assert!(!line.contains("<@&"), "{line}");
+    let three = Event {
+        ping_roles: vec![RoleId::new(4), RoleId::new(5), RoleId::new(6)],
+        ..listed_sprint()
+    };
+    let line = text::event_line(&three, BEFORE_THE_SPRINT);
+    assert!(line.ends_with(" Pings <@&4>, <@&5> and <@&6>."), "{line}");
+    assert!(!text::event_line(&listed_sprint(), BEFORE_THE_SPRINT).contains("Pings"));
 }

@@ -3,6 +3,7 @@ mod board;
 mod commands;
 mod events;
 mod herald;
+mod panel;
 mod rooms;
 
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use tokio::sync::Semaphore;
 use crate::attendance::Signups;
 use crate::attendance_store::Attendance;
 use crate::config::CommandScope;
+use crate::event_draft::Drafts;
 use crate::failure;
 use crate::failure::Failure;
 use crate::failure::Scope;
@@ -42,6 +44,13 @@ pub use announcer::ending_message;
 pub use announcer::series_edit;
 pub use board::DiscordBoard;
 pub use board::allowed_mentions;
+pub use board::hours_menu_reply;
+pub use board::signup_edit;
+pub use board::signup_message;
+pub use board::signup_rows;
+pub use commands::cached_event_channel;
+pub use commands::event_list_reply;
+pub use commands::private_reply;
 pub use herald::DiscordHerald;
 pub use herald::announcement_message;
 pub use rooms::DiscordRooms;
@@ -65,6 +74,7 @@ pub struct Data {
     pub rehearsal: Vec<GuildId>,
     pub voice: Arc<VoiceRooms<DiscordRooms>>,
     pub updates: Arc<Updates<DiscordHerald>>,
+    pub drafts: Arc<Drafts>,
 }
 
 fn now_unix() -> i64 {
@@ -255,6 +265,7 @@ pub async fn run(
                     rehearsal: rehearsal_guilds,
                     voice,
                     updates,
+                    drafts: Arc::new(Drafts::default()),
                 };
                 tracing::info!(
                     "event.name" = "service.started",

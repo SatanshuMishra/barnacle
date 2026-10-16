@@ -75,7 +75,7 @@ libraries it uses, such as serenity, carry no `event.name`.
 | Service | `service.started`, `service.failed`, `startup.failed`, `commands.registered` |
 | Commands | `command.completed`, `command.refused`, `command.failed` |
 | Interactions and gateway events | `interaction.refused`, `interaction.failed`, `interaction.reply_failed`, `event.failed` |
-| Clan Battle sign-ups | `signup.post.published`, `signup.post.reposted`, `signup.post.closed`, `signup.post.removed`, `signup.post.failed`, `signup.tick.completed`, `signup.tick.failed`, `signup.ping.checked`, `signup.ping.silent`, `signup.click.recorded` |
+| Clan Battle sign-ups | `signup.post.published`, `signup.post.reposted`, `signup.post.closed`, `signup.post.reopened`, `signup.post.removed`, `signup.post.failed`, `signup.tick.completed`, `signup.tick.failed`, `signup.ping.checked`, `signup.ping.silent`, `signup.click.recorded` |
 | Rehearsal | `rehearsal.clock.cleared`, `rehearsal.clock.clear_failed` |
 | Silhouette game | `guess.round.started`, `guess.round.ended`, `guess.series.started`, `guess.series.ended`, `guess.post.failed`, `guess.solve.failed` |
 | Update announcements | `updates.configured`, `updates.announced` |
@@ -240,15 +240,18 @@ When a ping sent by a repost is not registered, Barnacle also writes
 
 ### On `signup.click.recorded`
 
-Every sign-up click Barnacle records writes one `INFO` `signup.click.recorded`
-line with outcome `success`. It carries the server, channel, season, night,
-message and the user ID of whoever clicked. Refused and failed clicks are logged
-as before, as `interaction.refused` or `interaction.failed`.
+Every sign-up click and every Choose hours submission Barnacle records writes
+one `INFO` `signup.click.recorded` line with outcome `success`. It carries the
+server, channel, event, session, message and the user ID of whoever clicked; a
+Choose hours submission carries the message of the sign-up post it redrew, when
+there is one. Refused and failed clicks are logged as before, as
+`interaction.refused` or `interaction.failed`; a Choose hours submission naming
+hours outside the session is refused with reason `hours_refused`.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `barnacle.signup.target` | string: `all`, or `1` to `4` | The hour the click answered for, or `all` for every hour of the night |
-| `barnacle.signup.choice` | string: `attend` or `nope` | The answer given |
+| `barnacle.signup.target` | string: `all`, `1` to `24`, or `hours` | The hour the click answered for, `all` for every hour of the session, or `hours` for a Choose hours submission |
+| `barnacle.signup.choice` | string: `attend` or `nope` | The answer given; for a Choose hours submission, `attend` when at least one hour is chosen and `nope` when none |
 
 ### On `service.started`
 

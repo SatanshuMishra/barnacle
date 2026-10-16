@@ -1,27 +1,49 @@
 mod common;
 
+use std::collections::HashMap;
+
 use barnacle_bot::attendance::Delivery;
 use barnacle_bot::attendance::Target;
+use barnacle_bot::attendance_store::Attendance;
+use barnacle_bot::attendance_store::CreateOutcome;
+use barnacle_bot::attendance_store::Event;
+use barnacle_bot::attendance_store::NewEvent;
+use barnacle_bot::discord;
+use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::Ping;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::schedule::Hour;
-use barnacle_bot::schedule::Night;
+use barnacle_bot::schedule::Hours;
+use barnacle_bot::schedule::Schedule;
+use barnacle_bot::schedule::Span;
+use barnacle_bot::schedule::StartTime;
+use barnacle_bot::schedule::Weekdays;
+use barnacle_bot::schedule::Zone;
+use barnacle_bot::schedule::parse_day;
 use barnacle_bot::solves::Ranking;
 use barnacle_bot::wiring;
 use barnacle_bot::wiring::ChannelAccess;
+use barnacle_bot::wiring::ChannelProblem;
+use barnacle_bot::wiring::EventChoice;
 use barnacle_bot::wiring::LeaderboardRequest;
+use barnacle_bot::wiring::PanelPart;
 use barnacle_bot::wiring::PingAllowance;
 use barnacle_bot::wiring::PingChoiceProblem;
 use barnacle_bot::wiring::PingReach;
 use barnacle_bot::wiring::PingVerdict;
 use barnacle_bot::wiring::SeriesClick;
+use barnacle_bot::wiring::SessionRef;
 use barnacle_bot::wiring::SetupPing;
 use barnacle_bot::wiring::SignupClick;
 use barnacle_bot::wiring::SortChoice;
 use barnacle_guess::RoundOptions;
 use barnacle_guess::SeriesLength;
+use barnacle_guess::Snowflake;
+use barnacle_guess::UserId;
 use common::tier;
+use jiff::civil::Date;
+use poise::serenity_prelude as serenity;
 
 #[test]
 fn command_options_become_round_options() {
@@ -112,7 +134,7 @@ fn series_button_ids_round_trip_and_fit_discords_limit() {
         wiring::ENDED_END_BUTTON_ID,
         wiring::ENDED_BUTTON_ID,
         &wiring::cancel_button_id(5),
-        &wiring::signup_button_id(3, night(), Target::All, true),
+        &wiring::signup_button_id(3, date(), Target::All, true),
         "barnacle-skip:",
         "barnacle-skip:-1",
         "barnacle-end:five",
@@ -145,7 +167,7 @@ fn an_announce_button_id_carries_its_version() {
         wiring::ENDED_SKIP_BUTTON_ID.to_owned(),
         wiring::cancel_button_id(5),
         wiring::ENDED_BUTTON_ID.to_owned(),
-        wiring::signup_button_id(3, night(), Target::All, true),
+        wiring::signup_button_id(3, date(), Target::All, true),
         "barnacle-announce:".to_owned(),
     ] {
         assert_eq!(wiring::announce_version(&other), None, "{other}");
@@ -250,40 +272,40 @@ fn leaderboard_options_default_to_ten_players_by_most_wins() {
 
 const BUTTON_ID_LIMIT: usize = 100;
 
-fn night() -> Night {
-    Night::parse("2026-09-23").unwrap()
+fn date() -> Date {
+    parse_day("2026-09-23").unwrap()
 }
 
 fn targets() -> impl Iterator<Item = Target> {
-    std::iter::once(Target::All).chain(Hour::ALL.map(Target::One))
+    std::iter::once(Target::All).chain(Hours::new(24).unwrap().each().map(Target::One))
 }
 
 #[test]
 fn signup_ids_round_trip() {
     assert_eq!(
-        wiring::signup_tag_prefix(3, night()),
+        wiring::signup_tag_prefix(3, date()),
         "barnacle-cb:3:2026-09-23:"
     );
     assert_eq!(
-        wiring::signup_button_id(3, night(), Target::All, true),
+        wiring::signup_button_id(3, date(), Target::All, true),
         "barnacle-cb:3:2026-09-23:all:in"
     );
     assert_eq!(
-        wiring::signup_button_id(3, night(), Target::One(Hour::ALL[3]), false),
+        wiring::signup_button_id(3, date(), Target::One(Hour::new(4).unwrap()), false),
         "barnacle-cb:3:2026-09-23:4:out"
     );
     for target in targets() {
         for attending in [true, false] {
-            let id = wiring::signup_button_id(3, night(), target, attending);
+            let id = wiring::signup_button_id(3, date(), target, attending);
             assert!(
-                id.starts_with(&wiring::signup_tag_prefix(3, night())),
+                id.starts_with(&wiring::signup_tag_prefix(3, date())),
                 "{id}"
             );
             assert_eq!(
                 wiring::signup_click(&id),
                 Some(SignupClick {
-                    season: 3,
-                    night: night(),
+                    event: 3,
+                    date: date(),
                     target,
                     attending
                 }),
@@ -294,13 +316,148 @@ fn signup_ids_round_trip() {
 }
 
 #[test]
+fn a_button_names_its_event_date_hour_and_answer() {
+    let date = parse_day("2026-10-14").unwrap();
+    assert_eq!(
+        wiring::signup_click("barnacle-cb:7:2026-10-14:all:in"),
+        Some(SignupClick {
+            event: 7,
+            date,
+            target: Target::All,
+            attending: true
+        })
+    );
+    assert_eq!(
+        wiring::signup_click("barnacle-cb:7:2026-10-14:all:out"),
+        Some(SignupClick {
+            event: 7,
+            date,
+            target: Target::All,
+            attending: false
+        })
+    );
+    assert_eq!(
+        wiring::signup_click("barnacle-cb:7:2026-10-14:12:out"),
+        Some(SignupClick {
+            event: 7,
+            date,
+            target: Target::One(Hour::new(12).unwrap()),
+            attending: false
+        })
+    );
+}
+
+#[test]
+fn a_malformed_button_is_ignored() {
+    for id in [
+        "barnacle-cb:7:2026-10-14:25:in",
+        "barnacle-cb:07:2026-10-14:all:in",
+        "barnacle-cb:7:2026-13-01:all:in",
+        "barnacle-cb:7:2026-10-14:all",
+    ] {
+        assert_eq!(wiring::signup_click(id), None, "{id}");
+    }
+}
+
+#[test]
+fn the_choose_hours_ids_name_their_event_and_date() {
+    let october_14 = parse_day("2026-10-14").unwrap();
+    let pick = wiring::choose_button_id(7, october_14);
+    let menu = wiring::hours_menu_id(7, october_14);
+    assert_eq!(pick, "barnacle-cb-pick:7:2026-10-14");
+    assert_eq!(menu, "barnacle-cb-hours:7:2026-10-14");
+    let expected = Some(SessionRef {
+        event: 7,
+        date: october_14,
+    });
+    assert_eq!(wiring::choose_press(&pick), expected);
+    assert_eq!(wiring::hours_menu(&menu), expected);
+    assert_eq!(wiring::choose_press(&menu), None);
+    assert_eq!(wiring::hours_menu(&pick), None);
+}
+
+#[test]
+fn a_malformed_choose_hours_id_is_ignored() {
+    for id in [
+        "barnacle-cb-pick:07:2026-10-14",
+        "barnacle-cb-pick:0:2026-10-14",
+        "barnacle-cb-pick:7:2026-10-14:x",
+        "barnacle-cb-pick:7",
+        "barnacle-cb-hours:7:2026-13-01",
+        "barnacle-cb-hours:7:14-10-2026",
+        "barnacle-cb-hours:",
+        "barnacle-cb:7:2026-10-14:all:in",
+    ] {
+        assert_eq!(wiring::choose_press(id), None, "{id}");
+        assert_eq!(wiring::hours_menu(id), None, "{id}");
+    }
+    assert_eq!(
+        wiring::signup_click("barnacle-cb:7:2026-10-14:all:in"),
+        Some(SignupClick {
+            event: 7,
+            date: parse_day("2026-10-14").unwrap(),
+            target: Target::All,
+            attending: true
+        })
+    );
+    assert_eq!(wiring::signup_click("barnacle-cb-pick:7:2026-10-14"), None);
+    assert_eq!(wiring::signup_click("barnacle-cb-hours:7:2026-10-14"), None);
+}
+
+#[test]
+fn hour_choices_keep_hours_of_the_event_once_each() {
+    let six = Hours::new(6).unwrap();
+    let values = |texts: &[&str]| {
+        texts
+            .iter()
+            .map(|text| (*text).to_owned())
+            .collect::<Vec<String>>()
+    };
+    let hours = |numbers: &[u8]| {
+        numbers
+            .iter()
+            .map(|number| Hour::new(*number).unwrap())
+            .collect::<Vec<Hour>>()
+    };
+    assert_eq!(
+        wiring::hour_choices(&values(&["5", "2", "3"]), six),
+        Some(hours(&[2, 3, 5]))
+    );
+    assert_eq!(wiring::hour_choices(&[], six), Some(Vec::new()));
+    for bad in [&["7"][..], &["x"], &["2", "2"], &["02"], &["0"]] {
+        assert_eq!(wiring::hour_choices(&values(bad), six), None, "{bad:?}");
+    }
+}
+
+#[test]
+fn an_event_name_is_trimmed_and_holds_1_to_100_characters() {
+    assert_eq!(
+        wiring::event_name("  Ranked Sprint  "),
+        Some("Ranked Sprint".to_owned())
+    );
+    assert_eq!(wiring::event_name("   "), None);
+    assert_eq!(wiring::event_name(""), None);
+    let longest = "é".repeat(100);
+    assert_eq!(wiring::event_name(&longest), Some(longest.clone()));
+    assert_eq!(wiring::event_name(&"é".repeat(101)), None);
+}
+
+#[test]
+fn names_match_after_lowercasing_with_unicode_rules() {
+    assert!(wiring::same_name("Été", "été"));
+    assert!(wiring::same_name("RANKED Sprint", "ranked sprint"));
+    assert!(!wiring::same_name("Ranked Sprint", "Ranked"));
+}
+
+#[test]
 fn a_malformed_signup_id_is_rejected() {
     for id in [
         "",
         "barnacle-cb:",
         "barnacle-cb:3:2026-09-23:all",
         "barnacle-cb:3:2026-09-23:all:in:1",
-        "barnacle-cb:3:2026-09-23:5:in",
+        "barnacle-cb:3:2026-09-23:25:in",
+        "barnacle-cb:3:2026-09-23:05:in",
         "barnacle-cb:3:2026-09-23:0:in",
         "barnacle-cb:3:2026-09-23:hour:in",
         "barnacle-cb:3:2026-09-23:all:maybe",
@@ -328,10 +485,10 @@ fn a_malformed_signup_id_is_rejected() {
 fn the_longest_signup_id_fits_discords_limit() {
     for target in targets() {
         for attending in [true, false] {
-            let id = wiring::signup_button_id(i64::MAX, night(), target, attending);
+            let id = wiring::signup_button_id(i64::MAX, date(), target, attending);
             assert!(id.chars().count() < BUTTON_ID_LIMIT, "{id}");
             assert_eq!(
-                wiring::signup_click(&id).map(|click| click.season),
+                wiring::signup_click(&id).map(|click| click.event),
                 Some(i64::MAX),
                 "{id}"
             );
@@ -646,4 +803,335 @@ fn ping_again_needs_the_person_to_be_able_to_ping() {
         Some(false),
         &[true]
     ));
+}
+
+const SERVER: GuildId = GuildId::new(1);
+const BEFORE_THE_SESSIONS: i64 = 1_791_900_000;
+const AFTER_THE_QUALIFIER: i64 = 1_792_400_000;
+
+fn every_day() -> Schedule {
+    Schedule::new(
+        Weekdays::EVERY_DAY,
+        StartTime::new(23, 30).unwrap(),
+        Zone::utc(),
+        Hours::new(4).unwrap(),
+    )
+}
+
+fn stored(id: i64, name: &str, first_day: Date, last_day: &str, schedule: Schedule) -> Event {
+    Event {
+        id,
+        guild: SERVER,
+        channel: ChannelId::new(10),
+        name: name.to_owned(),
+        span: Span::new(first_day, parse_day(last_day).unwrap(), schedule).unwrap(),
+        created_by: UserId::new(100),
+        created_at_ms: 0,
+        ping_roles: Vec::new(),
+        ended_at_ms: None,
+        posts_up: false,
+    }
+}
+
+fn running(id: i64, name: &str, first_day: &str, last_day: &str) -> Event {
+    stored(
+        id,
+        name,
+        parse_day(first_day).unwrap(),
+        last_day,
+        Schedule::clan_battles(),
+    )
+}
+
+fn choice(label: &str, value: &str) -> EventChoice {
+    EventChoice {
+        label: label.to_owned(),
+        value: value.to_owned(),
+    }
+}
+
+fn picked(events: &[Event], text: &str, now_unix: i64) -> Option<i64> {
+    wiring::chosen_event(events, text, now_unix).map(|event| event.id)
+}
+
+#[test]
+fn typing_part_of_a_name_suggests_matching_events() {
+    let events = [
+        running(3, "Clan Battles · Season 35", "2026-09-16", "2026-11-05"),
+        running(4, "Ranked Sprint", "2026-10-14", "2026-10-18"),
+    ];
+    assert_eq!(
+        wiring::event_choices(&events, "RANK", BEFORE_THE_SESSIONS),
+        vec![choice("Ranked Sprint · 2026-10-14 to 2026-10-18", "4")]
+    );
+}
+
+#[test]
+fn typing_an_accented_name_in_other_case_suggests_it() {
+    let events = [running(11, "Été Cup", "2026-10-14", "2026-10-18")];
+    assert_eq!(
+        wiring::event_choices(&events, "été", BEFORE_THE_SESSIONS),
+        vec![choice("Été Cup · 2026-10-14 to 2026-10-18", "11")]
+    );
+}
+
+#[test]
+fn an_empty_query_lists_the_earliest_25_events() {
+    let long_name = "Autumn Ranked Sprint for the Reserve Crews of Every Allied Clan across the North American, European and Asian Server Regions, Week One";
+    assert_eq!(long_name.chars().count(), 134);
+    let opening = parse_day("2026-10-14").unwrap();
+    let events: Vec<Event> = (1..=30)
+        .map(|id| {
+            let first_day = opening
+                .checked_add(jiff::Span::new().days(30 - id))
+                .unwrap();
+            let name = if id == 25 {
+                long_name.to_owned()
+            } else {
+                format!("Ranked Sprint {id}")
+            };
+            stored(id, &name, first_day, "2026-12-31", every_day())
+        })
+        .collect();
+    let choices = wiring::event_choices(&events, "", BEFORE_THE_SESSIONS);
+    let values: Vec<&str> = choices.iter().map(|choice| choice.value.as_str()).collect();
+    assert_eq!(
+        values,
+        [
+            "30", "29", "28", "27", "26", "25", "24", "23", "22", "21", "20", "19", "18", "17",
+            "16", "15", "14", "13", "12", "11", "10", "9", "8", "7", "6"
+        ]
+    );
+    assert_eq!(
+        choices[0],
+        choice("Ranked Sprint 30 · 2026-10-14 to 2026-12-31", "30")
+    );
+    assert_eq!(
+        choices[24],
+        choice("Ranked Sprint 6 · 2026-11-07 to 2026-12-31", "6")
+    );
+    assert_eq!(
+        choices[5],
+        choice(
+            "Autumn Ranked Sprint for the Reserve Crews of Every Allied Clan across t… · 2026-10-19 to 2026-12-31",
+            "25"
+        )
+    );
+    assert_eq!(choices[5].label.chars().count(), 100);
+    assert!(choices[5].label.ends_with(" · 2026-10-19 to 2026-12-31"));
+    assert!(
+        choices
+            .iter()
+            .all(|choice| choice.label.chars().count() <= 100)
+    );
+}
+
+#[tokio::test]
+async fn a_failed_read_suggests_no_event() {
+    let pool = common::attendance_pool().await;
+    let store = Attendance::with_pool(pool.clone()).await.unwrap();
+    sqlx::query("INSERT INTO cb_seasons (id, guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms) VALUES (1, 1, 10, 'Ranked Sprint', '2026-10-14', '2026-10-18', 108, 1410, 'Nowhere/City', 4, 100, 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let read = store.events_in(SERVER).await;
+    assert!(read.is_err());
+    assert_eq!(
+        wiring::event_suggestions(read, "", BEFORE_THE_SESSIONS),
+        Vec::new()
+    );
+}
+
+#[test]
+fn a_finished_event_is_not_suggested() {
+    let events = [
+        running(4, "Ranked Sprint", "2026-10-14", "2026-10-25"),
+        running(6, "Ranked Qualifier", "2026-10-14", "2026-10-14"),
+    ];
+    assert_eq!(
+        events[1].span.sessions().last().unwrap().remove_at_unix(),
+        1_792_036_800
+    );
+    assert_eq!(
+        wiring::event_choices(&events, "rank", AFTER_THE_QUALIFIER),
+        vec![choice("Ranked Sprint · 2026-10-14 to 2026-10-25", "4")]
+    );
+}
+
+#[test]
+fn a_query_with_no_match_suggests_nothing() {
+    assert_eq!(
+        wiring::event_choices(&[], "", BEFORE_THE_SESSIONS),
+        Vec::new()
+    );
+    let events = [
+        running(4, "Ranked Sprint", "2026-10-14", "2026-10-18"),
+        running(9, &"a".repeat(120), "2026-10-14", "2026-10-18"),
+    ];
+    assert_eq!(
+        wiring::event_choices(&events, "zzz", BEFORE_THE_SESSIONS),
+        Vec::new()
+    );
+    assert_eq!(
+        wiring::event_choices(&events, &"a".repeat(101), BEFORE_THE_SESSIONS),
+        Vec::new()
+    );
+}
+
+#[test]
+fn a_suggested_id_picks_its_event() {
+    let events = [
+        running(4, "Ranked Sprint", "2026-10-14", "2026-10-18"),
+        running(9, "Ranked Qualifier", "2026-10-14", "2026-10-18"),
+    ];
+    assert_eq!(picked(&events, "9", BEFORE_THE_SESSIONS), Some(9));
+}
+
+#[test]
+fn a_typed_name_picks_its_event() {
+    let events = [
+        running(4, "Ranked Sprint", "2026-10-14", "2026-10-18"),
+        running(9, "2026", "2026-10-14", "2026-10-18"),
+        running(11, "Été Cup", "2026-10-14", "2026-10-18"),
+    ];
+    assert_eq!(
+        picked(&events, " ranked sprint ", BEFORE_THE_SESSIONS),
+        Some(4)
+    );
+    assert_eq!(picked(&events, "2026", BEFORE_THE_SESSIONS), Some(9));
+    assert_eq!(picked(&events, "été cup", BEFORE_THE_SESSIONS), Some(11));
+}
+
+#[tokio::test]
+async fn anything_else_is_not_found() {
+    let store = common::attendance().await;
+    created(&store, 1, "Ranked Sprint").await;
+    created(&store, 1, "Ranked Finals").await;
+    let warmup = created(&store, 1, "Ranked Warmup").await;
+    store
+        .record_post(
+            warmup.id,
+            parse_day("2026-10-14").unwrap(),
+            Snowflake::new(7),
+            1_791_800_000_000,
+        )
+        .await
+        .unwrap();
+    store
+        .end_event(SERVER, warmup.id, 1_791_850_000_000)
+        .await
+        .unwrap();
+    let drill = created(&store, 2, "Drill").await;
+    let events = store.events_in(SERVER).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.name.as_str())
+            .collect::<Vec<&str>>(),
+        ["Ranked Sprint", "Ranked Finals"]
+    );
+    for text in [
+        warmup.id.to_string(),
+        drill.id.to_string(),
+        "zzz".to_owned(),
+        String::new(),
+    ] {
+        assert_eq!(picked(&events, &text, 1_791_900_000), None, "{text}");
+    }
+}
+
+async fn created(store: &Attendance, guild: u64, name: &str) -> Event {
+    let new = NewEvent {
+        guild: GuildId::new(guild),
+        channel: ChannelId::new(10),
+        name: name.to_owned(),
+        span: Span::new(
+            parse_day("2026-10-14").unwrap(),
+            parse_day("2026-10-18").unwrap(),
+            Schedule::clan_battles(),
+        )
+        .unwrap(),
+        created_by: UserId::new(100),
+        created_at_ms: 1_791_800_000_000,
+        ping_roles: Vec::new(),
+    };
+    match store.create_event(&new).await.unwrap() {
+        CreateOutcome::Created(event) => event,
+        CreateOutcome::NameTaken => panic!("{name} was not stored"),
+    }
+}
+
+#[test]
+fn a_finished_event_is_not_found() {
+    let events = [running(6, "Ranked Qualifier", "2026-10-14", "2026-10-14")];
+    assert_eq!(
+        events[0].span.sessions().last().unwrap().remove_at_unix(),
+        1_792_036_800
+    );
+    for text in ["6", "Ranked Qualifier"] {
+        assert_eq!(picked(&events, text, AFTER_THE_QUALIFIER), None, "{text}");
+    }
+}
+
+#[test]
+fn a_malformed_panel_id_is_ignored() {
+    assert_eq!(
+        wiring::panel_part("barnacle-event:12:days"),
+        Some((12, PanelPart::Days))
+    );
+    assert_eq!(
+        wiring::panel_part("barnacle-event:12:roles"),
+        Some((12, PanelPart::Roles))
+    );
+    assert_eq!(
+        wiring::panel_part("barnacle-event:12:everyone"),
+        Some((12, PanelPart::Everyone))
+    );
+    assert_eq!(
+        wiring::panel_part("barnacle-event:12:save"),
+        Some((12, PanelPart::Save))
+    );
+    assert_eq!(
+        wiring::panel_part("barnacle-event:12:cancel"),
+        Some((12, PanelPart::Cancel))
+    );
+    for id in [
+        "barnacle-event:012:save",
+        "barnacle-event:12:launch",
+        "barnacle-event:12",
+        "barnacle-event:12:save:x",
+    ] {
+        assert_eq!(wiring::panel_part(id), None, "{id}");
+    }
+}
+
+#[test]
+fn an_edit_channel_must_be_a_text_channel_of_this_server() {
+    let channels = HashMap::from([
+        cached(12, 1, serenity::ChannelType::Voice),
+        cached(13, 2, serenity::ChannelType::Text),
+        cached(11, 1, serenity::ChannelType::Text),
+    ]);
+    let judged = |chosen: u64| {
+        wiring::event_channel(
+            GuildId::new(1),
+            discord::cached_event_channel(&channels, serenity::ChannelId::new(chosen)),
+        )
+    };
+    assert_eq!(judged(14), Err(ChannelProblem::Unknown));
+    assert_eq!(judged(13), Err(ChannelProblem::Unknown));
+    assert_eq!(judged(12), Err(ChannelProblem::NotText));
+    assert_eq!(judged(11), Ok(ChannelId::new(11)));
+}
+
+fn cached(
+    id: u64,
+    guild: u64,
+    kind: serenity::ChannelType,
+) -> (serenity::ChannelId, serenity::GuildChannel) {
+    let mut channel = serenity::GuildChannel::default();
+    channel.id = serenity::ChannelId::new(id);
+    channel.guild_id = serenity::GuildId::new(guild);
+    channel.kind = kind;
+    (channel.id, channel)
 }

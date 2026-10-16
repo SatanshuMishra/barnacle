@@ -8,9 +8,14 @@ use poise::serenity_prelude as serenity;
 use super::Context;
 use super::Data;
 use super::Error;
+use super::board;
+use super::panel;
 use super::rooms;
+use crate::attendance::ChooseOutcome;
 use crate::attendance::Click;
 use crate::attendance::ClickOutcome;
+use crate::attendance::HoursPick;
+use crate::attendance::MenuOutcome;
 use crate::failure;
 use crate::failure::Failure;
 use crate::failure::Kind;
@@ -24,6 +29,7 @@ use crate::text;
 use crate::updates::SendOutcome;
 use crate::wiring;
 use crate::wiring::SeriesClick;
+use crate::wiring::SessionRef;
 use crate::wiring::SignupClick;
 
 const BUTTON_FAILED: &str = "That button did not work";
@@ -91,12 +97,18 @@ async fn clicked(
     };
     if let Some(signup) = wiring::signup_click(&component.data.custom_id) {
         sign_up(data, serenity_context, component, signup, guild).await;
+    } else if let Some(pressed) = wiring::choose_press(&component.data.custom_id) {
+        choose_pressed(data, serenity_context, component, pressed, guild).await;
+    } else if let Some(chosen) = wiring::hours_menu(&component.data.custom_id) {
+        hours_chosen(data, serenity_context, component, chosen, guild).await;
     } else if let Some(number) = wiring::round_number(&component.data.custom_id) {
         cancel(data, serenity_context, component, number, guild).await;
     } else if let Some(click) = wiring::series_click(&component.data.custom_id) {
         series_pressed(data, serenity_context, component, click, guild).await;
     } else if let Some(version) = wiring::announce_version(&component.data.custom_id) {
         announce_pressed(data, serenity_context, component, &version, guild, owners).await;
+    } else if let Some((panel, part)) = wiring::panel_part(&component.data.custom_id) {
+        panel::pressed(data, serenity_context, component, panel, part, guild).await;
     }
 }
 
@@ -356,88 +368,50 @@ async fn sign_up(
     signup: SignupClick,
     guild: GuildId,
 ) {
-    let scope = Scope::of_component(component)
-        .guild(guild)
-        .season(signup.season)
-        .night(signup.night.label());
+    let scope = session_scope(
+        component,
+        guild,
+        SessionRef {
+            event: signup.event,
+            date: signup.date,
+        },
+    );
     let now_unix = super::now_unix();
-    let start_unix = signup.night.start_unix();
-    if start_unix <= now_unix {
-        failure::refused(
-            "interaction.refused",
-            "a sign-up click came after sign-ups closed",
-            "signups_closed",
-            &scope,
-        );
-        tell(
-            serenity_context,
-            component,
-            Answer::Response,
-            &text::signups_closed_at(start_unix),
-            &scope,
-        )
-        .await;
-        return;
-    }
     if !acknowledge(serenity_context, component, &scope).await {
         return;
     }
-    let Some(now_ms) = super::now_ms() else {
-        let failure = Failure::internal("the clock reads before 1970");
-        failure::report(
-            "interaction.failed",
-            "a sign-up could not be saved because the clock reads before 1970",
-            &failure,
-            &scope,
-        );
-        tell(
-            serenity_context,
-            component,
-            Answer::Followup,
-            &failure::failed(SIGNUP_FAILED, &failure),
-            &scope,
-        )
-        .await;
-        return;
+    let now_ms = match signup_now_ms(&scope) {
+        Ok(now_ms) => now_ms,
+        Err(content) => {
+            tell(
+                serenity_context,
+                component,
+                Answer::Followup,
+                &content,
+                &scope,
+            )
+            .await;
+            return;
+        }
     };
     let click = Click {
         guild,
         channel: ChannelId::new(component.channel_id.get()),
         message: Snowflake::new(component.message.id.get()),
         user: UserId::new(component.user.id.get()),
-        season: signup.season,
-        night: signup.night,
+        event: signup.event,
+        date: signup.date,
         target: signup.target,
         attending: signup.attending,
     };
     let content = match data.signups.click(click, now_unix, now_ms).await {
         ClickOutcome::Recorded => return,
         ClickOutcome::Closed { start_unix } => {
-            failure::refused(
-                "interaction.refused",
-                "a sign-up click came after sign-ups closed",
-                "signups_closed",
-                &scope,
-            );
-            text::signups_closed_at(start_unix)
+            signups_closed(start_unix, "a sign-up click", &scope)
         }
-        ClickOutcome::UnknownSeason => {
-            failure::refused(
-                "interaction.refused",
-                "a sign-up click named a season that is gone",
-                "season_gone",
-                &scope,
-            );
-            text::SEASON_GONE.to_owned()
-        }
+        ClickOutcome::UnknownEvent => session_gone("a sign-up click", &scope),
         ClickOutcome::Failed(failure) => {
-            failure::report(
-                "interaction.failed",
-                "a sign-up could not be saved",
-                &failure,
-                &scope,
-            );
-            failure::failed(SIGNUP_FAILED, &failure)
+            signup_failed(&failure, "a sign-up could not be saved", &scope)
         }
     };
     tell(
@@ -450,13 +424,187 @@ async fn sign_up(
     .await;
 }
 
+fn signup_now_ms(scope: &Scope) -> Result<u64, String> {
+    super::now_ms().ok_or_else(|| {
+        let failure = Failure::internal("the clock reads before 1970");
+        failure::report(
+            "interaction.failed",
+            "a sign-up could not be saved because the clock reads before 1970",
+            &failure,
+            scope,
+        );
+        failure::failed(SIGNUP_FAILED, &failure)
+    })
+}
+
+fn session_scope(
+    component: &serenity::ComponentInteraction,
+    guild: GuildId,
+    at: SessionRef,
+) -> Scope {
+    Scope::of_component(component)
+        .guild(guild)
+        .season(at.event)
+        .night(at.date.to_string())
+}
+
+fn signups_closed(start_unix: i64, what: &str, scope: &Scope) -> String {
+    failure::refused(
+        "interaction.refused",
+        &format!("{what} came after sign-ups closed"),
+        "signups_closed",
+        scope,
+    );
+    text::signups_closed_at(start_unix)
+}
+
+fn session_gone(what: &str, scope: &Scope) -> String {
+    failure::refused(
+        "interaction.refused",
+        &format!("{what} named a session that is gone"),
+        "session_gone",
+        scope,
+    );
+    text::SESSION_GONE.to_owned()
+}
+
+fn signup_failed(failure: &Failure, what: &str, scope: &Scope) -> String {
+    failure::report("interaction.failed", what, failure, scope);
+    failure::failed(SIGNUP_FAILED, failure)
+}
+
+async fn choose_pressed(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    component: &serenity::ComponentInteraction,
+    pressed: SessionRef,
+    guild: GuildId,
+) {
+    let scope = session_scope(component, guild, pressed);
+    let now_unix = super::now_unix();
+    let content = match signup_now_ms(&scope) {
+        Err(content) => content,
+        Ok(now_ms) => match data
+            .signups
+            .hours_menu(
+                guild,
+                pressed.event,
+                pressed.date,
+                UserId::new(component.user.id.get()),
+                now_unix,
+                now_ms,
+            )
+            .await
+        {
+            MenuOutcome::Open { view, attending } => {
+                let reply = serenity::CreateInteractionResponse::Message(board::hours_menu_reply(
+                    &view, &attending,
+                ));
+                if let Err(error) = component.create_response(serenity_context, reply).await {
+                    failure::report(
+                        "interaction.failed",
+                        "the hours menu could not be sent",
+                        &Failure::from_error(&error),
+                        &scope,
+                    );
+                }
+                return;
+            }
+            MenuOutcome::Closed { start_unix } => {
+                signups_closed(start_unix, "a Choose hours press", &scope)
+            }
+            MenuOutcome::UnknownEvent => session_gone("a Choose hours press", &scope),
+            MenuOutcome::Failed(failure) => {
+                signup_failed(&failure, "the hours menu could not be opened", &scope)
+            }
+        },
+    };
+    tell(
+        serenity_context,
+        component,
+        Answer::Response,
+        &content,
+        &scope,
+    )
+    .await;
+}
+
+async fn hours_chosen(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    component: &serenity::ComponentInteraction,
+    chosen: SessionRef,
+    guild: GuildId,
+) {
+    let scope = session_scope(component, guild, chosen);
+    let now_unix = super::now_unix();
+    if !acknowledge(serenity_context, component, &scope).await {
+        return;
+    }
+    let values = match &component.data.kind {
+        serenity::ComponentInteractionDataKind::StringSelect { values } => Some(values.clone()),
+        _ => None,
+    };
+    let content = match (signup_now_ms(&scope), values) {
+        (Err(content), _) => content,
+        (Ok(_), None) => hours_refused(&scope),
+        (Ok(now_ms), Some(values)) => {
+            let pick = HoursPick {
+                guild,
+                channel: ChannelId::new(component.channel_id.get()),
+                user: UserId::new(component.user.id.get()),
+                event: chosen.event,
+                date: chosen.date,
+                values,
+            };
+            match data.signups.choose_hours(pick, now_unix, now_ms).await {
+                ChooseOutcome::Saved { attending } => text::hours_saved(&attending),
+                ChooseOutcome::Closed { start_unix } => {
+                    signups_closed(start_unix, "an hours choice", &scope)
+                }
+                ChooseOutcome::UnknownEvent => session_gone("an hours choice", &scope),
+                ChooseOutcome::BadChoice => hours_refused(&scope),
+                ChooseOutcome::Failed(failure) => {
+                    signup_failed(&failure, "an hours choice could not be saved", &scope)
+                }
+            }
+        }
+    };
+    let edited = component
+        .edit_response(
+            serenity_context,
+            serenity::EditInteractionResponse::new()
+                .content(content)
+                .components(Vec::new()),
+        )
+        .await;
+    if let Err(error) = edited {
+        failure::report(
+            "interaction.failed",
+            "the answer to an hours choice could not be sent",
+            &Failure::from_error(&error),
+            &scope,
+        );
+    }
+}
+
+fn hours_refused(scope: &Scope) -> String {
+    failure::refused(
+        "interaction.refused",
+        "an hours choice named hours that are not part of the session",
+        "hours_refused",
+        scope,
+    );
+    text::HOURS_REFUSED.to_owned()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Answer {
+pub(super) enum Answer {
     Response,
     Followup,
 }
 
-async fn acknowledge(
+pub(super) async fn acknowledge(
     serenity_context: &serenity::Context,
     component: &serenity::ComponentInteraction,
     scope: &Scope,
@@ -484,7 +632,7 @@ async fn acknowledge(
     false
 }
 
-async fn tell(
+pub(super) async fn tell(
     serenity_context: &serenity::Context,
     component: &serenity::ComponentInteraction,
     answer: Answer,
@@ -499,6 +647,7 @@ async fn tell(
                     serenity::CreateInteractionResponse::Message(
                         serenity::CreateInteractionResponseMessage::new()
                             .content(content)
+                            .allowed_mentions(serenity::CreateAllowedMentions::new())
                             .ephemeral(true),
                     ),
                 )
@@ -509,6 +658,7 @@ async fn tell(
                 serenity_context,
                 serenity::CreateInteractionResponseFollowup::new()
                     .content(content)
+                    .allowed_mentions(serenity::CreateAllowedMentions::new())
                     .ephemeral(true),
             )
             .await

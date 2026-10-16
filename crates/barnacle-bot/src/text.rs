@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use barnacle_catalog::Nation;
@@ -13,6 +14,7 @@ use barnacle_guess::Tally;
 use barnacle_guess::Timing;
 use barnacle_guess::UserId;
 use jiff::civil::Date;
+use jiff::civil::Weekday;
 
 use crate::attendance::Cell;
 use crate::attendance::HourTally;
@@ -21,17 +23,26 @@ use crate::attendance::PurgeReport;
 use crate::attendance::RosterRow;
 use crate::attendance::SignupView;
 use crate::attendance::TickReport;
-use crate::attendance_store::Season;
+use crate::attendance::next_post_at;
+use crate::attendance_store::Event;
+use crate::event_draft::PANEL_LIFETIME_MINUTES;
+use crate::event_draft::ROLE_LIMIT;
+use crate::event_draft::Template;
 use crate::failure::join_names;
 use crate::ids::ChannelId;
 use crate::ids::Ping;
 use crate::schedule::Hour;
-use crate::schedule::Night;
+use crate::schedule::Hours;
+use crate::schedule::MAX_HOURS;
+use crate::schedule::Session;
+use crate::schedule::Span;
+use crate::schedule::Weekdays;
 use crate::solves::Ranking;
 use crate::solves::Standing;
 use crate::table::COUNTDOWN_SECONDS;
 use crate::table::Ending;
 use crate::voice_text;
+use crate::wiring::EVENT_NAME_LIMIT;
 use crate::wiring::PingVerdict;
 
 pub const EMBED_COLOUR: u32 = 0x2E6F6B;
@@ -71,20 +82,28 @@ pub const FORMER_MEMBER: &str = "Former member";
 pub const ATTEND_ALL_LABEL: &str = "Attend all";
 pub const NOPE_ALL_LABEL: &str = "Nope all";
 pub const NO_ANSWERS_YET: &str = "No one has answered yet.";
-pub const SIGNUPS_CLOSE_AT_START: &str = "Sign-ups close when the night starts.";
+pub const SIGNUPS_CLOSE_AT_START: &str = "Sign-ups close when the session starts.";
 pub const SIGNUPS_CLOSED: &str = "Sign-ups closed";
-pub const SEASON_GONE: &str = "This season no longer exists.";
-pub const NO_SEASON_HERE: &str = "No CB season is set up here.";
-pub const ROSTER_HEADER: &str = "1    2    3    4    ";
+pub const SESSION_GONE: &str = "This session no longer exists.";
+pub const NO_EVENT_HERE: &str = "No event is set up here.";
+pub const CHOOSE_HOURS_LABEL: &str = "Choose hours";
+pub const HOURS_REFUSED: &str = "Those hours are not part of this session. Nothing was saved.";
+pub const SHORT_EVENT_HOURS: u8 = 4;
 pub const CLEAR_FAILED_MOVE: &str = "Some sign-up posts could not be removed from the old channel, so nothing moved. Check that the bot can manage messages there, then run this again.";
-pub const CLEAR_FAILED_END: &str = "Some sign-up posts could not be removed, so the season is still running. Check that the bot can manage messages in its channel, then run this again.";
+pub const CLEAR_FAILED_END: &str = "Some sign-up posts could not be removed, so the event is still running. Check that the bot can manage messages in its channel, then run this again.";
+pub const REHEARSAL_RUNNING: &str = "A rehearsal is still running here. /rehearse reset ends it, and then /rehearse start sets up the next one.";
 pub const FAILURES_LOGGED: &str = "Barnacle's log records the reason for each.";
-const CLEAR_FAILED_EDIT: &str =
-    "Some sign-up posts outside the new dates could not be cleared; run this again to retry.";
+pub const PANEL_CANCELLED: &str = "Cancelled. Nothing was saved.";
+pub const CREATE_LABEL: &str = "Create";
+pub const SAVE_LABEL: &str = "Save";
+pub const WEEKDAYS_PLACEHOLDER: &str = "Weekdays";
+pub const ROLES_PLACEHOLDER: &str = "Roles to ping";
+const CLEAR_FAILED_EDIT: &str = "Some sign-up posts outside the new schedule could not be cleared; edit the event again to retry.";
 const REFRESH_FAILED: &str =
-    "Its sign-up post could not be updated; run this again once Barnacle can edit it.";
+    "Some sign-up posts could not be redrawn; edit the event again once Barnacle can edit them.";
+const NO_SESSION_IN_SPAN: &str = "No session falls within those dates.";
 const RESET_BLOCKED_HEAD: &str =
-    "Some sign-up posts could not be removed, so no season or answer was deleted.";
+    "Some sign-up posts could not be removed, so no event or answer was deleted.";
 const RESET_BLOCKED_TAIL: &str =
     "Check that the bot can manage messages here, then run this again.";
 
@@ -100,10 +119,11 @@ const NO_SERIES_WINS_YET: &str = "Nobody has won a round in this series yet.";
 const NO_SERIES_WINS: &str = "Nobody won a round in this series.";
 
 const NOTHING_AHEAD: &str = "Nothing further will post.";
+const EVERY_DAY: &str = "every day";
+const EVENT_LIST_TAIL: usize = 32;
 const NOTHING_HAPPENED: &str = "Nothing happened.";
 const NOTHING_TO_CLEAR: &str = "Nothing was there to clear.";
 const NAME_LIMIT: usize = 32;
-const SEASON_LIST_TAIL: usize = 32;
 const CELL_WIDTH: usize = 5;
 const NUMERALS: [&str; 11] = [
     "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI",
@@ -360,15 +380,13 @@ pub enum Refusal {
     DateFormat,
     LastDayBeforeFirst,
     DatesTooFar,
-    NoNightsLeft,
-    SeasonNumberTaken(u32),
-    SeasonOverlaps(Season),
-    SeasonNotFound(u32),
-    SeasonAlreadyHere(u32),
+    NoSessionsLeft,
+    NameTaken(String),
+    NameFormat,
+    EventNotFound,
     NothingToChange,
-    CodenameBothWays,
-    PingBothWays,
     RehearsalOnly,
+    RehearsalRunning,
     NothingPending,
     RoundAlreadyRunning,
     EmptyPool(RoundOptions),
@@ -386,15 +404,26 @@ pub enum Refusal {
     },
     PingMixesEveryone,
     NothingToRepost {
-        number: u32,
+        name: String,
         next_post_at: Option<i64>,
-        nights_left: usize,
+        sessions_left: usize,
     },
     RepostNothingToPing,
     RepostPingNotAllowed,
     RepostPingsChanged,
     RepostSuperseded,
     SeriesRoundsOutOfRange,
+    TemplateUnknown,
+    MissingOptions(Vec<&'static str>),
+    StartFormat,
+    HoursOutOfRange,
+    ZoneUnknown,
+    WeekdaysInvalid,
+    TooManyRoles,
+    PanelUnknown,
+    PanelNotYours,
+    PanelExpired,
+    ChannelUnknown,
 }
 
 impl Refusal {
@@ -405,15 +434,13 @@ impl Refusal {
             Refusal::DateFormat => "date_format",
             Refusal::LastDayBeforeFirst => "last_day_before_first",
             Refusal::DatesTooFar => "dates_too_far",
-            Refusal::NoNightsLeft => "no_nights_left",
-            Refusal::SeasonNumberTaken(_) => "season_number_taken",
-            Refusal::SeasonOverlaps(_) => "season_overlaps",
-            Refusal::SeasonNotFound(_) => "season_not_found",
-            Refusal::SeasonAlreadyHere(_) => "season_already_here",
+            Refusal::NoSessionsLeft => "no_sessions_left",
+            Refusal::NameTaken(_) => "name_taken",
+            Refusal::NameFormat => "name_format",
+            Refusal::EventNotFound => "event_not_found",
             Refusal::NothingToChange => "nothing_to_change",
-            Refusal::CodenameBothWays => "codename_both_ways",
-            Refusal::PingBothWays => "ping_both_ways",
             Refusal::RehearsalOnly => "rehearsal_only",
+            Refusal::RehearsalRunning => "rehearsal_running",
             Refusal::NothingPending => "nothing_pending",
             Refusal::RoundAlreadyRunning => "round_already_running",
             Refusal::EmptyPool(_) => "empty_pool",
@@ -431,6 +458,17 @@ impl Refusal {
             Refusal::RepostPingsChanged => "repost_pings_changed",
             Refusal::RepostSuperseded => "repost_superseded",
             Refusal::SeriesRoundsOutOfRange => "series_rounds_out_of_range",
+            Refusal::TemplateUnknown => "template_unknown",
+            Refusal::MissingOptions(_) => "missing_options",
+            Refusal::StartFormat => "start_format",
+            Refusal::HoursOutOfRange => "hours_out_of_range",
+            Refusal::ZoneUnknown => "zone_unknown",
+            Refusal::WeekdaysInvalid => "weekdays_invalid",
+            Refusal::TooManyRoles => "too_many_roles",
+            Refusal::PanelUnknown => "panel_unknown",
+            Refusal::PanelNotYours => "panel_not_yours",
+            Refusal::PanelExpired => "panel_expired",
+            Refusal::ChannelUnknown => "channel_unknown",
         }
     }
 
@@ -451,40 +489,35 @@ impl Refusal {
                     .to_owned()
             }
             Refusal::DatesTooFar => {
-                "A season has to sit within six months either side of today. Pick dates closer to today."
+                "An event has to sit within six months either side of today. Pick dates closer to today."
                     .to_owned()
             }
-            Refusal::NoNightsLeft => {
-                "That range has no CB nights left. Pick dates with a CB night still ahead."
+            Refusal::NoSessionsLeft => {
+                "Those dates hold no session still ahead. Pick dates with a session still ahead."
                     .to_owned()
             }
-            Refusal::SeasonNumberTaken(number) => format!(
-                "Season {number} already exists. Use another number, or end that season first with /cb season end."
+            Refusal::NameTaken(name) => format!(
+                "An event named {} is still running here. Pick another name, or end that event first with /event end.",
+                escape(name)
             ),
-            Refusal::SeasonOverlaps(other) => format!(
-                "That range overlaps Season {} ({} to {}). Pick dates outside it, or change that season's dates with /cb season edit.",
-                other.number,
-                other.range.first_day(),
-                other.range.last_day()
+            Refusal::NameFormat => format!(
+                "An event's name is 1 to {EVENT_NAME_LIMIT} characters. Run the command again with a name that long."
             ),
-            Refusal::SeasonNotFound(number) => format!(
-                "No Season {number} is set up here. /cb season show lists the seasons that are."
-            ),
-            Refusal::SeasonAlreadyHere(number) => format!(
-                "Season {number} already posts in this channel. To move it, run this in the channel it should post in."
-            ),
+            Refusal::EventNotFound => {
+                "No running event here matches that. Pick one of the events suggested as you type; /event list shows the events that are set up."
+                    .to_owned()
+            }
             Refusal::NothingToChange => {
-                "Nothing to change. Give a new_number, first_day, last_day, codename or ping_role, or use clear_codename or clear_ping_role."
+                "Nothing to change. Give a new name, dates, start, hours, time zone or channel, or change the weekdays or pings in the panel."
                     .to_owned()
             }
-            Refusal::CodenameBothWays => "Pass a codename or clear it, not both.".to_owned(),
-            Refusal::PingBothWays => "Pass a ping role or clear it, not both.".to_owned(),
             Refusal::RehearsalOnly => {
                 "This server is not set up for rehearsals. Whoever runs Barnacle can list it under [rehearsal] in barnacle.toml, then restart Barnacle."
                     .to_owned()
             }
+            Refusal::RehearsalRunning => REHEARSAL_RUNNING.to_owned(),
             Refusal::NothingPending => {
-                "Nothing is waiting to happen in this rehearsal. /rehearse start sets up another rehearsal season."
+                "Nothing is waiting to happen in this rehearsal. /rehearse start sets up another rehearsal."
                     .to_owned()
             }
             Refusal::RoundAlreadyRunning => {
@@ -520,23 +553,23 @@ impl Refusal {
                     .to_owned()
             }
             Refusal::NothingToRepost {
-                number,
+                name,
                 next_post_at,
-                nights_left,
-            } => nothing_to_repost(*number, *next_post_at, *nights_left),
+                sessions_left,
+            } => nothing_to_repost(name, *next_post_at, *sessions_left),
             Refusal::RepostNothingToPing => {
-                "This season pings no role, so ping_again has nothing to ping. Add a ping role with /cb season edit, or repost without ping_again."
+                "This event pings no role, so ping_again has nothing to ping. Pick roles with /event edit, or repost without ping_again."
                     .to_owned()
             }
             Refusal::RepostPingNotAllowed => format!(
-                "ping_again pings the season's roles in your name, so you need to be able to ping them yourself: hold {MENTION_PERMISSION} in the season's channel, or every role has to allow anyone to mention it. You can still repost without ping_again."
+                "ping_again pings the event's roles in your name, so you need to be able to ping them yourself: hold {MENTION_PERMISSION} in the event's channel, or every role has to allow anyone to mention it. You can still repost without ping_again."
             ),
             Refusal::RepostPingsChanged => {
-                "The season's ping roles or channel changed while reposting, so nothing was reposted. Run the command again."
+                "The event's ping roles or channel changed while reposting, so nothing was reposted. Run the command again."
                     .to_owned()
             }
             Refusal::RepostSuperseded => {
-                "The sign-up post changed while it was being reposted, so nothing was reposted. Check the season with /cb season show, then run the command again if it is still needed."
+                "The sign-up post changed while it was being reposted, so nothing was reposted. Check the event with /event list, then run the command again if it is still needed."
                     .to_owned()
             }
             Refusal::SeriesRoundsOutOfRange => format!(
@@ -544,6 +577,48 @@ impl Refusal {
                 SeriesLength::MIN,
                 SeriesLength::MAX
             ),
+            Refusal::TemplateUnknown => format!(
+                "Barnacle offers one template, {}. Pick it from the list, or leave template out and give start, hours and time_zone.",
+                Template::ClanBattles.name()
+            ),
+            Refusal::MissingOptions(names) => format!(
+                "Without a template, an event needs {}. Run the command again with {}, or pick the {} template.",
+                join_names(names),
+                them(names.len()),
+                Template::ClanBattles.name()
+            ),
+            Refusal::StartFormat => {
+                "A start time is written on a 24-hour clock, such as 17:00 or 5:30. Run the command again with the start written that way."
+                    .to_owned()
+            }
+            Refusal::HoursOutOfRange => format!(
+                "An event runs 1 to {MAX_HOURS} hours. Run the command again with hours from 1 to {MAX_HOURS}."
+            ),
+            Refusal::ZoneUnknown => {
+                "Barnacle knows a time zone by its place, such as America/Denver or Europe/Berlin, or as UTC. Pick one of the zones suggested as you type."
+                    .to_owned()
+            }
+            Refusal::WeekdaysInvalid => {
+                "Pick at least one weekday, from Monday to Sunday, in the menu.".to_owned()
+            }
+            Refusal::TooManyRoles => format!(
+                "An event pings at most {ROLE_LIMIT} roles. Pick {ROLE_LIMIT} or fewer."
+            ),
+            Refusal::PanelUnknown => {
+                "This panel is no longer open, so nothing was saved. Run the command again to open a new one."
+                    .to_owned()
+            }
+            Refusal::PanelNotYours => {
+                "Only the admin who opened this panel can use it. Run the command yourself to open your own."
+                    .to_owned()
+            }
+            Refusal::PanelExpired => format!(
+                "This panel was opened more than {PANEL_LIFETIME_MINUTES} minutes ago, so nothing was saved. Run the command again to open a new one."
+            ),
+            Refusal::ChannelUnknown => {
+                "Barnacle cannot find that channel in this server. Pick a text channel here that Barnacle can see."
+                    .to_owned()
+            }
         }
     }
 }
@@ -569,10 +644,10 @@ fn ping_blocked_by_channel(pings: &[Ping], channel: ChannelId) -> String {
     )
 }
 
-fn nothing_to_repost(number: u32, next_post_at: Option<i64>, nights_left: usize) -> String {
-    let head = format!("Season {number} has no open sign-up post to repost.");
-    let tail = match (nights_left, next_post_at) {
-        (0, _) => "The season has no sign-up posts left.".to_owned(),
+fn nothing_to_repost(name: &str, next_post_at: Option<i64>, sessions_left: usize) -> String {
+    let head = format!("{} has no open sign-up post to repost.", escape(name));
+    let tail = match (sessions_left, next_post_at) {
+        (0, _) => "The event has no sign-up posts left.".to_owned(),
         (_, Some(at_unix)) => format!("The next one goes up at {}.", full_time(at_unix)),
         (_, None) => "The next one goes up within a minute.".to_owned(),
     };
@@ -600,6 +675,13 @@ fn tiers_phrase(options: &RoundOptions) -> String {
 
 fn them(count: usize) -> &'static str {
     if count == 1 { "it" } else { "them" }
+}
+
+pub fn warned(warning: Option<String>, reply: String) -> String {
+    match warning {
+        Some(warning) => format!("{warning}\n\n{reply}"),
+        None => reply,
+    }
 }
 
 pub fn failures_noted(reply: &str, failures: usize) -> String {
@@ -694,12 +776,16 @@ pub fn listing(items: &[String], limit: usize) -> String {
         .unwrap_or_default()
 }
 
-pub fn signup_title(number: u32, codename: Option<&str>) -> String {
-    format!("Clan Battles · {}", season_name(number, codename))
+pub fn signup_title(name: &str) -> String {
+    escape(name)
+}
+
+pub fn short_event(hours: Hours) -> bool {
+    hours.get() <= SHORT_EVENT_HOURS
 }
 
 pub fn signup_description(view: &SignupView) -> String {
-    let start = view.night.start_unix();
+    let start = view.session.start_unix();
     let heading = if view.open {
         vec![
             format!("{} · starts {}", full_time(start), relative_time(start)),
@@ -708,14 +794,28 @@ pub fn signup_description(view: &SignupView) -> String {
     } else {
         vec![format!("{} · {SIGNUPS_CLOSED}", full_time(start))]
     };
-    heading
+    let head: Vec<String> = heading
         .into_iter()
         .chain(std::iter::once(String::new()))
-        .chain(view.hours.iter().map(|tally| hour_line(view.night, tally)))
+        .chain(
+            view.hours
+                .iter()
+                .map(|tally| hour_line(view.session, tally)),
+        )
         .chain(std::iter::once(String::new()))
-        .chain(roster_lines(view))
-        .collect::<Vec<String>>()
-        .join("\n")
+        .collect();
+    let described = |kept: usize| {
+        head.iter()
+            .cloned()
+            .chain(roster_lines(view, kept))
+            .collect::<Vec<String>>()
+            .join("\n")
+    };
+    (0..=view.rows.len())
+        .rev()
+        .map(described)
+        .find(|text| text.chars().count() <= EMBED_DESCRIPTION_LIMIT)
+        .unwrap_or_else(|| described(0))
 }
 
 pub fn hour_button_label(hour: Hour, attending: bool) -> String {
@@ -724,145 +824,24 @@ pub fn hour_button_label(hour: Hour, attending: bool) -> String {
 
 pub fn signups_closed_at(start_unix: i64) -> String {
     format!(
-        "Sign-ups for this night closed at {}.",
+        "Sign-ups for this session closed at {}.",
         clock_time(start_unix)
     )
 }
 
-pub fn season_started(season: &Season, nights_left: usize, post_at_unix: Option<i64>) -> String {
-    format!(
-        "{} will post here. {}, {nights_left} still ahead. First sign-up post: {}.",
-        season_name(season.number, season.codename.as_deref()),
-        nights(season.range.night_count()),
-        post_time(post_at_unix)
-    )
+pub fn event_removed(name: &str) -> String {
+    format!("{} was removed. Nothing had been posted.", escape(name))
 }
 
-pub fn season_line(season: &Season, nights_left: usize, post_at_unix: Option<i64>) -> String {
-    format!(
-        "<#{}> {}, {} to {}. {} ahead. Next sign-up post: {}.{}",
-        season.channel.get(),
-        season_name(season.number, season.codename.as_deref()),
-        season.range.first_day(),
-        season.range.last_day(),
-        nights_ahead(nights_left),
-        post_time(post_at_unix),
-        pings_line(
-            &season
-                .ping_roles
-                .iter()
-                .map(|role| Ping::of(season.guild, *role))
-                .collect::<Vec<Ping>>()
-        )
-    )
-}
-
-pub fn season_list(lines: &[String]) -> String {
-    let mut kept: Vec<&str> = Vec::new();
-    let mut length = 0;
-    for line in lines {
-        let next = length + discord_length(line) + usize::from(!kept.is_empty());
-        if next > MESSAGE_CONTENT_LIMIT - SEASON_LIST_TAIL {
-            break;
-        }
-        length = next;
-        kept.push(line);
-    }
-    let hidden = lines.len() - kept.len();
-    let shown = kept.join("\n");
-    if hidden == 0 {
-        shown
-    } else {
-        format!("{shown}\nand {hidden} more.")
-    }
-}
-
-fn nights_ahead(count: usize) -> String {
-    match count {
-        1 => "1 night".to_owned(),
-        count => format!("{count} nights"),
-    }
-}
-
-fn nights(count: usize) -> String {
-    match count {
-        1 => "1 CB night".to_owned(),
-        count => format!("{count} CB nights"),
-    }
-}
-
-pub fn season_removed(number: u32) -> String {
-    format!("Season {number} was removed. Nothing had been posted.")
-}
-
-pub fn season_shortened(number: u32, last_day: Date) -> String {
-    format!("Season {number} ends after {last_day}. No more sign-up posts.")
-}
-
-pub fn rehearsal_started(season: &Season, nights_left: usize, post_at_unix: Option<i64>) -> String {
+pub fn rehearsal_started(event: &Event, sessions_left: usize, post_at_unix: Option<i64>) -> String {
     sentences(&[
-        format!(
-            "Rehearsing season {}.",
-            season_label(season.number, season.codename.as_deref())
-        ),
-        still_ahead(season, nights_left),
-        next_post(nights_left, post_at_unix),
-        manage_with(season),
+        format!("Rehearsing {}.", escape(&event.name)),
+        still_ahead(event, sessions_left),
+        next_post(sessions_left, post_at_unix),
     ])
 }
 
-pub fn season_edited(
-    season: &Season,
-    nights_left: usize,
-    post_at_unix: Option<i64>,
-    cleared: usize,
-) -> String {
-    sentences(&[
-        format!(
-            "{} updated.",
-            season_name(season.number, season.codename.as_deref())
-        ),
-        still_ahead(season, nights_left),
-        next_post(nights_left, post_at_unix),
-        cleared_outside_the_range(cleared),
-        manage_with(season),
-    ])
-}
-
-pub fn season_edit_reached(edited: &str, cleared: &PostsReport, refreshed: &PostsReport) -> String {
-    let reply = sentences(&[
-        edited.to_owned(),
-        if cleared.failures == 0 {
-            String::new()
-        } else {
-            CLEAR_FAILED_EDIT.to_owned()
-        },
-        if refreshed.failures == 0 {
-            String::new()
-        } else {
-            REFRESH_FAILED.to_owned()
-        },
-    ]);
-    failures_noted(&reply, cleared.failures + refreshed.failures)
-}
-
-pub fn season_moved(
-    season: &Season,
-    nights_left: usize,
-    cleared: usize,
-    post_at_unix: Option<i64>,
-) -> String {
-    sentences(&[
-        format!(
-            "{} now posts in this channel.",
-            season_name(season.number, season.codename.as_deref())
-        ),
-        cleared_from_the_old_channel(cleared),
-        next_post(nights_left, post_at_unix),
-    ])
-}
-
-pub fn season_ended(number: u32, cleared: usize) -> String {
+pub fn event_ended(name: &str, cleared: usize) -> String {
     let kept = match cleared {
         0 => "The answers are kept.".to_owned(),
         cleared => format!(
@@ -871,7 +850,7 @@ pub fn season_ended(number: u32, cleared: usize) -> String {
             cleared_verb(cleared)
         ),
     };
-    format!("Season {number} has ended. {kept}")
+    format!("{} has ended. {kept}", escape(name))
 }
 
 pub fn stepped(moment_unix: i64, report: &TickReport) -> String {
@@ -913,7 +892,7 @@ fn already_cleared(count: usize) -> String {
 
 pub fn reset_done(purge: &PurgeReport) -> String {
     let counts: Vec<String> = [
-        (purge.seasons, seasons(purge.seasons)),
+        (purge.events, events(purge.events)),
         (purge.messages, signup_posts(purge.messages)),
         (purge.answers, answers(purge.answers)),
     ]
@@ -928,10 +907,10 @@ pub fn reset_done(purge: &PurgeReport) -> String {
     }])
 }
 
-pub fn reposted(season: &Season, night: Night, adopted: bool, pinged: &[Ping]) -> String {
-    let name = season_name(season.number, season.codename.as_deref());
-    let place = format!("<#{}>", season.channel.get());
-    let label = night.label();
+pub fn reposted(event: &Event, session: Session, adopted: bool, pinged: &[Ping]) -> String {
+    let name = escape(&event.name);
+    let place = format!("<#{}>", event.channel.get());
+    let label = session.label();
     let done = if adopted {
         format!(
             "Recovered {name}'s sign-up post for {label} in {place}, left there by an earlier repost that did not finish. It was not pinged again."
@@ -945,6 +924,178 @@ pub fn reposted(season: &Season, night: Night, adopted: bool, pinged: &[Ping]) -
         done
     } else {
         format!("{done} It pinged {}.", ping_mentions(pinged))
+    }
+}
+
+pub fn event_line(event: &Event, now_unix: i64) -> String {
+    let span = &event.span;
+    let schedule = span.schedule();
+    let sessions_left = span.sessions_left(now_unix);
+    let start = span
+        .next_session(now_unix)
+        .or_else(|| span.sessions().last())
+        .map(|session| format!(" at {}", clock_time(session.start_unix())))
+        .unwrap_or_default();
+    format!(
+        "<#{}> **{}**, {} to {}. {}{start}, {}, {}. {} ahead. {}{}",
+        event.channel.get(),
+        escape(&event.name),
+        span.first_day(),
+        span.last_day(),
+        weekdays_phrase(schedule.weekdays()),
+        hours_phrase(schedule.hours()),
+        schedule.zone().name(),
+        sessions(sessions_left),
+        next_post(sessions_left, next_post_at(span, now_unix)),
+        pings_line(
+            &event
+                .ping_roles
+                .iter()
+                .map(|role| Ping::of(event.guild, *role))
+                .collect::<Vec<Ping>>()
+        )
+    )
+}
+
+pub fn event_list(lines: &[String]) -> String {
+    if lines.is_empty() {
+        return NO_EVENT_HERE.to_string();
+    }
+    let kept: Vec<&str> = lines
+        .iter()
+        .scan(None::<usize>, |length, line| {
+            let next = length.map_or(0, |length| length + 1) + discord_length(line);
+            (next <= MESSAGE_CONTENT_LIMIT - EVENT_LIST_TAIL).then(|| {
+                *length = Some(next);
+                line.as_str()
+            })
+        })
+        .collect();
+    let hidden = lines.len() - kept.len();
+    let shown = kept.join("\n");
+    if hidden == 0 {
+        shown
+    } else {
+        format!("{shown}\nand {hidden} more.")
+    }
+}
+
+pub fn event_created(event: &Event, sessions_left: usize, post_at_unix: Option<i64>) -> String {
+    sentences(&[
+        format!(
+            "{} will post in <#{}>.",
+            escape(&event.name),
+            event.channel.get()
+        ),
+        still_ahead(event, sessions_left),
+        next_post(sessions_left, post_at_unix),
+    ])
+}
+
+pub fn event_edited(after: &Event, cleared: &PostsReport, refreshed: &PostsReport) -> String {
+    let reply = sentences(&[
+        format!("{} was updated.", escape(&after.name)),
+        format!(
+            "It posts in <#{}>, {} from {} to {}.",
+            after.channel.get(),
+            sessions(after.span.session_count()),
+            after.span.first_day(),
+            after.span.last_day()
+        ),
+        posts_cleared(cleared.touched),
+        posts_redrawn(refreshed.touched),
+        if cleared.failures == 0 {
+            String::new()
+        } else {
+            CLEAR_FAILED_EDIT.to_owned()
+        },
+        if refreshed.failures == 0 {
+            String::new()
+        } else {
+            REFRESH_FAILED.to_owned()
+        },
+    ]);
+    failures_noted(&reply, cleared.failures + refreshed.failures)
+}
+
+pub fn panel_preview(
+    name: &str,
+    channel: ChannelId,
+    span: &Span,
+    pings: &[Ping],
+    now_unix: i64,
+) -> String {
+    let schedule = span.schedule();
+    let first = span.sessions().next();
+    let start = first
+        .map(|session| format!(" at {}", clock_time(session.start_unix())))
+        .unwrap_or_default();
+    let count = match first {
+        Some(session) => format!(
+            "First session: {}. {}, {} still ahead.",
+            full_time(session.start_unix()),
+            sessions(span.session_count()),
+            span.sessions_left(now_unix)
+        ),
+        None => NO_SESSION_IN_SPAN.to_owned(),
+    };
+    let pinged = if pings.is_empty() {
+        "nobody".to_owned()
+    } else {
+        ping_mentions(pings)
+    };
+    [
+        format!("**{}** in <#{}>", escape(name), channel.get()),
+        format!(
+            "{} to {}. {}{start}, {}, {}.",
+            span.first_day(),
+            span.last_day(),
+            weekdays_phrase(schedule.weekdays()),
+            hours_phrase(schedule.hours()),
+            schedule.zone().name()
+        ),
+        count,
+        format!("Pings {pinged}."),
+    ]
+    .join("\n")
+}
+
+pub fn everyone_label(on: bool) -> &'static str {
+    if on {
+        "Ping @everyone: on"
+    } else {
+        "Ping @everyone: off"
+    }
+}
+
+pub fn date_label(date: Date) -> String {
+    format!("{date} ({})", weekday_name(date.weekday()))
+}
+
+fn weekdays_phrase(weekdays: Weekdays) -> String {
+    if weekdays == Weekdays::EVERY_DAY {
+        return EVERY_DAY.to_owned();
+    }
+    let names: Vec<&str> = weekdays.days().into_iter().map(weekday_name).collect();
+    join_names(&names)
+}
+
+pub fn weekday_name(day: Weekday) -> &'static str {
+    match day {
+        Weekday::Monday => "Monday",
+        Weekday::Tuesday => "Tuesday",
+        Weekday::Wednesday => "Wednesday",
+        Weekday::Thursday => "Thursday",
+        Weekday::Friday => "Friday",
+        Weekday::Saturday => "Saturday",
+        Weekday::Sunday => "Sunday",
+    }
+}
+
+fn hours_phrase(hours: Hours) -> String {
+    match hours.get() {
+        1 => "1 hour".to_owned(),
+        count => format!("{count} hours"),
     }
 }
 
@@ -1089,44 +1240,32 @@ fn mentionable_alternatives(pings: &[Ping]) -> String {
     }
 }
 
-fn still_ahead(season: &Season, nights_left: usize) -> String {
+fn still_ahead(event: &Event, sessions_left: usize) -> String {
     format!(
-        "{}, {nights_left} still ahead.",
-        nights(season.range.night_count())
+        "{}, {sessions_left} still ahead.",
+        sessions(event.span.session_count())
     )
 }
 
-fn manage_with(season: &Season) -> String {
-    format!("Manage it with number {}.", season.number)
-}
-
-fn next_post(nights_left: usize, post_at_unix: Option<i64>) -> String {
-    if nights_left == 0 {
+fn next_post(sessions_left: usize, post_at_unix: Option<i64>) -> String {
+    if sessions_left == 0 {
         NOTHING_AHEAD.to_owned()
     } else {
         format!("Next sign-up post: {}.", post_time(post_at_unix))
     }
 }
 
-fn cleared_outside_the_range(cleared: usize) -> String {
-    match cleared {
+fn posts_cleared(count: usize) -> String {
+    match count {
         0 => String::new(),
-        cleared => format!(
-            "{} outside the new dates {}.",
-            signup_posts(cleared),
-            cleared_verb(cleared)
-        ),
+        count => format!("{} {}.", signup_posts(count), cleared_verb(count)),
     }
 }
 
-fn cleared_from_the_old_channel(cleared: usize) -> String {
-    match cleared {
+fn posts_redrawn(count: usize) -> String {
+    match count {
         0 => String::new(),
-        cleared => format!(
-            "{} {} from the old channel.",
-            signup_posts(cleared),
-            cleared_verb(cleared)
-        ),
+        count => format!("{} {} redrawn.", signup_posts(count), was_verb(count)),
     }
 }
 
@@ -1180,10 +1319,17 @@ fn signup_posts(count: usize) -> String {
     }
 }
 
-fn seasons(count: usize) -> String {
+fn events(count: usize) -> String {
     match count {
-        1 => "1 season".to_owned(),
-        count => format!("{count} seasons"),
+        1 => "1 event".to_owned(),
+        count => format!("{count} events"),
+    }
+}
+
+fn sessions(count: usize) -> String {
+    match count {
+        1 => "1 session".to_owned(),
+        count => format!("{count} sessions"),
     }
 }
 
@@ -1238,49 +1384,129 @@ fn sentence(text: &str) -> String {
     }
 }
 
-fn season_name(number: u32, codename: Option<&str>) -> String {
-    format!("Season {}", season_label(number, codename))
-}
-
-fn season_label(number: u32, codename: Option<&str>) -> String {
-    match codename {
-        Some(codename) => format!("{number}: {}", escape(codename)),
-        None => number.to_string(),
-    }
-}
-
 fn choice_label(attending: bool) -> &'static str {
     if attending { "Attending" } else { "Nope" }
 }
 
-fn hour_line(night: Night, tally: &HourTally) -> String {
+fn hour_line(session: Session, tally: &HourTally) -> String {
     format!(
         "**Hour {}** · {} – {} · {} in · {} out",
         tally.hour.get(),
-        clock_time(night.hour_start_unix(tally.hour)),
-        clock_time(night.hour_end_unix(tally.hour)),
+        clock_time(session.hour_start_unix(tally.hour)),
+        clock_time(session.hour_end_unix(tally.hour)),
         tally.attending,
         tally.nope
     )
 }
 
-fn roster_lines(view: &SignupView) -> Vec<String> {
-    if view.rows.is_empty() {
-        return vec![NO_ANSWERS_YET.to_owned()];
-    }
-    std::iter::once(format!("`{ROSTER_HEADER}`"))
-        .chain(view.rows.iter().map(roster_line))
-        .chain((view.hidden > 0).then(|| format!("and {} more.", view.hidden)))
+fn roster_header(hours: Hours) -> String {
+    hours
+        .each()
+        .map(|hour| format!("{:<CELL_WIDTH$}", hour.get()))
         .collect()
 }
 
-fn roster_line(row: &RosterRow) -> String {
-    let cells: String = row
-        .cells
+fn roster_lines(view: &SignupView, kept: usize) -> Vec<String> {
+    if view.rows.is_empty() {
+        return vec![NO_ANSWERS_YET.to_owned()];
+    }
+    let hours = view.session.hours();
+    let hidden = view.hidden + view.rows.len() - kept;
+    short_event(hours)
+        .then(|| format!("`{}`", roster_header(hours)))
+        .into_iter()
+        .chain(
+            view.rows
+                .iter()
+                .take(kept)
+                .map(|row| roster_line(hours, row)),
+        )
+        .chain((hidden > 0).then(|| format!("and {hidden} more.")))
+        .collect()
+}
+
+fn roster_line(hours: Hours, row: &RosterRow) -> String {
+    let answer = if short_event(hours) {
+        row.cells
+            .iter()
+            .map(|cell| format!("{:<CELL_WIDTH$}", cell_text(*cell)))
+            .collect()
+    } else {
+        let attending: Vec<Hour> = hours
+            .each()
+            .zip(&row.cells)
+            .filter(|(_, cell)| **cell == Cell::In)
+            .map(|(hour, _)| hour)
+            .collect();
+        if attending.is_empty() {
+            cell_text(Cell::Out).to_owned()
+        } else {
+            hour_ranges(&attending)
+        }
+    };
+    format!("`{answer}` <@{}>", row.user.get())
+}
+
+pub fn hour_ranges(hours: &[Hour]) -> String {
+    let numbers: BTreeSet<u8> = hours.iter().map(|hour| hour.get()).collect();
+    numbers
         .iter()
-        .map(|cell| format!("{:<CELL_WIDTH$}", cell_text(*cell)))
-        .collect();
-    format!("`{cells}` <@{}>", row.user.get())
+        .fold(Vec::<(u8, u8)>::new(), |runs, &number| {
+            match runs.split_last() {
+                Some((&(first, last), earlier)) if last + 1 == number => earlier
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once((first, number)))
+                    .collect(),
+                _ => runs
+                    .into_iter()
+                    .chain(std::iter::once((number, number)))
+                    .collect(),
+            }
+        })
+        .into_iter()
+        .map(|(first, last)| {
+            if first == last {
+                first.to_string()
+            } else {
+                format!("{first}–{last}")
+            }
+        })
+        .collect::<Vec<String>>()
+        .join(", ")
+}
+
+pub fn hours_menu_text(view: &SignupView) -> String {
+    let session = view.session;
+    std::iter::once(format!(
+        "Pick the hours you attend for {}, {}.",
+        escape(&view.name),
+        full_time(session.start_unix())
+    ))
+    .chain(session.hours().each().map(|hour| {
+        format!(
+            "**Hour {}** · {} – {}",
+            hour.get(),
+            clock_time(session.hour_start_unix(hour)),
+            clock_time(session.hour_end_unix(hour))
+        )
+    }))
+    .collect::<Vec<String>>()
+    .join("\n")
+}
+
+pub fn hours_saved(attending: &[Hour]) -> String {
+    match attending.len() {
+        0 => "Saved. You attend no hour of this session.".to_owned(),
+        1 => format!(
+            "Saved. You attend hour {} of this session.",
+            hour_ranges(attending)
+        ),
+        _ => format!(
+            "Saved. You attend hours {} of this session.",
+            hour_ranges(attending)
+        ),
+    }
 }
 
 fn cell_text(cell: Cell) -> &'static str {

@@ -17,6 +17,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 const NAME: &str = "15.8.0_13187581_r4";
 const CLI_DIRECTIVE: &str = ".bail on\n";
 const VOICE_ROOMS: &str = include_str!("../../../migrations/0005_voice_rooms.sql");
+const BOT_UPDATES: &str = include_str!("../../../migrations/0007_bot_updates.sql");
 
 struct Layout {
     _dir: tempfile::TempDir,
@@ -366,4 +367,104 @@ async fn a_database_before_0007_is_told_to_apply_it() {
         "sqlite3 {} < migrations/0007_bot_updates.sql",
         layout.config.database.display()
     )));
+}
+
+async fn migrated(layout: &Layout, migrations: &[&'static str], after: &'static str) {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&layout.config.database)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    for migration in migrations {
+        sqlx::raw_sql(migration.trim_start_matches(CLI_DIRECTIVE))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    sqlx::raw_sql(after).execute(&pool).await.unwrap();
+    pool.close().await;
+}
+
+const THROUGH_0007: [&str; 7] = [
+    common::MIGRATION,
+    common::CB_MIGRATION,
+    common::CB_CONTROLS,
+    common::CB_HARNESS,
+    VOICE_ROOMS,
+    common::CB_PING_ROLES,
+    BOT_UPDATES,
+];
+
+#[tokio::test]
+async fn a_database_before_0008_is_told_to_apply_it() {
+    let layout = layout(
+        &yamato_catalog(),
+        &["PJSB018", "PJSB019"],
+        &curation_text(""),
+    );
+    migrated(&layout, &THROUGH_0007, "").await;
+    let error = startup::open_stores(&layout.config.database)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, StartupError::Events { .. }));
+    assert!(error.to_string().contains("migrations/0008_events.sql"));
+}
+
+#[tokio::test]
+async fn a_database_without_the_live_name_index_is_told_to_apply_0008() {
+    let layout = layout(
+        &yamato_catalog(),
+        &["PJSB018", "PJSB019"],
+        &curation_text(""),
+    );
+    let through_0008: Vec<&str> = THROUGH_0007
+        .into_iter()
+        .chain([common::CB_EVENTS])
+        .collect();
+    migrated(&layout, &through_0008, "DROP INDEX cb_seasons_live_name;").await;
+    let error = startup::open_stores(&layout.config.database)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, StartupError::Events { .. }));
+    assert!(error.to_string().contains("migrations/0008_events.sql"));
+}
+
+#[tokio::test]
+async fn a_database_at_0008_opens() {
+    let layout = layout(
+        &yamato_catalog(),
+        &["PJSB018", "PJSB019"],
+        &curation_text(""),
+    );
+    let through_0008: Vec<&str> = THROUGH_0007
+        .into_iter()
+        .chain([common::CB_EVENTS])
+        .collect();
+    migrated(&layout, &through_0008, "").await;
+    assert!(startup::open_stores(&layout.config.database).await.is_ok());
+}
+
+#[tokio::test]
+async fn a_database_before_0008_and_0005_is_told_to_apply_0005_first() {
+    let layout = layout(
+        &yamato_catalog(),
+        &["PJSB018", "PJSB019"],
+        &curation_text(""),
+    );
+    let without_voice: Vec<&str> = THROUGH_0007
+        .into_iter()
+        .filter(|migration| *migration != VOICE_ROOMS)
+        .collect();
+    migrated(&layout, &without_voice, "").await;
+    let error = startup::open_stores(&layout.config.database)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, StartupError::VoiceRooms { .. }));
 }

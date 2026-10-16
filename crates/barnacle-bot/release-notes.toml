@@ -1,4 +1,32 @@
 [[release]]
+version = "0.3.0"
+summary = "This update lets servers schedule any event with sign-ups, not only Clan Battles."
+
+[[release.feature]]
+title = "Events"
+audience = "server managers"
+story = [
+    "Until now, Barnacle could only run Clan Battle sign-ups, always at the same fixed times.",
+    "Now any event sets its name, days, start time in your zone and 1 to 24 hours, and members see times in their own zone.",
+]
+steps = [
+    "Type /event create with the event's name and its first and last day.",
+    "Pick the Clan Battles template, or give a start time, the hours and a time zone such as America/Denver.",
+    "On the private panel, pick the days and the roles to ping, then press Create.",
+    "To change or end the event later, type /event edit or /event end.",
+]
+expect = [
+    "The sign-up post goes up 24 hours before each session.",
+    "Sign-ups close when the session starts, and the post is cleaned up 30 minutes after it ends.",
+    "On events longer than four hours, members press Choose hours to pick the hours they will play.",
+]
+
+[[release.change]]
+title = "Clan Battle sign-ups"
+before = "Clan Battle sign-ups were set up with /cb season and the season's number."
+now = "A Clan Battles event is made with /event create and its template, and existing seasons and posts carry over unchanged."
+
+[[release]]
 version = "0.2.0"
 summary = "This update lets you play several silhouette rounds in a row and lets servers choose where Barnacle posts news."
 
