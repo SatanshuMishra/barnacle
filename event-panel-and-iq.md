@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-01T23:58:59.862Z
+Updated: 2026-11-01T23:59:19.341Z
 Next ids: c3 D4 R2 S1
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-The spec is handed off. Feature branch feat/event-panel-and-iq is cut from main at a77e6f0; the seeding cargo build is running. The run home lacks run.zsh and items.json.
+The spec is handed off. Feature branch feat/event-panel-and-iq is cut from main at a77e6f0 and holds the receipts config (9470ff7, pushed); the seeding cargo build is running. The run home lacks run.zsh and items.json.
 
 ## Next step
 
