@@ -1,7 +1,7 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-01T23:47:21.120Z
-Next ids: c3 D3 R1 S1
+Updated: 2026-11-01T23:49:37.870Z
+Next ids: c3 D3 R2 S1
 
 ## Goal
 
@@ -14,11 +14,11 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-Interphase (unattended) is in Phase 9: the spec, record and items are written and pass their checks; the one spec review is running.
+Interphase (unattended) is in Phase 9: the spec, record and items pass their checks and pipeline guarantees; the glossary and two ADRs are written; the one spec review is running. The run home holds CHARTER.md, dispatch.zsh, worker-rules.txt and receipts-answers.json; run.zsh and items.json are not written yet.
 
 ## Next step
 
-Fix the spec reviewer's real issues, rerun render and checks, then Phase 10 hand-off (glossary, ADRs, guard verify), then pipeline guarantees and the feature branch.
+Fix the spec reviewer's real issues, rerun render and checks, verify the guard and hand off; then build target/debug in the checkout (seed.py clones it per worktree), cut the feature branch, commit the receipts config, write run.zsh, plan, and start the drive.
 
 ## Decisions in force
 
@@ -27,6 +27,8 @@ Fix the spec reviewer's real issues, rerun render and checks, then Phase 10 hand
 
 ## Open risks
 
+- R1 The checkout has no target/debug, so seed.py fails and every acceptance run is inconclusive until cargo builds it.
+
 ## Settled, do not reopen
 
 ## Where the details live
@@ -34,4 +36,5 @@ Fix the spec reviewer's real issues, rerun render and checks, then Phase 10 hand
 - Approved prototype: https://claude.ai/artifact/LkbTmDty3cBnPSCMGUrtFL
 - Prototype sources: /private/tmp/claude-501/-Users-satanshumishra-Documents-DevLabs-barnacle/54bd6046-bf94-46f7-a742-87b3d50c95da/scratchpad/proto/project/
 - Spec, decisions, record, items: docs/specs/event-panel-and-iq.{md,decisions.md,record.json,items.json}
-- Drafted receipts answers: /var/folders/tz/b798spt96sjfyy924nf0cw4c0000gn/T/tmp.eIm8UoQZ5S/answers.json
+- Run home: ~/.mitosis/barnacle/event-panel-and-iq (receipts answers, charter, dispatch, worker rules)
+- Glossary and ADRs: GLOSSARY.md, docs/adr/0001-competitions-are-archived-and-reused-as-templates.md, docs/adr/0002-iq-scoring-trusts-judges.md
