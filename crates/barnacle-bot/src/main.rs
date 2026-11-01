@@ -24,7 +24,7 @@ enum AppError {
     #[error(transparent)]
     Startup(#[from] startup::StartupError),
     #[error(transparent)]
-    Run(#[from] discord::RunError),
+    Run(#[from] Box<discord::RunError>),
 }
 
 #[tokio::main]
@@ -47,7 +47,7 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
         Err(AppError::Run(error)) => {
-            fail(&settings.format, "service.failed", &error);
+            fail(&settings.format, "service.failed", &*error);
             ExitCode::FAILURE
         }
     }
