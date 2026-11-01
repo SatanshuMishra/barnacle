@@ -1,6 +1,6 @@
 # event-scheduler: Generalise CB sign-ups into scheduled events under /event
-Status: parked
-Updated: 2026-11-01T21:06:58.906Z
+Status: done
+Updated: 2026-11-01T21:06:59.066Z
 Next ids: c8 D17 R1 S1
 
 ## Goal
