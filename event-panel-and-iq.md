@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-01T23:58:45.224Z
+Updated: 2026-11-01T23:58:45.966Z
 Next ids: c3 D4 R2 S1
 
 ## Goal
@@ -18,7 +18,9 @@ Interphase (unattended) is in Phase 9: the spec, record and items pass their che
 
 ## Next step
 
-Fix the spec reviewer's real issues, rerun render and checks, verify the guard and hand off; then build target/debug in the checkout (seed.py clones it per worktree), cut the feature branch, commit the receipts config, write run.zsh, plan, and start the drive.
+Build target/debug in the checkout, cut the feature branch with pipeline feature-branch, commit receipts.config.json on it, write run.zsh and items.json in the run home, run --plan-only, then pipeline drive start.
+
+Needs: D1, D2, R1.
 
 ## Decisions in force
 
