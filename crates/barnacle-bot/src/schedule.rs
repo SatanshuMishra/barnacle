@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::fmt;
+use std::sync::LazyLock;
 
 use jiff::ToSpan;
 use jiff::civil::Date;
@@ -7,6 +8,7 @@ use jiff::civil::Weekday;
 use jiff::civil::time;
 use jiff::tz::Offset;
 use jiff::tz::TimeZone;
+use jiff::tz::TimeZoneDatabase;
 
 pub const MAX_HOURS: u8 = 24;
 pub const SECONDS_PER_HOUR: i64 = 3600;
@@ -192,7 +194,7 @@ impl Zone {
         if !text.contains('/') && !text.eq_ignore_ascii_case(UTC_NAME) {
             return None;
         }
-        let time_zone = TimeZone::get(text).ok()?;
+        let time_zone = ZONES.get(text).ok()?;
         let name = time_zone.iana_name()?.to_owned();
         Some(Self { name, time_zone })
     }
@@ -209,8 +211,10 @@ impl Zone {
     }
 }
 
+static ZONES: LazyLock<TimeZoneDatabase> = LazyLock::new(TimeZoneDatabase::bundled);
+
 pub fn zone_names() -> Vec<String> {
-    let names: BTreeSet<String> = jiff::tz::db()
+    let names: BTreeSet<String> = ZONES
         .available()
         .filter_map(|name| Zone::find(name.as_str()))
         .map(|zone| zone.name)
