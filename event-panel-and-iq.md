@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-01T23:29:59.358Z
+Updated: 2026-11-01T23:30:16.961Z
 Next ids: c3 D1 R1 S1
 
 ## Goal
@@ -18,7 +18,7 @@ Not started.
 
 ## Next step
 
-Run the full-lane readiness, receipts and do-not-flag gates, then invoke interphase:feature with the request and the approved prototype, ending "Interview me first."
+Ask the lighthouse init question, save the drafted receipts answers from scratch folder /var/folders/tz/b798spt96sjfyy924nf0cw4c0000gn/T/tmp.eIm8UoQZ5S, then invoke interphase:feature ending "Interview me first."
 
 ## Decisions in force
 
