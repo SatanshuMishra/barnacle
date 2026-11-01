@@ -2,7 +2,7 @@
 
 ARG CATALOG_ARCHIVE=catalog.tar.gz
 
-FROM lukemathwalker/cargo-chef:0.1.78-rust-1.97-slim-trixie AS chef
+FROM lukemathwalker/cargo-chef:0.1.78-rust-1.99-slim-trixie AS chef
 WORKDIR /src
 
 FROM chef AS planner

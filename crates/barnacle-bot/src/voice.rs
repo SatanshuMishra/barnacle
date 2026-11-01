@@ -222,7 +222,7 @@ impl<R: Rooms> VoiceRooms<R> {
             Ok(opened) => opened,
             Err(failure) => {
                 self.tell(hub, user, &failure, now_ms, &scope).await;
-                return JoinOutcome::Failed(failure);
+                return JoinOutcome::Failed(*failure);
             }
         };
         let scope = scope.room(room).room_number(number);
@@ -432,7 +432,7 @@ impl<R: Rooms> VoiceRooms<R> {
         layout: &HubLayout,
         now_ms: u64,
         scope: &Scope,
-    ) -> Result<(ChannelId, u32), Failure> {
+    ) -> Result<(ChannelId, u32), Box<Failure>> {
         let number = self
             .store
             .next_number(hub.guild, &hub.room_name)
@@ -484,7 +484,7 @@ impl<R: Rooms> VoiceRooms<R> {
                     &scope,
                 );
             }
-            return Err(failure);
+            return Err(Box::new(failure));
         }
         Ok((room, number))
     }

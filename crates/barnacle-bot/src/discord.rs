@@ -124,7 +124,7 @@ pub async fn run(
     attendance: Attendance,
     voice: VoiceStore,
     updates: UpdatesStore,
-) -> Result<(), RunError> {
+) -> Result<(), Box<RunError>> {
     let version = env!("CARGO_PKG_VERSION");
     let releases = release_notes::all().map_err(RunError::Notes)?;
     let release = release_notes::find(&releases, version)
@@ -283,13 +283,18 @@ pub async fn run(
         .build();
     let mut client = serenity::ClientBuilder::new(token, intents)
         .framework(framework)
-        .await?;
-    let application = client.http.get_current_application_info().await?;
+        .await
+        .map_err(RunError::from)?;
+    let application = client
+        .http
+        .get_current_application_info()
+        .await
+        .map_err(RunError::from)?;
     client.http.set_application_id(application.id);
     register(&client.http, &scope, &rehearsal)
         .await
-        .map_err(RunError::Registration)?;
-    client.start().await?;
+        .map_err(|error| RunError::Registration(*error))?;
+    client.start().await.map_err(RunError::from)?;
     Ok(())
 }
 
@@ -330,7 +335,7 @@ async fn register(
     http: &Arc<serenity::Http>,
     scope: &CommandScope,
     rehearsal: &[u64],
-) -> Result<(), serenity::Error> {
+) -> Result<(), Box<serenity::Error>> {
     match scope {
         CommandScope::Global => {
             poise::builtins::register_globally(http, &command_list(false)).await?;
