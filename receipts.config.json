@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "claim": {
+    "issue_link": "closes #(\\d+)",
+    "downgrade_tags": [
+      "unverified-reasoned",
+      "speculative",
+      "reverted"
+    ]
+  },
+  "build": {
+    "sha_source": "none",
+    "platform": "none",
+    "deploy_host_patterns": [],
+    "environments": {},
+    "verify_against": "none"
+  },
+  "verify": {
+    "test_command": "cargo test {test}",
+    "suite_command": "cargo test",
+    "live_drive": null
+  },
+  "degrade": {
+    "on_no_receipt": "require-downgrade-tag",
+    "on_unreachable_build": "sha-bind-only"
+  },
+  "agent": {
+    "loop_skills": [
+      "gates"
+    ],
+    "staging_query_patterns": [],
+    "observe": {
+      "confirmed": true,
+      "surface": "Discord: slash-command replies, ephemeral panels with select menus and buttons, modals, channel messages, reactions and replies sent by the barnacle bot",
+      "value": "The exact message text, component rows, reactions and stored rows the bot produces for a given interaction or message",
+      "observe_by": "cargo test --workspace against the pure builders and stores in crates/barnacle-bot/tests, plus a local dev bot probe in a test server",
+      "terminal_action": "The panel's final button (Create, Start competition, Save) or the reaction or message event that commits the change to the database",
+      "build_artifact": "The barnacle Docker image built by .github/workflows/image.yml and checked by .github/scripts/smoke.sh",
+      "twin": "Every panel built in crates/barnacle-bot/src/event_draft.rs and the command handlers in crates/barnacle-bot/src/discord/commands.rs",
+      "dependent": "The sign-up timer, attendance store and announcer that read stored events; migrations/ and smoke.sh for schema changes",
+      "receipt": "cargo test --workspace",
+      "compat_boundary": "The Discord API (slash-command registration and component payloads) and the SQLite schema under migrations/",
+      "reach": {
+        "access": "",
+        "shortcut": "",
+        "fixtures": "",
+        "special_surfaces": []
+      }
+    },
+    "closeout_fixed_statuses": [
+      "Pending Retest",
+      "Verified"
+    ],
+    "repo_name": "receipts-tree",
+    "receipts_version": "0.9.5",
+    "residue": {
+      "access": "The .env token is a dev bot; running it locally against a test server is authorized for probes",
+      "shortcut": "/rehearse start and /rehearse next move a rehearsal server's clock so timed behaviour can be stepped through",
+      "fixtures": "Tests seed their own data through crates/barnacle-bot/tests/common; live probes need a test server with roles",
+      "special_surfaces": "How the Discord client renders components and autocomplete labels, which only a live client shows"
+    }
+  },
+  "gates": {
+    "medium": "chat-bot",
+    "enabled": "all",
+    "disabled": [],
+    "G8": {
+      "integration_branch": "main"
+    }
+  }
+}
