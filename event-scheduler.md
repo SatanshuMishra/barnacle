@@ -1,6 +1,6 @@
 # event-scheduler: Generalise CB sign-ups into scheduled events under /event
-Status: active
-Updated: 2026-11-01T20:52:45.492Z
+Status: parked
+Updated: 2026-11-01T20:53:17.372Z
 Next ids: c8 D17 R1 S1
 
 ## Goal
@@ -23,7 +23,7 @@ Converted from the old ledger.
 
 ## Next step
 
-Owner reviews draft pull request SatanshuMishra/barnacle#49 (branch mitosis/event-scheduler at f381f8a), its CI and the image workflow's smoke check of migration 0008; strengthen reposting_an_event_by_id_keeps_its_answers in crates/barnacle-bot/tests/attendance.rs to assert both rosters' members and answers if wanted; then merge or send changes back.
+Decide how to clean the event-scheduler run, which predates pipeline feature branches: pipeline clean --repo /Users/satanshumishra/Documents/DevLabs/barnacle --slug event-scheduler exits 2 with "no feature.json in /Users/satanshumishra/.mitosis/barnacle/event-scheduler", since the run built on main and wrote no feature.json. Either the owner removes the run home, the run dirs under ~/.mitosis/runs/barnacle/event-scheduler*, the mitosis/event-scheduler* local branches and docs/specs/event-scheduler.* by hand, or pipeline clean gains a path for pre-feature-branch runs; then close the thread.
 
 ## Decisions in force
 
