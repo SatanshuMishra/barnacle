@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-01T23:58:45.966Z
+Updated: 2026-11-01T23:58:59.862Z
 Next ids: c3 D4 R2 S1
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-Interphase (unattended) is in Phase 9: the spec, record and items pass their checks and pipeline guarantees; the glossary and two ADRs are written; the one spec review is running. The run home holds CHARTER.md, dispatch.zsh, worker-rules.txt and receipts-answers.json; run.zsh and items.json are not written yet.
+The spec is handed off. Feature branch feat/event-panel-and-iq is cut from main at a77e6f0; the seeding cargo build is running. The run home lacks run.zsh and items.json.
 
 ## Next step
 
