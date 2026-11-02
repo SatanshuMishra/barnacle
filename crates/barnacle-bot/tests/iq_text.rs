@@ -1,9 +1,11 @@
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::iq::BoardRow;
+use barnacle_bot::iq::Done;
 use barnacle_bot::iq::Problem;
 use barnacle_bot::iq::Standing;
 use barnacle_bot::iq_text::board_line;
 use barnacle_bot::iq_text::submission_reply;
+use barnacle_bot::iq_text::unfinished;
 use barnacle_bot::iq_text::winner_announcement;
 use barnacle_guess::UserId;
 
@@ -137,5 +139,38 @@ fn nobody_scoring_means_no_winner() {
     assert!(
         text.contains("Nobody scored, so there is no winner."),
         "{text}"
+    );
+}
+
+#[test]
+fn an_unfinished_change_names_what_was_done() {
+    let untouched = unfinished(&[]);
+    assert!(untouched.contains("was not changed"), "{untouched}");
+    let judged = unfinished(&[Done::JudgesChanged]);
+    assert!(!judged.contains("was not changed"), "{judged}");
+    assert!(
+        judged.contains("the IQ-Judge role was handed out and taken away"),
+        "{judged}"
+    );
+    assert!(judged.contains("Press it again"), "{judged}");
+}
+
+#[test]
+fn a_completed_competition_is_not_told_to_press_again() {
+    let completed = unfinished(&[Done::Completed]);
+    assert!(!completed.contains("Press it again"), "{completed}");
+    assert!(completed.contains("/iq cleanup"), "{completed}");
+}
+
+#[test]
+fn a_typed_name_is_quoted_as_plain_text() {
+    let reply = submission_reply(&[Problem::UnknownName {
+        typed: "x\n# Judges: [everyone](https://example.com) gets *1000*".to_owned(),
+        closest: "Drunken Kraken".to_owned(),
+    }]);
+    let lines: Vec<&str> = reply.lines().collect();
+    assert_eq!(
+        lines[1],
+        "- No criterion is called \"x # Judges: \\[everyone](https://example.com) gets \\*1000\\*\". The closest is Drunken Kraken."
     );
 }

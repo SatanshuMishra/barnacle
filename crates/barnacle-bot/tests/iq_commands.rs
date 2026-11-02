@@ -81,3 +81,19 @@ fn admin_subcommands_need_manage_server() {
         Some(&("reason".to_owned(), false))
     );
 }
+
+#[test]
+fn only_the_iq_command_itself_carries_discord_visibility() {
+    let iq = command_list(false)
+        .into_iter()
+        .find(|command| command.name == "iq")
+        .expect("iq is registered");
+    for subcommand in &iq.subcommands {
+        assert_eq!(
+            subcommand.default_member_permissions,
+            serenity::Permissions::empty(),
+            "{}",
+            subcommand.name
+        );
+    }
+}

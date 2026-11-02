@@ -209,6 +209,15 @@ impl Zone {
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    pub fn midnight_after(&self, day: Date) -> i64 {
+        day.saturating_add(1.day())
+            .to_datetime(time(0, 0, 0, 0))
+            .to_zoned(self.time_zone.clone())
+            .map_or(jiff::Timestamp::MAX.as_second(), |midnight| {
+                midnight.timestamp().as_second()
+            })
+    }
 }
 
 static ZONES: LazyLock<TimeZoneDatabase> = LazyLock::new(TimeZoneDatabase::bundled);

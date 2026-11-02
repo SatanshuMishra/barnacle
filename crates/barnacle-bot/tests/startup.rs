@@ -18,6 +18,8 @@ const NAME: &str = "15.8.0_13187581_r4";
 const CLI_DIRECTIVE: &str = ".bail on\n";
 const VOICE_ROOMS: &str = include_str!("../../../migrations/0005_voice_rooms.sql");
 const BOT_UPDATES: &str = include_str!("../../../migrations/0007_bot_updates.sql");
+const IQ_COMPETITION: &str = include_str!("../../../migrations/0009_iq_competition.sql");
+const IQ_COMPETITION_DOWN: &str = include_str!("../../../migrations/0009_iq_competition.down.sql");
 
 struct Layout {
     _dir: tempfile::TempDir,
@@ -436,7 +438,7 @@ async fn a_database_without_the_live_name_index_is_told_to_apply_0008() {
 }
 
 #[tokio::test]
-async fn a_database_at_0008_opens() {
+async fn a_database_before_0009_is_told_to_apply_it() {
     let layout = layout(
         &yamato_catalog(),
         &["PJSB018", "PJSB019"],
@@ -447,6 +449,77 @@ async fn a_database_at_0008_opens() {
         .chain([common::CB_EVENTS])
         .collect();
     migrated(&layout, &through_0008, "").await;
+    let error = startup::open_stores(&layout.config.database)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, StartupError::Iq { .. }));
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "the IQ Competition tables are missing from {path}; back the file up, then add them with `sqlite3 {path} < migrations/0009_iq_competition.sql`",
+            path = layout.config.database.display()
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_database_without_the_live_competition_index_is_told_to_apply_0009() {
+    let layout = layout(
+        &yamato_catalog(),
+        &["PJSB018", "PJSB019"],
+        &curation_text(""),
+    );
+    let through_0009: Vec<&str> = THROUGH_0007
+        .into_iter()
+        .chain([common::CB_EVENTS, IQ_COMPETITION])
+        .collect();
+    migrated(&layout, &through_0009, "DROP INDEX iq_competitions_live;").await;
+    let error = startup::open_stores(&layout.config.database)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, StartupError::Iq { .. }));
+    assert!(
+        error
+            .to_string()
+            .contains("migrations/0009_iq_competition.sql")
+    );
+}
+
+#[tokio::test]
+async fn a_database_rolled_back_from_0009_is_told_to_apply_it_again() {
+    let layout = layout(
+        &yamato_catalog(),
+        &["PJSB018", "PJSB019"],
+        &curation_text(""),
+    );
+    let rolled_back: Vec<&str> = THROUGH_0007
+        .into_iter()
+        .chain([common::CB_EVENTS, IQ_COMPETITION, IQ_COMPETITION_DOWN])
+        .collect();
+    migrated(&layout, &rolled_back, "").await;
+    let error = startup::open_stores(&layout.config.database)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, StartupError::Iq { .. }));
+    migrated(&layout, &[IQ_COMPETITION], "").await;
+    assert!(startup::open_stores(&layout.config.database).await.is_ok());
+}
+
+#[tokio::test]
+async fn a_database_at_0009_opens() {
+    let layout = layout(
+        &yamato_catalog(),
+        &["PJSB018", "PJSB019"],
+        &curation_text(""),
+    );
+    let through_0009: Vec<&str> = THROUGH_0007
+        .into_iter()
+        .chain([common::CB_EVENTS, IQ_COMPETITION])
+        .collect();
+    migrated(&layout, &through_0009, "").await;
     assert!(startup::open_stores(&layout.config.database).await.is_ok());
 }
 

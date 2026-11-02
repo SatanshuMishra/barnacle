@@ -11,6 +11,7 @@ use barnacle_bot::iq::Score;
 use barnacle_bot::iq::Status;
 use barnacle_bot::iq_store::AwardOutcome;
 use barnacle_bot::iq_store::Competition;
+use barnacle_bot::iq_store::ConfigChange;
 use barnacle_bot::iq_store::CreateOutcome;
 use barnacle_bot::iq_store::IqStore;
 use barnacle_bot::iq_store::NewCompetition;
@@ -278,14 +279,14 @@ async fn points_are_kept_as_they_were_when_posted() {
         criterion("Drunken Kraken", "Five kills in one battle.", 7),
     ];
     store
-        .update_config(
-            november.id,
-            &edited,
-            RULES,
-            &[RoleId::new(31)],
-            &[JUDGE, SECOND_JUDGE],
-            JudgingReaction::Trophy,
-        )
+        .update_config(&ConfigChange {
+            competition: november.id,
+            criteria: edited,
+            rules: RULES.to_owned(),
+            roles: vec![RoleId::new(31)],
+            judges: vec![JUDGE, SECOND_JUDGE],
+            reaction: JudgingReaction::Trophy,
+        })
         .await
         .unwrap();
     assert_eq!(
@@ -426,4 +427,44 @@ async fn an_adjustment_counts_in_the_scores() {
     let scores = store.scores(november.id).await.unwrap();
     assert_eq!(points_of(&scores, PLAYER), 0);
     assert_eq!(points_of(&scores, SECOND_PLAYER), 3);
+}
+
+#[tokio::test]
+async fn reverting_a_completion_returns_it_to_its_old_status() {
+    let store = store().await;
+    let november = running(&store).await;
+    store
+        .set_status(november.id, Status::Completed)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .revert_completed(november.id, Status::Running)
+            .await
+            .unwrap()
+    );
+    let live = store
+        .live(GUILD)
+        .await
+        .unwrap()
+        .expect("a live competition");
+    assert_eq!(live.status, Status::Running);
+}
+
+#[tokio::test]
+async fn reverting_a_completion_leaves_an_archived_competition_alone() {
+    let store = store().await;
+    let november = running(&store).await;
+    store
+        .set_status(november.id, Status::Completed)
+        .await
+        .unwrap();
+    store.archive(november.id).await.unwrap();
+    assert!(
+        !store
+            .revert_completed(november.id, Status::Running)
+            .await
+            .unwrap()
+    );
+    assert!(store.live(GUILD).await.unwrap().is_none());
 }

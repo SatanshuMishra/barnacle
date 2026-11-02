@@ -1,19 +1,28 @@
+use barnacle_bot::failure::Kind;
+use barnacle_bot::ids::ChannelId;
+use barnacle_bot::ids::GuildId;
 use barnacle_bot::iq::Attachment;
 use barnacle_bot::iq::BoardRow;
+use barnacle_bot::iq::CaughtUp;
+use barnacle_bot::iq::CheckPath;
 use barnacle_bot::iq::Checked;
 use barnacle_bot::iq::CleanupRefusal;
 use barnacle_bot::iq::CompleteRefusal;
 use barnacle_bot::iq::Criterion;
+use barnacle_bot::iq::Judged;
 use barnacle_bot::iq::Problem;
 use barnacle_bot::iq::Score;
 use barnacle_bot::iq::StartChoice;
 use barnacle_bot::iq::Status;
+use barnacle_bot::iq::Unsettled;
 use barnacle_bot::iq::board_rows;
 use barnacle_bot::iq::check_submission;
 use barnacle_bot::iq::end_unix;
 use barnacle_bot::iq::may_clean_up;
 use barnacle_bot::iq::may_complete;
 use barnacle_bot::iq::message_chunks;
+use barnacle_bot::iq::moves_last_seen;
+use barnacle_bot::iq::role_already_off;
 use barnacle_bot::iq::should_check;
 use barnacle_bot::iq::standings;
 use barnacle_bot::iq::start_choice;
@@ -353,4 +362,72 @@ fn a_single_overlong_line_is_cut() {
     let sizes: Vec<usize> = chunks.iter().map(|chunk| chunk.chars().count()).collect();
     assert_eq!(sizes, [2000, 2000, 500]);
     assert_eq!(chunks.concat(), text);
+}
+
+#[test]
+fn a_live_check_moves_the_mark_only_after_its_server_caught_up() {
+    assert!(!moves_last_seen(CheckPath::Live, false));
+    assert!(moves_last_seen(CheckPath::Live, true));
+    assert!(moves_last_seen(CheckPath::CatchUp, false));
+}
+
+#[test]
+fn a_new_connection_forgets_every_caught_up_server() {
+    let caught_up = CaughtUp::default();
+    let connection = caught_up.connect();
+    assert!(!caught_up.holds(GuildId::new(5)));
+    caught_up.finish(GuildId::new(5), connection);
+    assert!(caught_up.holds(GuildId::new(5)));
+    assert!(!caught_up.holds(GuildId::new(6)));
+    caught_up.connect();
+    assert!(!caught_up.holds(GuildId::new(5)));
+}
+
+#[test]
+fn an_older_connection_cannot_mark_a_server_caught_up() {
+    let caught_up = CaughtUp::default();
+    let older = caught_up.connect();
+    let newer = caught_up.connect();
+    caught_up.finish(GuildId::new(5), older);
+    assert!(!caught_up.holds(GuildId::new(5)));
+    caught_up.finish(GuildId::new(5), newer);
+    assert!(caught_up.holds(GuildId::new(5)));
+    assert_eq!(caught_up.current(), newer);
+}
+
+#[test]
+fn a_left_member_or_deleted_role_counts_as_taken_away() {
+    assert!(role_already_off(Kind::UnknownMember));
+    assert!(role_already_off(Kind::UnknownRole));
+    assert!(!role_already_off(Kind::MissingPermissions));
+    assert!(!role_already_off(Kind::RateLimited));
+}
+
+#[test]
+fn the_last_seen_mark_stays_below_every_check_that_failed_or_is_still_running() {
+    let unsettled = Unsettled::default();
+    let submissions = ChannelId::new(42);
+    let failed = unsettled.hold(submissions, 2000);
+    let running = unsettled.hold(submissions, 3000);
+    let later = unsettled.hold(submissions, 4000);
+    failed.settle(Judged::Failed);
+    later.settle(Judged::Valid);
+    assert_eq!(unsettled.mark_ceiling(submissions, 4000), Some(1999));
+    running.settle(Judged::Valid);
+    assert_eq!(unsettled.mark_ceiling(submissions, 4000), Some(1999));
+    unsettled.hold(submissions, 2000).settle(Judged::Valid);
+    assert_eq!(unsettled.mark_ceiling(submissions, 4000), Some(4000));
+}
+
+#[test]
+fn a_failed_check_in_another_channel_leaves_the_submissions_mark_free() {
+    let unsettled = Unsettled::default();
+    let submissions = ChannelId::new(42);
+    unsettled
+        .hold(ChannelId::new(7), 2000)
+        .settle(Judged::Failed);
+    unsettled
+        .hold(ChannelId::new(41), 2500)
+        .settle(Judged::Failed);
+    assert_eq!(unsettled.mark_ceiling(submissions, 9000), Some(9000));
 }
