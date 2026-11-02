@@ -1,6 +1,12 @@
+use std::collections::HashSet;
+use std::sync::Mutex;
+use std::sync::PoisonError;
+
 use barnacle_guess::UserId;
 use jiff::civil::Date;
 
+use crate::failure::Kind;
+use crate::ids::GuildId;
 use crate::schedule::Zone;
 use crate::wiring::same_name;
 
@@ -144,10 +150,31 @@ pub enum Done {
     JudgesChanged,
     ChannelsUpdated,
     AnnouncementUpdated,
-    SettingsSaved,
     Completed,
     ChannelsDeleted,
-    Archived,
+}
+
+#[derive(Debug, Default)]
+pub struct CaughtUp {
+    guilds: Mutex<HashSet<u64>>,
+}
+
+impl CaughtUp {
+    pub fn finish(&self, guild: GuildId) {
+        self.held().insert(guild.get());
+    }
+
+    pub fn forget_all(&self) {
+        self.held().clear();
+    }
+
+    pub fn holds(&self, guild: GuildId) -> bool {
+        self.held().contains(&guild.get())
+    }
+
+    fn held(&self) -> std::sync::MutexGuard<'_, HashSet<u64>> {
+        self.guilds.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 pub fn check_submission(text: &str, attachments: &[Attachment], criteria: &[Criterion]) -> Checked {
@@ -324,8 +351,15 @@ pub fn should_check(status: Status, end_unix: i64, sent_unix: i64) -> bool {
     }
 }
 
-pub fn moves_last_seen(path: CheckPath) -> bool {
-    matches!(path, CheckPath::CatchUp)
+pub fn moves_last_seen(path: CheckPath, caught_up: bool) -> bool {
+    match path {
+        CheckPath::CatchUp => true,
+        CheckPath::Live => caught_up,
+    }
+}
+
+pub fn role_already_off(kind: Kind) -> bool {
+    matches!(kind, Kind::UnknownMember | Kind::UnknownRole)
 }
 
 pub fn adjustment(points: i64) -> Option<i64> {

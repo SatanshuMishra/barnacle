@@ -443,7 +443,11 @@ async fn reverting_a_completion_returns_it_to_its_old_status() {
             .await
             .unwrap()
     );
-    let live = store.live(GUILD).await.unwrap().expect("a live competition");
+    let live = store
+        .live(GUILD)
+        .await
+        .unwrap()
+        .expect("a live competition");
     assert_eq!(live.status, Status::Running);
 }
 

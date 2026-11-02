@@ -31,15 +31,17 @@ pub const CANCELLED: &str = "Cancelled. Nothing changed.";
 pub const NO_POINTS_YET: &str = "No points yet.";
 
 pub fn unfinished(done: &[Done]) -> String {
-    match done {
-        [] => "The IQ Competition was not changed".to_owned(),
-        _ => {
-            let steps: Vec<&str> = done.iter().map(|step| done_line(*step)).collect();
-            format!(
-                "The IQ Competition was only partly changed: {}. Press it again to finish the rest",
-                join_names(&steps)
-            )
-        }
+    let steps: Vec<&str> = done.iter().map(|step| done_line(*step)).collect();
+    match (done.is_empty(), done.contains(&Done::Completed)) {
+        (true, _) => "The IQ Competition was not changed".to_owned(),
+        (false, true) => format!(
+            "The IQ Competition was only partly changed: {}. The winner announcement was not posted, so post the result by hand, then run /iq cleanup",
+            join_names(&steps)
+        ),
+        (false, false) => format!(
+            "The IQ Competition was only partly changed: {}. Press it again to finish the rest",
+            join_names(&steps)
+        ),
     }
 }
 
@@ -48,10 +50,8 @@ fn done_line(step: Done) -> &'static str {
         Done::JudgesChanged => "the IQ-Judge role was handed out and taken away",
         Done::ChannelsUpdated => "the channel permissions were updated",
         Done::AnnouncementUpdated => "the announcement was updated",
-        Done::SettingsSaved => "the new settings were saved",
         Done::Completed => "the competition was marked complete",
         Done::ChannelsDeleted => "the channels were deleted",
-        Done::Archived => "the scores were archived",
     }
 }
 

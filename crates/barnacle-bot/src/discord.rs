@@ -81,6 +81,7 @@ pub struct Data {
     pub drafts: Arc<Drafts<Draft>>,
     pub iq: IqStore,
     pub iq_drafts: Arc<iq_setup::Drafts>,
+    pub iq_caught_up: Arc<crate::iq::CaughtUp>,
 }
 
 fn now_unix() -> i64 {
@@ -276,6 +277,7 @@ pub async fn run(
                     drafts: Arc::new(Drafts::default()),
                     iq,
                     iq_drafts: Arc::new(iq_setup::Drafts::default()),
+                    iq_caught_up: Arc::new(crate::iq::CaughtUp::default()),
                 };
                 tracing::info!(
                     "event.name" = "service.started",

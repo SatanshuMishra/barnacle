@@ -1640,8 +1640,12 @@ async fn complete(
         .map_err(Unfinished::untouched)?;
     if let Err(error) = post(http, competition.announcements, &text, mentions).await {
         return Err(
-            match data.iq.set_status(competition.id, competition.status).await {
-                Ok(()) => Unfinished::untouched(error),
+            match data
+                .iq
+                .revert_completed(competition.id, competition.status)
+                .await
+            {
+                Ok(_) => Unfinished::untouched(error),
                 Err(reverted) => {
                     failure::report(
                         "iq.complete.unreverted",
@@ -1679,14 +1683,15 @@ async fn clean_up(
         }
     }
     let progress = Progress::default();
-    if let Some(role) = current_judge_role(data, &serenity_context.cache, guild, scope).await {
-        change_judges(http, guild, role, &competition.judges, &[])
-            .await
-            .map_err(|error| progress.stopped(error))?;
-    }
-    let progress = match competition.judges.is_empty() {
-        true => progress,
-        false => progress.with(Done::JudgesChanged),
+    let role = current_judge_role(data, &serenity_context.cache, guild, scope).await;
+    let progress = match (role, competition.judges.is_empty()) {
+        (Some(role), false) => {
+            change_judges(http, guild, role, &competition.judges, &[])
+                .await
+                .map_err(|error| progress.stopped(error))?;
+            progress.with(Done::JudgesChanged)
+        }
+        _ => progress,
     };
     for channel in [
         competition.submissions,
@@ -1819,7 +1824,7 @@ async fn change_judges(
     for judge in before.iter().filter(|judge| !after.contains(judge)) {
         match bounded(http.remove_member_role(guild_id, discord_user(*judge)?, role, None)).await {
             Ok(()) => {}
-            Err(error) if is_kind(&error, Kind::UnknownMember) => {}
+            Err(error) if iq::role_already_off(Failure::from_error(&error).kind) => {}
             Err(error) => return Err(error),
         }
     }
@@ -2315,7 +2320,7 @@ async fn check_message(
     scope: &Scope,
 ) -> Option<bool> {
     let valid = judge_message(data, http, competition, message, scope).await;
-    if iq::moves_last_seen(path) {
+    if iq::moves_last_seen(path, data.iq_caught_up.holds(competition.guild)) {
         seen(data, competition, message, scope).await;
     }
     valid
@@ -2588,17 +2593,22 @@ pub(super) async fn caught_up(
     serenity_context: &serenity::Context,
     ready: &serenity::Ready,
 ) {
+    data.iq_caught_up.forget_all();
     for unavailable in &ready.guilds {
         let guild = GuildId::new(unavailable.id.get());
         let scope = Scope::default().guild(guild);
         match data.iq.live(guild).await {
             Ok(Some(competition)) if competition.status == Status::Running => {
                 match catch_up(data, serenity_context, &competition, &scope).await {
-                    Ok(()) => failure::record(
-                        "iq.catch_up.completed",
-                        "posts made while Barnacle was offline were checked",
-                        &scope,
-                    ),
+                    Ok(true) => {
+                        data.iq_caught_up.finish(guild);
+                        failure::record(
+                            "iq.catch_up.completed",
+                            "posts made while Barnacle was offline were checked",
+                            &scope,
+                        );
+                    }
+                    Ok(false) => {}
                     Err(error) => failure::report(
                         "iq.catch_up.failed",
                         "posts made while Barnacle was offline could not all be checked",
@@ -2607,7 +2617,7 @@ pub(super) async fn caught_up(
                     ),
                 }
             }
-            Ok(_) => {}
+            Ok(_) => data.iq_caught_up.finish(guild),
             Err(error) => failure::report(
                 "iq.catch_up.failed",
                 "a server's IQ Competition could not be looked up after connecting",
@@ -2623,7 +2633,7 @@ async fn catch_up(
     serenity_context: &serenity::Context,
     competition: &Competition,
     scope: &Scope,
-) -> Result<(), IqError> {
+) -> Result<bool, IqError> {
     let http: &serenity::Http = &serenity_context.http;
     let judge_role =
         current_judge_role(data, &serenity_context.cache, competition.guild, scope).await;
@@ -2648,7 +2658,7 @@ async fn catch_up(
         }
         match page.last() {
             Some(last) if page.len() == usize::from(PAGE_SIZE) => after = last.id.get(),
-            _ => return Ok(()),
+            _ => return Ok(true),
         }
     }
     failure::refused(
@@ -2657,7 +2667,7 @@ async fn catch_up(
         "page_limit",
         scope,
     );
-    Ok(())
+    Ok(false)
 }
 
 async fn catch_up_one(

@@ -366,6 +366,17 @@ impl IqStore {
         self.complete(row).await
     }
 
+    pub async fn revert_completed(&self, id: i64, to: Status) -> Result<bool, IqStoreError> {
+        let changed = sqlx::query(
+            "UPDATE iq_competitions SET status = ? WHERE id = ? AND status = 'completed'",
+        )
+        .bind(status_text(to))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(changed.rows_affected() == 1)
+    }
+
     pub async fn set_status(&self, id: i64, status: Status) -> Result<(), IqStoreError> {
         let changed = sqlx::query("UPDATE iq_competitions SET status = ? WHERE id = ?")
             .bind(status_text(status))
