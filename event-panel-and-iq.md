@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T02:07:30.687Z
+Updated: 2026-11-02T02:07:33.385Z
 Next ids: c3 D6 R4 S1
 
 ## Goal
@@ -18,9 +18,9 @@ mitosis/event-panel is pushed at 8894afe; it holds the C1 fix (6d6dba9, 8894afe)
 
 ## Next step
 
-Run SHIP=1 ~/.mitosis/barnacle/event-panel-and-iq/run.zsh --resume --proven-head event-panel=8894afe, open the /event pull request with mitosis's title and body, assign it to the owner and post review/event-panel.comment.md; then merge mitosis/event-panel into mitosis/iq-competition before the IQ review.
+When the iq-competition build ends, merge mitosis/event-panel into mitosis/iq-competition before its review; set the IQ state.json's null gate reasons to "" as soon as its drive enters review; then drive the IQ review to green and ship it as a pull request based on mitosis/event-panel.
 
-Needs: D5, D1, R2.
+Needs: D1, D4, R2, R3.
 
 ## Decisions in force
 
