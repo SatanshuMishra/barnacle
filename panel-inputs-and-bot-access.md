@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T22:09:36.885Z
+Updated: 2026-11-02T22:09:38.517Z
 Next ids: c2 D8 R1 S1
 
 ## Goal
@@ -17,7 +17,7 @@ access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat
 
 ## Next step
 
-Plan and build iq-judging with ~/.mitosis/barnacle/iq-judging/run.zsh (--plan-only first); meanwhile finish panel-inputs review round 1 (suite, reviewers, validator, record, verdict, fixes) and merge its fixes into mitosis/iq-judging.
+When the iq-judging build finishes, merge mitosis/panel-inputs (ad151bc) into mitosis/iq-judging, write its lane assumptions, and run its review round 1; then record the ship boundary and ship all three MSPs.
 
 Needs: D5, D7.
 
