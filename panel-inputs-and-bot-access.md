@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T22:10:02.596Z
+Updated: 2026-11-02T22:24:34.240Z
 Next ids: c2 D8 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat/panel-inputs-and-bot-access) with its fixes at d1dce61 on mitosis/access-roles; fix-check is clean against review/access-roles.record.json (criteria 5.1-5.4 only, since fix-check refuses 5.23, which has no test rows). panel-inputs (base d1dce61, criteria 5.5-5.14) is reviewed green in round 1 and its advisories C2-C4 are fixed at ad151bc on mitosis/panel-inputs, scoped tests and clippy pass, fix-check clean against review/panel-inputs.record.json. The validator rejected C1 (with_typed_dates counts today in the server's newest-event zone, not the draft's) only because main behaves the same; it goes in the final report as a pre-existing defect. iq-judging is building from mitosis/panel-inputs at 1db7c8f: lane iq-marks-store is ok, iq-judging-discord is running; ad151bc must be merged into mitosis/iq-judging once it exists.
+access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat/panel-inputs-and-bot-access) with its fixes at d1dce61 on mitosis/access-roles; fix-check is clean against review/access-roles.record.json (criteria 5.1-5.4 only, since fix-check refuses 5.23, which has no test rows). panel-inputs (base d1dce61, criteria 5.5-5.14) is reviewed green in round 1 and its advisories C2-C4 are fixed at ad151bc on mitosis/panel-inputs, scoped tests and clippy pass, fix-check clean against review/panel-inputs.record.json. The validator rejected C1 (with_typed_dates counts today in the server's newest-event zone, not the draft's) only because main behaves the same; it goes in the final report as a pre-existing defect. iq-judging is building from mitosis/panel-inputs at 1db7c8f: both lanes have finished (iq-marks-store ok, iq-judging-discord held for landing, then the gate); ad151bc must be merged into mitosis/iq-judging once it exists.
 
 ## Next step
 
