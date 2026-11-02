@@ -1,4 +1,5 @@
 use barnacle_bot::failure::Kind;
+use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::iq::Attachment;
 use barnacle_bot::iq::BoardRow;
@@ -405,16 +406,24 @@ fn a_left_member_or_deleted_role_counts_as_taken_away() {
 #[test]
 fn the_last_seen_mark_stays_below_every_check_that_failed_or_is_still_running() {
     let unsettled = Unsettled::default();
-    let guild = GuildId::new(5);
-    let failed = unsettled.hold(guild, 2000);
-    let running = unsettled.hold(guild, 3000);
-    let later = unsettled.hold(guild, 4000);
+    let submissions = ChannelId::new(42);
+    let failed = unsettled.hold(submissions, 2000);
+    let running = unsettled.hold(submissions, 3000);
+    let later = unsettled.hold(submissions, 4000);
     failed.settle(Judged::Failed);
     later.settle(Judged::Valid);
-    assert_eq!(unsettled.mark_ceiling(guild, 4000), Some(1999));
+    assert_eq!(unsettled.mark_ceiling(submissions, 4000), Some(1999));
     running.settle(Judged::Valid);
-    assert_eq!(unsettled.mark_ceiling(guild, 4000), Some(1999));
-    unsettled.hold(guild, 2000).settle(Judged::Valid);
-    assert_eq!(unsettled.mark_ceiling(guild, 4000), Some(4000));
-    assert_eq!(unsettled.mark_ceiling(GuildId::new(6), 4000), Some(4000));
+    assert_eq!(unsettled.mark_ceiling(submissions, 4000), Some(1999));
+    unsettled.hold(submissions, 2000).settle(Judged::Valid);
+    assert_eq!(unsettled.mark_ceiling(submissions, 4000), Some(4000));
+}
+
+#[test]
+fn a_failed_check_in_another_channel_leaves_the_submissions_mark_free() {
+    let unsettled = Unsettled::default();
+    let submissions = ChannelId::new(42);
+    unsettled.hold(ChannelId::new(7), 2000).settle(Judged::Failed);
+    unsettled.hold(ChannelId::new(41), 2500).settle(Judged::Failed);
+    assert_eq!(unsettled.mark_ceiling(submissions, 9000), Some(9000));
 }
