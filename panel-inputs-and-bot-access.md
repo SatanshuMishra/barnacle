@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T19:48:26.233Z
+Updated: 2026-11-02T19:54:47.673Z
 Next ids: c2 D7 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-access-roles is built and gated (8 of 8 pass, reconcile clean) on mitosis/access-roles at d461aab, base 425f25a (the lock commit, now on feat/panel-inputs-and-bot-access); review round 1 has its diff, obligations, standards (one LOW: the down migration's DROP TABLE) and empty gate findings, its suite is running, and its three briefs are rendered, waiting on the suite. panel-inputs is building from mitosis/access-roles. iq-judging waits for mitosis/panel-inputs. access-roles left text::UPDATES_NOT_SET_UP unchanged because tests/text.rs asserts the old text.
+access-roles is built and gated (8 of 8 pass, reconcile clean) on mitosis/access-roles at d461aab, base 425f25a (the lock commit, now on feat/panel-inputs-and-bot-access); review round 1 has its diff, obligations, standards (one LOW: the down migration's DROP TABLE) and empty gate findings; its suite passes scoped (857 passed, 0 failed, every target except the six later-Step locked files, which fail to compile the same way on the base, so the full-run U1 is not a finding); its three reviewers are running. panel-inputs is building from mitosis/access-roles. iq-judging waits for mitosis/panel-inputs. access-roles left text::UPDATES_NOT_SET_UP unchanged because tests/text.rs asserts the old text.
 
 ## Next step
 
