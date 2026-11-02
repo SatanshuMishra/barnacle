@@ -1,7 +1,7 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T13:14:57.389Z
-Next ids: c3 D7 R5 S1
+Updated: 2026-11-02T13:15:11.392Z
+Next ids: c3 D7 R5 S2
 
 ## Goal
 
@@ -26,16 +26,15 @@ Needs: D6, D1, R4.
 
 - D1 The run is unattended from the owner's instruction: no questions; gaps become assumptions citing intent lines.
 - D2 Lighthouse is skipped; criterion 5.23 (live Discord) stays unproven.
-- D3 Interphase hand-off: build the reviewed spec: Build the handed-off spec now: cut the feature branch, commit the receipts config, plan, and start the unattended drive.
-- D4 IQ run hand-off: start the stacked IQ build now: Start the IQ build now; merge any event-panel fix commits into the IQ branch before its review and ship.
-- D6 IQ ship boundary: ship the regated head 0036a69: Ship 0036a69: SHIP=1 run.zsh --resume --proven-head iq-competition=0036a69 with the gate classes, then open the PR against feat/event-panel-and-iq with mitosis's title and body, assigned to the owner.
 
 ## Open risks
 
-- R3 pipeline 0.12.0 bugs worked around by hand: gate-findings refuses mitosis 0.10.1's null gate reasons, and pipeline suite cannot fingerprint Rust compile errors, so a failure the base shares reads as new (event-panel's U1 was dropped on per-target evidence in review/round-1/event-panel.suite-base-comparison.txt); and a drive restarted after a review-step halt loses the reviewers' findings; the drive's 14400-second run limit is shorter than mitosis's mutant gate on 55 Rust tests, and mitosis keeps no partial gate, so a killed gate restarts from zero; pipeline fix-check refuses a record with an unproven criterion that has no acceptance line. All belong in the final report as plugin bugs.
-- R4 mitosis 0.10.1 samples Rust mutants untraced, taking the first 12 added lines in file order (top-of-file constants, an SQLite busy timeout, test-file generics), so 21 IQ properties read weak without a mutant in the code they exercise; the held-back MSP ships only through a regate with --gate-classes, because --proven-head reuses the recorded weak gate, and BUSY_TIMEOUT ±1 is a mutant no test can observe. Bears on c2; also a plugin bug for the final report.
+- R3 pipeline 0.12.0 bugs worked around by hand: gate-findings refuses mitosis 0.10.1's null gate reasons; pipeline suite cannot fingerprint Rust compile errors; a restarted drive loses the reviewers' findings; the drive's 14400-second limit is shorter than the mutant gate and no partial gate is kept; fix-check refuses an unproven criterion with no acceptance line. Integration's lighthouse step may meet them again.
+- R4 mitosis 0.10.1 samples Rust mutants untraced, so 21 IQ properties needed covered-elsewhere gate classes, and #54's Testing table reads them as not proven; run.zsh still names mitosis/event-panel as the feature branch, so mitosis reports that stale base.
 
 ## Settled, do not reopen
+
+- S1 The IQ pull request targets feat/event-panel-and-iq, since mitosis/event-panel already merged there through #53 (D6).
 
 ## Where the details live
 
@@ -47,3 +46,4 @@ Needs: D6, D1, R4.
 - Provable record copy for pipeline fix-check (criterion 5.23 left out, it has no acceptance line): ~/.mitosis/barnacle/event-panel-and-iq/review/record.provable.json
 - IQ review rounds, one line each with verdict and fix commits: ~/.mitosis/barnacle/iq-competition/rounds.md
 - IQ mutant evidence: the 24 sampled mutants and the full suite's result on each, in ~/.mitosis/barnacle/iq-competition/review/round-1/iq-competition.gate-mutants-{sample,suite}.json
+- IQ ship result, PR title and body as mitosis wrote them: ~/.mitosis/barnacle/iq-competition/review/ship.out and iq-competition.pr-{title.txt,body.md}
