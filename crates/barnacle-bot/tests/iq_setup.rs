@@ -3,7 +3,8 @@ use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::iq::Criterion;
-use barnacle_bot::iq::JudgingReaction;
+use barnacle_bot::iq::JudgingMarks;
+use barnacle_bot::iq::Mark;
 use barnacle_bot::iq::Status;
 use barnacle_bot::iq_setup::SetupChecks;
 use barnacle_bot::iq_setup::SetupDraft;
@@ -71,7 +72,13 @@ fn october() -> Competition {
         rules: OCTOBER_RULES.to_owned(),
         roles: vec![TARGET_ROLE],
         judges: vec![JUDGE, SECOND_JUDGE],
-        reaction: JudgingReaction::Star,
+        marks: JudgingMarks::new(
+            Mark::parse("\u{274C}").unwrap(),
+            Mark::parse("\u{2B50}").unwrap(),
+            Mark::parse("\u{2705}").unwrap(),
+        )
+        .unwrap(),
+        judge_log: None,
         created_by: ADMIN,
         created_at_ms: 1_790_000_000_000,
     }
@@ -322,7 +329,7 @@ fn picking_a_template_copies_its_setup() {
     assert_eq!(picked.rules().to_owned(), OCTOBER_RULES.to_owned());
     assert_eq!(picked.roles().to_vec(), vec![TARGET_ROLE]);
     assert_eq!(picked.judges().to_vec(), vec![JUDGE, SECOND_JUDGE]);
-    assert_eq!(picked.reaction(), JudgingReaction::Star);
+    assert_eq!(picked.marks().awarded, Mark::parse("\u{2B50}").unwrap());
 }
 
 #[test]

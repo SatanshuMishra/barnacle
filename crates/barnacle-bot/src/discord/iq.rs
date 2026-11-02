@@ -34,6 +34,8 @@ use crate::iq::CompleteRefusal;
 use crate::iq::Criterion;
 use crate::iq::Done;
 use crate::iq::Judged;
+use crate::iq::JudgingMarks;
+use crate::iq::Mark;
 use crate::iq::Standing;
 use crate::iq::StartChoice;
 use crate::iq::Status;
@@ -47,6 +49,7 @@ use crate::iq_setup::SetupPlan;
 use crate::iq_setup::SetupReady;
 use crate::iq_setup::SetupRefusal;
 use crate::iq_setup::SetupStep;
+use crate::iq_store::AdjustOutcome;
 use crate::iq_store::AwardOutcome;
 use crate::iq_store::Competition;
 use crate::iq_store::CreateOutcome;
@@ -79,7 +82,6 @@ const PAGE_SIZE: u8 = 100;
 const CATCH_UP_PAGES: usize = 500;
 const SHOWN_END_OFFSET: i64 = 60;
 const MILLIS_PER_SECOND: u64 = 1_000;
-const VARIATION_SELECTOR: char = '\u{FE0F}';
 const DISCORD_WAIT: Duration = Duration::from_secs(30);
 const SETUP_ACCESS: serenity::Permissions =
     serenity::Permissions::MANAGE_CHANNELS.union(serenity::Permissions::MANAGE_ROLES);
@@ -477,7 +479,7 @@ pub(super) async fn iq_points(
     points: i64,
     #[description = "Why the points change"]
     #[max_length = 200]
-    reason: Option<String>,
+    reason: String,
 ) -> Result<(), Error> {
     let Some(guild) = guild_of(ctx) else {
         return Ok(());
@@ -504,28 +506,33 @@ pub(super) async fn iq_points(
     let Some(now_ms) = super::now_ms().and_then(|now_ms| i64::try_from(now_ms).ok()) else {
         return commands::fail(ctx, Failure::from_error(&IqError::Clock)).await;
     };
-    let reason = reason
-        .as_deref()
-        .map(str::trim)
-        .filter(|reason| !reason.is_empty());
+    let reason = reason.trim();
     let target = UserId::new(member.id.get());
     let judge = author(ctx);
-    data.iq
+    let total = match data
+        .iq
         .adjust(competition.id, target, points, reason, judge, now_ms)
-        .await?;
+        .await
+    {
+        Ok(AdjustOutcome::Adjusted { total }) => total,
+        Ok(AdjustOutcome::BelowZero { total }) => {
+            return refuse(ctx, "below_zero", iq_text::below_zero(target, total)).await;
+        }
+        Err(IqStoreError::ReasonMissing) => {
+            return refuse(ctx, "reason_missing", iq_text::REASON_MISSING).await;
+        }
+        Err(IqStoreError::ReasonTooLong) => {
+            return refuse(ctx, "reason_too_long", iq_text::REASON_TOO_LONG).await;
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let reason = Some(reason);
     let scope = Scope::of_command(ctx);
     failure::record(
         "iq.points.adjusted",
         "a judge changed a member's points",
         &scope,
     );
-    let total = data
-        .iq
-        .scores(competition.id)
-        .await?
-        .into_iter()
-        .find(|score| score.user == target)
-        .map_or(0, |score| score.points);
     let logged = post(
         &ctx.serenity_context().http,
         competition.submissions,
@@ -1737,7 +1744,7 @@ async fn save_judges(
             rules: competition.rules.clone(),
             roles: competition.roles.clone(),
             judges: judges.to_vec(),
-            reaction: competition.reaction,
+            marks: competition.marks.clone(),
         })
         .await
         .map_err(|error| progress.stopped(error))?;
@@ -2371,12 +2378,11 @@ async fn judge_message(
                 );
                 return Judged::Failed;
             }
-            mark(http, message, iq::VALID_MARK, scope).await;
             failure::record("iq.submission.valid", "a submission was valid", scope);
             Judged::Valid
         }
         Checked::Invalid(problems) => {
-            mark(http, message, iq::INVALID_MARK, scope).await;
+            mark(http, message, &competition.marks.denied, scope).await;
             let reply = serenity::CreateMessage::new()
                 .content(iq_text::submission_reply(&problems))
                 .reference_message(message)
@@ -2395,32 +2401,34 @@ async fn judge_message(
     }
 }
 
-async fn mark(http: &serenity::Http, message: &serenity::Message, emoji: &str, scope: &Scope) {
-    let reacted = bounded(message.channel_id.create_reaction(
-        http,
-        message.id,
-        serenity::ReactionType::Unicode(emoji.to_owned()),
-    ))
+async fn mark(http: &serenity::Http, message: &serenity::Message, mark: &Mark, scope: &Scope) {
+    let Some(reaction) = mark.reaction() else {
+        failure::report(
+            "iq.submission.mark_failed",
+            "a submission's mark could not be added because its emoji ID is 0",
+            &Failure::from_error(&IqError::ZeroId),
+            scope,
+        );
+        return;
+    };
+    let reacted = bounded(
+        message
+            .channel_id
+            .create_reaction(http, message.id, reaction),
+    )
     .await;
     if let Err(error) = reacted {
         failure::report(
             "iq.submission.mark_failed",
-            "a submission's check or cross could not be added",
+            "a submission's mark could not be added",
             &Failure::from_error(&error),
             scope,
         );
     }
 }
 
-fn same_emoji(found: &str, wanted: &str) -> bool {
-    found.trim_end_matches(VARIATION_SELECTOR) == wanted.trim_end_matches(VARIATION_SELECTOR)
-}
-
-fn unicode_is(reaction: &serenity::ReactionType, wanted: &str) -> bool {
-    match reaction {
-        serenity::ReactionType::Unicode(found) => same_emoji(found, wanted),
-        _ => false,
-    }
+fn is_mark(reaction: &serenity::ReactionType, wanted: &Mark) -> bool {
+    Mark::from_reaction(reaction).is_some_and(|found| found == *wanted)
 }
 
 pub(super) async fn reacted(
@@ -2455,7 +2463,10 @@ pub(super) async fn reacted(
             return;
         }
     };
-    if !unicode_is(&reaction.emoji, competition.reaction.emoji()) {
+    let Some(found) = Mark::from_reaction(&reaction.emoji) else {
+        return;
+    };
+    if found != competition.marks.awarded {
         return;
     }
     let judge_role = current_judge_role(data, &serenity_context.cache, guild, &scope).await;
@@ -2468,7 +2479,7 @@ pub(super) async fn reacted(
         &scope,
     )
     .await;
-    if !holds {
+    if !iq::counts_as_award(&found, &competition.marks, holds) {
         failure::refused(
             "iq.award.refused",
             "a judging reaction came from a member without IQ-Judge",
@@ -2659,7 +2670,7 @@ async fn catch_up_one(
     message: &serenity::Message,
 ) {
     let scope = message_scope(competition.guild, message);
-    if !checkable(message) || already_marked(message) {
+    if !checkable(message) || already_marked(message, &competition.marks) {
         seen(data, competition, message, &scope).await;
         return;
     }
@@ -2684,11 +2695,11 @@ async fn catch_up_one(
     }
 }
 
-fn already_marked(message: &serenity::Message) -> bool {
+fn already_marked(message: &serenity::Message, marks: &JudgingMarks) -> bool {
     message.reactions.iter().any(|reaction| {
         reaction.me
-            && (unicode_is(&reaction.reaction_type, iq::VALID_MARK)
-                || unicode_is(&reaction.reaction_type, iq::INVALID_MARK))
+            && (is_mark(&reaction.reaction_type, &marks.denied)
+                || is_mark(&reaction.reaction_type, &marks.confirm))
     })
 }
 
@@ -2699,11 +2710,11 @@ async fn reacted_judge(
     message: &serenity::Message,
     scope: &Scope,
 ) -> Option<UserId> {
-    let wanted = competition.reaction.emoji();
+    let wanted = &competition.marks.awarded;
     let reaction = message
         .reactions
         .iter()
-        .find(|reaction| reaction.count > 0 && unicode_is(&reaction.reaction_type, wanted))?;
+        .find(|reaction| reaction.count > 0 && is_mark(&reaction.reaction_type, wanted))?;
     let users = bounded(message.channel_id.reaction_users(
         http,
         message.id,

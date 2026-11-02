@@ -14,7 +14,8 @@ use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::RoleId;
 use crate::iq::Criterion;
-use crate::iq::JudgingReaction;
+use crate::iq::JudgingMarks;
+use crate::iq::Mark;
 use crate::iq_store::Competition;
 pub use crate::iq_store::ConfigChange;
 use crate::iq_store::NewCompetition;
@@ -50,6 +51,7 @@ const DAY_INPUT_MAX: u16 = 32;
 const POINTS_INPUT_MAX: usize = 4;
 const MENU_MAX: u8 = 25;
 const QUOTE_MARK: &str = "> ";
+const AWARDED_CHOICES: [&str; 4] = ["\u{1F3C6}", "\u{2B50}", "\u{1F4AF}", "\u{1F451}"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetupStep {
@@ -124,7 +126,7 @@ pub struct SetupPlan {
     pub rules: String,
     pub roles: Vec<RoleId>,
     pub judges: Vec<UserId>,
-    pub reaction: JudgingReaction,
+    pub marks: JudgingMarks,
     pub created_by: UserId,
 }
 
@@ -143,7 +145,8 @@ impl SetupPlan {
             rules: self.rules.clone(),
             roles: self.roles.clone(),
             judges: self.judges.clone(),
-            reaction: self.reaction,
+            marks: self.marks.clone(),
+            judge_log: None,
             created_by: self.created_by,
             created_at_ms,
         }
@@ -175,7 +178,7 @@ pub struct SetupDraft {
     rules: String,
     roles: Vec<RoleId>,
     judges: Vec<UserId>,
-    reaction: JudgingReaction,
+    marks: JudgingMarks,
 }
 
 impl Owned for SetupDraft {
@@ -210,7 +213,7 @@ impl SetupDraft {
             rules: String::new(),
             roles: Vec::new(),
             judges: Vec::new(),
-            reaction: JudgingReaction::Trophy,
+            marks: JudgingMarks::default(),
         }
     }
 
@@ -235,7 +238,7 @@ impl SetupDraft {
             rules: competition.rules.clone(),
             roles: competition.roles.clone(),
             judges: competition.judges.clone(),
-            reaction: competition.reaction,
+            marks: competition.marks.clone(),
         }
     }
 
@@ -295,8 +298,8 @@ impl SetupDraft {
         &self.judges
     }
 
-    pub fn reaction(&self) -> JudgingReaction {
-        self.reaction
+    pub fn marks(&self) -> &JudgingMarks {
+        &self.marks
     }
 
     pub fn with_template(&self, value: &str) -> Result<SetupDraft, SetupRefusal> {
@@ -309,7 +312,7 @@ impl SetupDraft {
                 rules: String::new(),
                 roles: Vec::new(),
                 judges: Vec::new(),
-                reaction: JudgingReaction::Trophy,
+                marks: JudgingMarks::default(),
                 ..self.clone()
             });
         }
@@ -325,7 +328,7 @@ impl SetupDraft {
             rules: source.rules.clone(),
             roles: source.roles.clone(),
             judges: source.judges.clone(),
-            reaction: source.reaction,
+            marks: source.marks.clone(),
             ..self.clone()
         })
     }
@@ -497,9 +500,19 @@ impl SetupDraft {
     }
 
     pub fn with_reaction(&self, value: &str) -> Result<SetupDraft, SetupRefusal> {
-        let reaction = JudgingReaction::parse(value).ok_or(SetupRefusal::ReactionUnknown)?;
+        let awarded = AWARDED_CHOICES
+            .into_iter()
+            .find(|choice| *choice == value)
+            .and_then(Mark::parse)
+            .ok_or(SetupRefusal::ReactionUnknown)?;
+        let marks = JudgingMarks::new(
+            self.marks.denied.clone(),
+            awarded,
+            self.marks.confirm.clone(),
+        )
+        .map_err(|_| SetupRefusal::ReactionUnknown)?;
         Ok(SetupDraft {
-            reaction,
+            marks,
             ..self.clone()
         })
     }
@@ -558,7 +571,7 @@ impl SetupDraft {
                     rules: self.rules.clone(),
                     roles: self.roles.clone(),
                     judges: self.judges.clone(),
-                    reaction: self.reaction,
+                    marks: self.marks.clone(),
                     created_by: self.owner,
                 }))
             }
@@ -568,7 +581,7 @@ impl SetupDraft {
                 rules: self.rules.clone(),
                 roles: self.roles.clone(),
                 judges: self.judges.clone(),
-                reaction: self.reaction,
+                marks: self.marks.clone(),
             })),
         }
     }
@@ -762,7 +775,7 @@ impl SetupDraft {
             self.top_lines()
                 .into_iter()
                 .chain(runs)
-                .chain([iq_text::review_who(roles, judges, self.reaction)])
+                .chain([iq_text::review_who(roles, judges, &self.marks)])
                 .chain(tree)
                 .chain(role_line)
                 .chain(missing_line),
@@ -893,14 +906,12 @@ impl SetupDraft {
         .placeholder(iq_text::JUDGES_PLACEHOLDER)
         .min_values(1)
         .max_values(MENU_MAX);
-        let reactions = JudgingReaction::ALL
+        let reactions = AWARDED_CHOICES
             .into_iter()
-            .map(|reaction| {
-                serenity::CreateSelectMenuOption::new(
-                    iq_text::reaction_label(reaction),
-                    reaction.value(),
-                )
-                .default_selection(self.reaction == reaction)
+            .filter_map(Mark::parse)
+            .map(|choice| {
+                serenity::CreateSelectMenuOption::new(iq_text::mark_label(&choice), choice.text())
+                    .default_selection(self.marks.awarded == choice)
             })
             .collect();
         vec![

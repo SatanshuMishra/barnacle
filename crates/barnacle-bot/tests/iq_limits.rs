@@ -6,7 +6,7 @@ use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::iq::Criterion;
-use barnacle_bot::iq::JudgingReaction;
+use barnacle_bot::iq::JudgingMarks;
 use barnacle_bot::iq::Status;
 use barnacle_bot::iq::adjustment;
 use barnacle_bot::iq_store::Competition;
@@ -20,23 +20,29 @@ use jiff::civil::date;
 use sqlx::sqlite::SqlitePool;
 
 const IQ_MIGRATION: &str = "0009_iq_competition.sql";
+const MARKS_MIGRATION: &str = "0012_iq_marks_and_judge_log.sql";
 const CLI_DIRECTIVE: &str = ".bail on\n";
 const DISCORD_EPOCH_MS: i64 = 1_420_070_400_000;
 const LAST_SNOWFLAKE_SECOND: i64 = 3_619_093_655;
 
-async fn iq_pool() -> SqlitePool {
-    let pool = attendance_pool().await;
+async fn apply(pool: &SqlitePool, file: &str) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../migrations")
-        .join(IQ_MIGRATION);
+        .join(file);
     let script = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{} is readable: {error}", path.display()));
     sqlx::raw_sql(sqlx::AssertSqlSafe(
         script.trim_start_matches(CLI_DIRECTIVE).to_owned(),
     ))
-    .execute(&pool)
+    .execute(pool)
     .await
     .unwrap();
+}
+
+async fn iq_pool() -> SqlitePool {
+    let pool = attendance_pool().await;
+    apply(&pool, IQ_MIGRATION).await;
+    apply(&pool, MARKS_MIGRATION).await;
     pool
 }
 
@@ -59,7 +65,8 @@ async fn stopped_competition() -> (IqStore, Competition) {
         rules: "Post your own battles only.".to_owned(),
         roles: vec![RoleId::new(31)],
         judges: vec![UserId::new(21)],
-        reaction: JudgingReaction::Trophy,
+        marks: JudgingMarks::default(),
+        judge_log: None,
         created_by: UserId::new(100),
         created_at_ms: 1_793_500_000_000,
     };

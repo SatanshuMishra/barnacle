@@ -7,7 +7,8 @@ use crate::ids::RoleId;
 use crate::iq::BoardRow;
 use crate::iq::Criterion;
 use crate::iq::Done;
-use crate::iq::JudgingReaction;
+use crate::iq::JudgingMarks;
+use crate::iq::Mark;
 use crate::iq::Problem;
 use crate::iq::Standing;
 use crate::iq_setup::SetupRefusal;
@@ -24,6 +25,8 @@ pub const ONLY_JUDGES: &str = "Only members with @IQ-Judge can change points.";
 pub const NO_COMPETITION_RUNNING: &str =
     "No IQ Competition is running. Start one with **/iq start**.";
 pub const NEVER_RAN: &str = "No IQ Competition has run in this server yet.";
+pub const REASON_MISSING: &str = "Give a reason for the points change.";
+pub const REASON_TOO_LONG: &str = "Keep the reason to 200 characters or fewer.";
 pub const RESUMED: &str =
     "Resumed. Posts made from now on are checked. Posts from the pause stay unmarked.";
 pub const COMPLETED: &str = "Posted. Run /iq cleanup when you are ready to remove the channels.";
@@ -343,6 +346,13 @@ pub fn points_log(judge: UserId, member: UserId, points: i64, reason: Option<&st
         Some(reason) => format!("{base} Reason: {reason}"),
         None => base,
     }
+}
+
+pub fn below_zero(member: UserId, total: i64) -> String {
+    format!(
+        "{} has {total} points, so at most {total} can be removed.",
+        user(member)
+    )
 }
 
 pub fn points_confirmation(
@@ -698,8 +708,8 @@ pub fn rules_not_shown(characters: usize) -> String {
     }
 }
 
-pub fn reaction_label(reaction: JudgingReaction) -> String {
-    format!("{} {}", reaction.emoji(), reaction.value())
+pub fn mark_label(mark: &Mark) -> String {
+    mark.text()
 }
 
 pub fn review_runs(first_day: Date, last_day: Date, zone: &str, criteria: usize) -> String {
@@ -711,10 +721,12 @@ pub fn review_runs(first_day: Date, last_day: Date, zone: &str, criteria: usize)
     )
 }
 
-pub fn review_who(roles: &str, judges: &str, reaction: JudgingReaction) -> String {
+pub fn review_who(roles: &str, judges: &str, marks: &JudgingMarks) -> String {
     format!(
-        "Visible to {roles}. Judges: {judges}. Judging reaction: {}",
-        reaction_label(reaction)
+        "Visible to {roles}. Judges: {judges}. Denied: {}. Awarded: {}. Confirm awarded: {}.",
+        mark_label(&marks.denied),
+        mark_label(&marks.awarded),
+        mark_label(&marks.confirm)
     )
 }
 

@@ -24,6 +24,9 @@ const ORGANISER_ROLES: &str = include_str!("../../../migrations/0010_organiser_r
 const ORGANISER_ROLES_DOWN: &str =
     include_str!("../../../migrations/0010_organiser_roles.down.sql");
 const MEMBER_ZONES: &str = include_str!("../../../migrations/0011_member_zones.sql");
+const IQ_MARKS: &str = include_str!("../../../migrations/0012_iq_marks_and_judge_log.sql");
+const IQ_MARKS_DOWN: &str =
+    include_str!("../../../migrations/0012_iq_marks_and_judge_log.down.sql");
 
 struct Layout {
     _dir: tempfile::TempDir,
@@ -505,6 +508,8 @@ async fn a_database_rolled_back_from_0009_is_told_to_apply_it_again() {
             IQ_COMPETITION,
             ORGANISER_ROLES,
             MEMBER_ZONES,
+            IQ_MARKS,
+            IQ_MARKS_DOWN,
             IQ_COMPETITION_DOWN,
         ])
         .collect();
@@ -514,7 +519,7 @@ async fn a_database_rolled_back_from_0009_is_told_to_apply_it_again() {
         .err()
         .unwrap();
     assert!(matches!(error, StartupError::Iq { .. }));
-    migrated(&layout, &[IQ_COMPETITION], "").await;
+    migrated(&layout, &[IQ_COMPETITION, IQ_MARKS], "").await;
     assert!(startup::open_stores(&layout.config.database).await.is_ok());
 }
 
@@ -571,7 +576,7 @@ async fn a_database_before_0011_is_told_to_apply_it() {
 }
 
 #[tokio::test]
-async fn a_database_at_0011_opens() {
+async fn a_database_before_0012_is_told_to_apply_it() {
     let layout = layout(
         &yamato_catalog(),
         &["PJSB018", "PJSB019"],
@@ -587,6 +592,38 @@ async fn a_database_at_0011_opens() {
         ])
         .collect();
     migrated(&layout, &through_0011, "").await;
+    let error = startup::open_stores(&layout.config.database)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, StartupError::IqMarks { .. }));
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "the IQ judging marks are missing from {path}; back the file up, then add them with `sqlite3 {path} < migrations/0012_iq_marks_and_judge_log.sql`",
+            path = layout.config.database.display()
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_database_at_0012_opens() {
+    let layout = layout(
+        &yamato_catalog(),
+        &["PJSB018", "PJSB019"],
+        &curation_text(""),
+    );
+    let through_0012: Vec<&str> = THROUGH_0007
+        .into_iter()
+        .chain([
+            common::CB_EVENTS,
+            IQ_COMPETITION,
+            ORGANISER_ROLES,
+            MEMBER_ZONES,
+            IQ_MARKS,
+        ])
+        .collect();
+    migrated(&layout, &through_0012, "").await;
     assert!(startup::open_stores(&layout.config.database).await.is_ok());
 }
 
@@ -604,6 +641,7 @@ async fn a_database_rolled_back_from_0010_is_told_to_apply_it_again() {
             IQ_COMPETITION,
             ORGANISER_ROLES,
             MEMBER_ZONES,
+            IQ_MARKS,
             ORGANISER_ROLES_DOWN,
         ])
         .collect();
