@@ -1,12 +1,18 @@
 use barnacle_guess::UserId;
+use jiff::civil::Date;
 
 use crate::failure::join_names;
 use crate::ids::ChannelId;
 use crate::ids::RoleId;
 use crate::iq::BoardRow;
 use crate::iq::Criterion;
+use crate::iq::JudgingReaction;
 use crate::iq::Problem;
 use crate::iq::Standing;
+use crate::iq_setup::SetupRefusal;
+use crate::iq_setup::SetupStep;
+use crate::text::day_label;
+use crate::text::escape;
 
 const ANNOUNCED_LINES: usize = 5;
 const TOP_LINES: usize = 10;
@@ -500,4 +506,269 @@ fn user(member: UserId) -> String {
 
 fn channel(id: ChannelId) -> String {
     format!("<#{}>", id.get())
+}
+
+pub const SETUP_STEPS: usize = 5;
+pub const TEMPLATE_PLACEHOLDER: &str = "Start from";
+pub const BLANK_LABEL: &str = "Start blank";
+pub const BLANK_DESCRIPTION: &str = "No criteria, rules or roles filled in";
+pub const FIRST_DAY_PLACEHOLDER: &str = "First day";
+pub const LAST_DAY_PLACEHOLDER: &str = "Last day";
+pub const ZONE_PLACEHOLDER: &str = "Time zone for the end";
+pub const CRITERION_PLACEHOLDER: &str = "Pick a criterion to edit or remove";
+pub const ROLES_PLACEHOLDER: &str = "Roles that can take part (pick any)";
+pub const JUDGES_PLACEHOLDER: &str = "Members who judge (pick any)";
+pub const REACTION_PLACEHOLDER: &str = "Judging reaction";
+pub const RENAME_LABEL: &str = "Rename";
+pub const NEXT_CRITERIA_LABEL: &str = "Next: criteria";
+pub const NEXT_RULES_LABEL: &str = "Next: rules";
+pub const NEXT_WHO_LABEL: &str = "Next: who";
+pub const NEXT_REVIEW_LABEL: &str = "Next: review";
+pub const ADD_CRITERION_LABEL: &str = "Add criterion";
+pub const EDIT_PICKED_LABEL: &str = "Edit picked";
+pub const REMOVE_PICKED_LABEL: &str = "Remove picked";
+pub const WRITE_RULES_LABEL: &str = "Write rules";
+pub const START_LABEL: &str = "Start competition";
+pub const SAVE_CHANGES_LABEL: &str = "Save changes";
+pub const BACK_LABEL: &str = "Back";
+pub const CANCEL_LABEL: &str = "Cancel";
+pub const BASICS_PROMPT: &str = "Pick where to start from and the dates it runs.";
+pub const NO_TEMPLATES: &str =
+    "No past competitions yet, so there are no templates. The last 10 are kept once you have some.";
+pub const TEMPLATES_OFFERED: &str = "Templates are the last 10 competitions. Picking one copies its criteria, rules, roles, judges and reaction.";
+pub const CRITERIA_INTRO: &str =
+    "Each criterion is something a player posts screenshots for. The name is what they type.";
+pub const NO_CRITERIA: &str = "No criteria yet. Add at least one.";
+pub const RULES_INTRO: &str =
+    "The rules are posted in the read-only announcements channel when the competition starts.";
+pub const NO_RULES: &str = "No rules written yet.";
+pub const WHO_ROLES_INTRO: &str = "Only members with a picked role can see the competition's channels, and the start announcement pings those roles.";
+pub const WHO_JUDGES_INTRO: &str =
+    "Judges get the @IQ-Judge role. Only their reaction awards points.";
+pub const STARTING_CREATES: &str = "Starting creates:";
+pub const SUBMISSIONS_BRANCH: &str = "> #iq-submissions \u{b7} players post here";
+pub const ROLE_BELOW_JUDGE: &str = "I can't hand out @IQ-Judge: my role sits below it. Drag my role above @IQ-Judge in Server Settings, then press Start again.";
+pub const MISSING_SETUP_PERMISSIONS: &str =
+    "I need Manage Channels and Manage Roles in this server to set up the competition.";
+pub const RENAME_MODAL_TITLE: &str = "Competition name";
+pub const RENAME_INPUT_LABEL: &str = "Name, also used for the category";
+pub const ADD_CRITERION_TITLE: &str = "Add criterion";
+pub const EDIT_CRITERION_TITLE: &str = "Edit criterion";
+pub const CRITERION_NAME_LABEL: &str = "Name players type";
+pub const CRITERION_DESCRIPTION_LABEL: &str = "What earns it";
+pub const CRITERION_POINTS_LABEL: &str = "Points, a whole number";
+pub const RULES_MODAL_TITLE: &str = "Rules";
+pub const RULES_INPUT_LABEL: &str = "Rules, up to 4000 characters";
+pub const ZONE_MODAL_TITLE: &str = crate::text::ZONE_MODAL_TITLE;
+pub const ZONE_INPUT_LABEL: &str = crate::text::ZONE_INPUT_LABEL;
+
+pub fn setup_heading(name: &str, editing: bool) -> String {
+    match editing {
+        true => format!("**Editing {}**", escape(name)),
+        false => format!("**New IQ Competition: {}**", escape(name)),
+    }
+}
+
+pub fn setup_step_line(step: SetupStep) -> String {
+    format!(
+        "**Step {} of {SETUP_STEPS}:** {}",
+        step_number(step),
+        step_name(step)
+    )
+}
+
+fn step_number(step: SetupStep) -> usize {
+    match step {
+        SetupStep::Basics => 1,
+        SetupStep::Criteria => 2,
+        SetupStep::Rules => 3,
+        SetupStep::Who => 4,
+        SetupStep::Review => 5,
+    }
+}
+
+fn step_name(step: SetupStep) -> &'static str {
+    match step {
+        SetupStep::Basics => "Basics",
+        SetupStep::Criteria => "Criteria",
+        SetupStep::Rules => "Rules",
+        SetupStep::Who => "Who",
+        SetupStep::Review => "Review",
+    }
+}
+
+pub fn competition_name(first_day: Date) -> String {
+    format!("{} IQ", first_day.strftime("%B"))
+}
+
+pub fn basics_line(first_day: Date, last_day: Date, zone: &str) -> String {
+    format!(
+        "Runs {} to {}, ending at 23:59 {zone}.",
+        day_label(first_day),
+        day_label(last_day)
+    )
+}
+
+pub fn template_copied(template: &str) -> String {
+    format!(
+        "Criteria, rules, roles, judges and reaction copied from {}. Change any of them in the next steps.",
+        escape(template)
+    )
+}
+
+pub fn template_description(first_day: Date, last_day: Date, criteria: usize) -> String {
+    let span = if first_day.year() == last_day.year() && first_day.month() == last_day.month() {
+        format!(
+            "{} to {}",
+            first_day.strftime("%-d"),
+            last_day.strftime("%-d %b")
+        )
+    } else {
+        format!(
+            "{} to {}",
+            first_day.strftime("%-d %b"),
+            last_day.strftime("%-d %b")
+        )
+    };
+    format!("Ran {span} \u{b7} {}", criteria_count(criteria))
+}
+
+pub fn criterion_line(number: usize, criterion: &Criterion) -> String {
+    let heading = format!(
+        "{number}. **{}** \u{b7} {}",
+        escape(&criterion.name),
+        points_text(i64::from(criterion.points))
+    );
+    match criterion.description.is_empty() {
+        true => heading,
+        false => format!("{heading}\n{}", escape(&criterion.description)),
+    }
+}
+
+pub fn criterion_option_description(criterion: &Criterion) -> String {
+    points_text(i64::from(criterion.points))
+}
+
+pub fn criteria_not_shown(count: usize) -> String {
+    match count {
+        1 => "1 more criterion not shown.".to_owned(),
+        more => format!("{more} more criteria not shown."),
+    }
+}
+
+pub fn rules_not_shown(characters: usize) -> String {
+    match characters {
+        1 => "1 more character not shown.".to_owned(),
+        more => format!("{more} more characters not shown."),
+    }
+}
+
+pub fn reaction_label(reaction: JudgingReaction) -> String {
+    format!("{} {}", reaction.emoji(), reaction.value())
+}
+
+pub fn review_runs(first_day: Date, last_day: Date, zone: &str, criteria: usize) -> String {
+    format!(
+        "Runs {} to {}, ending at 23:59 {zone}. {}.",
+        day_label(first_day),
+        day_label(last_day),
+        criteria_count(criteria)
+    )
+}
+
+pub fn review_who(roles: &str, judges: &str, reaction: JudgingReaction) -> String {
+    format!(
+        "Visible to {roles}. Judges: {judges}. Judging reaction: {}",
+        reaction_label(reaction)
+    )
+}
+
+pub fn role_list(roles: &[RoleId]) -> String {
+    listed(roles.iter().map(|role| role_mention(*role)).collect())
+}
+
+pub fn judge_list(judges: &[UserId]) -> String {
+    listed(judges.iter().map(|judge| user(*judge)).collect())
+}
+
+pub fn role_count(count: usize) -> String {
+    match count {
+        1 => "1 role".to_owned(),
+        more => format!("{more} roles"),
+    }
+}
+
+pub fn judge_count(count: usize) -> String {
+    match count {
+        1 => "1 judge".to_owned(),
+        more => format!("{more} judges"),
+    }
+}
+
+pub fn category_branch(name: &str) -> String {
+    format!("> **{}**", escape(name))
+}
+
+pub fn announcements_branch(roles: &str) -> String {
+    format!("> #iq-announcements \u{b7} read-only, rules and criteria, pings {roles}")
+}
+
+pub fn setup_refusal(refusal: &SetupRefusal) -> String {
+    match refusal {
+        SetupRefusal::CriterionNameTaken(name) => {
+            format!(
+                "A criterion named {name} already exists. Names ignore capitals, so pick another."
+            )
+        }
+        SetupRefusal::CriterionPoints => "Points must be a whole number from 1 to 1000.".to_owned(),
+        SetupRefusal::TooManyCriteria => "A competition holds at most 25 criteria.".to_owned(),
+        SetupRefusal::CriterionName => "A criterion needs a name of 1 to 50 characters.".to_owned(),
+        SetupRefusal::CriterionDescription => {
+            "A criterion's description holds at most 300 characters.".to_owned()
+        }
+        SetupRefusal::CriterionUnknown => "Pick a criterion from the menu first.".to_owned(),
+        SetupRefusal::NameFormat => "A competition name needs 1 to 60 characters.".to_owned(),
+        SetupRefusal::RulesTooLong => "The rules hold at most 4000 characters.".to_owned(),
+        SetupRefusal::TooManyRoles => "Pick at most 25 roles.".to_owned(),
+        SetupRefusal::TooManyJudges => "Pick at most 25 judges.".to_owned(),
+        SetupRefusal::TemplateUnknown => {
+            "That template is no longer offered. Pick one from the menu.".to_owned()
+        }
+        SetupRefusal::DayNotOffered => "Pick a day from the menu.".to_owned(),
+        SetupRefusal::LastDayNotAfterFirst => {
+            "The last day must come after the first day.".to_owned()
+        }
+        SetupRefusal::ZoneUnknown => {
+            "I don't know that time zone. Use a name like America/Edmonton.".to_owned()
+        }
+        SetupRefusal::ReactionUnknown => "Pick a judging reaction from the menu.".to_owned(),
+        SetupRefusal::FixedAfterStart => {
+            "A started competition keeps its template, name, dates and time zone.".to_owned()
+        }
+        SetupRefusal::StepIncomplete(step) => step_need(*step).to_owned(),
+    }
+}
+
+fn step_need(step: SetupStep) -> &'static str {
+    match step {
+        SetupStep::Basics => "Pick where to start from, the first day and the last day first.",
+        SetupStep::Criteria => "Add at least one criterion first.",
+        SetupStep::Rules => "Write the rules first.",
+        SetupStep::Who => "Pick at least one role and one judge first.",
+        SetupStep::Review => "Check the review, then press Start.",
+    }
+}
+
+fn criteria_count(count: usize) -> String {
+    match count {
+        1 => "1 criterion".to_owned(),
+        more => format!("{more} criteria"),
+    }
+}
+
+fn listed(names: Vec<String>) -> String {
+    match names.is_empty() {
+        true => "nobody".to_owned(),
+        false => names.join(", "),
+    }
 }

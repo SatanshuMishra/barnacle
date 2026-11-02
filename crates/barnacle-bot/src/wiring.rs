@@ -34,6 +34,7 @@ pub const SIGNUP_PREFIX: &str = "barnacle-cb:";
 pub const CHOOSE_PREFIX: &str = "barnacle-cb-pick:";
 pub const HOURS_PREFIX: &str = "barnacle-cb-hours:";
 pub const PANEL_PREFIX: &str = "barnacle-event:";
+pub const IQ_PANEL_PREFIX: &str = "iq-panel:";
 pub const EVENT_NAME_LIMIT: usize = 100;
 
 const ALL_TARGET: &str = "all";
@@ -321,6 +322,118 @@ pub fn panel_part(custom_id: &str) -> Option<(u64, PanelPart)> {
     let [panel, part] = <[&str; PANEL_FIELDS]>::try_from(fields).ok()?;
     let panel = canonical_id(panel).and_then(|id| u64::try_from(id).ok())?;
     let part = PanelPart::ALL
+        .into_iter()
+        .find(|known| known.text() == part)?;
+    Some((panel, part))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IqPanelPart {
+    Template,
+    FirstDay,
+    LastDay,
+    Zone,
+    Rename,
+    Criterion,
+    Add,
+    Edit,
+    Remove,
+    Rules,
+    Roles,
+    Judges,
+    Reaction,
+    Next,
+    Back,
+    Start,
+    Cancel,
+    ConfirmResume,
+    ConfirmStop,
+    ConfirmComplete,
+    ConfirmCleanup,
+    JudgesUsers,
+    JudgesSave,
+    RenameModal,
+    CriterionModal,
+    RulesModal,
+    ZoneModal,
+}
+
+impl IqPanelPart {
+    const ALL: [IqPanelPart; 27] = [
+        IqPanelPart::Template,
+        IqPanelPart::FirstDay,
+        IqPanelPart::LastDay,
+        IqPanelPart::Zone,
+        IqPanelPart::Rename,
+        IqPanelPart::Criterion,
+        IqPanelPart::Add,
+        IqPanelPart::Edit,
+        IqPanelPart::Remove,
+        IqPanelPart::Rules,
+        IqPanelPart::Roles,
+        IqPanelPart::Judges,
+        IqPanelPart::Reaction,
+        IqPanelPart::Next,
+        IqPanelPart::Back,
+        IqPanelPart::Start,
+        IqPanelPart::Cancel,
+        IqPanelPart::ConfirmResume,
+        IqPanelPart::ConfirmStop,
+        IqPanelPart::ConfirmComplete,
+        IqPanelPart::ConfirmCleanup,
+        IqPanelPart::JudgesUsers,
+        IqPanelPart::JudgesSave,
+        IqPanelPart::RenameModal,
+        IqPanelPart::CriterionModal,
+        IqPanelPart::RulesModal,
+        IqPanelPart::ZoneModal,
+    ];
+
+    fn text(self) -> &'static str {
+        match self {
+            IqPanelPart::Template => "template",
+            IqPanelPart::FirstDay => "first-day",
+            IqPanelPart::LastDay => "last-day",
+            IqPanelPart::Zone => "zone",
+            IqPanelPart::Rename => "rename",
+            IqPanelPart::Criterion => "criterion",
+            IqPanelPart::Add => "add",
+            IqPanelPart::Edit => "edit",
+            IqPanelPart::Remove => "remove",
+            IqPanelPart::Rules => "rules",
+            IqPanelPart::Roles => "roles",
+            IqPanelPart::Judges => "judges",
+            IqPanelPart::Reaction => "reaction",
+            IqPanelPart::Next => "next",
+            IqPanelPart::Back => "back",
+            IqPanelPart::Start => "start",
+            IqPanelPart::Cancel => "cancel",
+            IqPanelPart::ConfirmResume => "confirm-resume",
+            IqPanelPart::ConfirmStop => "confirm-stop",
+            IqPanelPart::ConfirmComplete => "confirm-complete",
+            IqPanelPart::ConfirmCleanup => "confirm-cleanup",
+            IqPanelPart::JudgesUsers => "judges-users",
+            IqPanelPart::JudgesSave => "judges-save",
+            IqPanelPart::RenameModal => "rename-modal",
+            IqPanelPart::CriterionModal => "criterion-modal",
+            IqPanelPart::RulesModal => "rules-modal",
+            IqPanelPart::ZoneModal => "zone-modal",
+        }
+    }
+}
+
+pub fn iq_panel_id(panel: u64, part: IqPanelPart) -> String {
+    format!("{IQ_PANEL_PREFIX}{panel}:{}", part.text())
+}
+
+pub fn iq_panel_part(custom_id: &str) -> Option<(u64, IqPanelPart)> {
+    let fields: Vec<&str> = custom_id
+        .strip_prefix(IQ_PANEL_PREFIX)?
+        .split(':')
+        .collect();
+    let [panel, part] = <[&str; PANEL_FIELDS]>::try_from(fields).ok()?;
+    let panel = canonical_id(panel).and_then(|id| u64::try_from(id).ok())?;
+    let part = IqPanelPart::ALL
         .into_iter()
         .find(|known| known.text() == part)?;
     Some((panel, part))

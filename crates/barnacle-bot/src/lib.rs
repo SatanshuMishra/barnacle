@@ -7,6 +7,7 @@ pub mod failure;
 pub mod ids;
 pub mod info;
 pub mod iq;
+pub mod iq_setup;
 pub mod iq_store;
 pub mod iq_text;
 pub mod logging;
