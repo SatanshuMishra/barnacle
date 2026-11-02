@@ -1,4 +1,5 @@
 use barnacle_bot::iq::Attachment;
+use barnacle_bot::iq::CheckPath;
 use barnacle_bot::iq::BoardRow;
 use barnacle_bot::iq::Checked;
 use barnacle_bot::iq::CleanupRefusal;
@@ -14,6 +15,7 @@ use barnacle_bot::iq::end_unix;
 use barnacle_bot::iq::may_clean_up;
 use barnacle_bot::iq::may_complete;
 use barnacle_bot::iq::message_chunks;
+use barnacle_bot::iq::moves_last_seen;
 use barnacle_bot::iq::should_check;
 use barnacle_bot::iq::standings;
 use barnacle_bot::iq::start_choice;
@@ -353,4 +355,10 @@ fn a_single_overlong_line_is_cut() {
     let sizes: Vec<usize> = chunks.iter().map(|chunk| chunk.chars().count()).collect();
     assert_eq!(sizes, [2000, 2000, 500]);
     assert_eq!(chunks.concat(), text);
+}
+
+#[test]
+fn only_the_catch_up_moves_the_last_seen_mark() {
+    assert!(!moves_last_seen(CheckPath::Live));
+    assert!(moves_last_seen(CheckPath::CatchUp));
 }
