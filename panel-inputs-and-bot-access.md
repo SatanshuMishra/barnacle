@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T20:02:49.735Z
+Updated: 2026-11-02T20:02:52.166Z
 Next ids: c2 D7 R1 S1
 
 ## Goal
@@ -17,7 +17,7 @@ access-roles is built and gated (8 of 8 pass, reconcile clean) on mitosis/access
 
 ## Next step
 
-When the access-roles reviewers finish, collect their last JSON arrays with the standards finding into review/round-1/access-roles.findings.json (leave out the suite's U1), run pipeline candidates, the validator, record and verdict.
+When the access-roles validator finishes, save its last JSON array as review/round-1/access-roles.verdicts.json, run pipeline record and verdict, then fix every confirmed advisory plus the unfinished UPDATES_NOT_SET_UP text (updating tests/text.rs) on mitosis/access-roles and merge the fixes into mitosis/panel-inputs.
 
 Needs: D5, D6.
 
