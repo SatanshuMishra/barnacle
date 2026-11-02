@@ -1,5 +1,8 @@
+use barnacle_bot::failure::Kind;
+use barnacle_bot::ids::GuildId;
 use barnacle_bot::iq::Attachment;
 use barnacle_bot::iq::BoardRow;
+use barnacle_bot::iq::CaughtUp;
 use barnacle_bot::iq::CheckPath;
 use barnacle_bot::iq::Checked;
 use barnacle_bot::iq::CleanupRefusal;
@@ -16,6 +19,7 @@ use barnacle_bot::iq::may_clean_up;
 use barnacle_bot::iq::may_complete;
 use barnacle_bot::iq::message_chunks;
 use barnacle_bot::iq::moves_last_seen;
+use barnacle_bot::iq::role_already_off;
 use barnacle_bot::iq::should_check;
 use barnacle_bot::iq::standings;
 use barnacle_bot::iq::start_choice;
@@ -358,7 +362,27 @@ fn a_single_overlong_line_is_cut() {
 }
 
 #[test]
-fn only_the_catch_up_moves_the_last_seen_mark() {
-    assert!(!moves_last_seen(CheckPath::Live));
-    assert!(moves_last_seen(CheckPath::CatchUp));
+fn a_live_check_moves_the_mark_only_after_its_server_caught_up() {
+    assert!(!moves_last_seen(CheckPath::Live, false));
+    assert!(moves_last_seen(CheckPath::Live, true));
+    assert!(moves_last_seen(CheckPath::CatchUp, false));
+}
+
+#[test]
+fn a_new_connection_forgets_every_caught_up_server() {
+    let caught_up = CaughtUp::default();
+    assert!(!caught_up.holds(GuildId::new(5)));
+    caught_up.finish(GuildId::new(5));
+    assert!(caught_up.holds(GuildId::new(5)));
+    assert!(!caught_up.holds(GuildId::new(6)));
+    caught_up.forget_all();
+    assert!(!caught_up.holds(GuildId::new(5)));
+}
+
+#[test]
+fn a_left_member_or_deleted_role_counts_as_taken_away() {
+    assert!(role_already_off(Kind::UnknownMember));
+    assert!(role_already_off(Kind::UnknownRole));
+    assert!(!role_already_off(Kind::MissingPermissions));
+    assert!(!role_already_off(Kind::RateLimited));
 }

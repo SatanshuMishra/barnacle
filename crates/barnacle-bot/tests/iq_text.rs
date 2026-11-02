@@ -146,9 +146,20 @@ fn nobody_scoring_means_no_winner() {
 fn an_unfinished_change_names_what_was_done() {
     let untouched = unfinished(&[]);
     assert!(untouched.contains("was not changed"), "{untouched}");
-    let saved = unfinished(&[Done::SettingsSaved]);
-    assert!(!saved.contains("was not changed"), "{saved}");
-    assert!(saved.contains("the new settings were saved"), "{saved}");
+    let judged = unfinished(&[Done::JudgesChanged]);
+    assert!(!judged.contains("was not changed"), "{judged}");
+    assert!(
+        judged.contains("the IQ-Judge role was handed out and taken away"),
+        "{judged}"
+    );
+    assert!(judged.contains("Press it again"), "{judged}");
+}
+
+#[test]
+fn a_completed_competition_is_not_told_to_press_again() {
+    let completed = unfinished(&[Done::Completed]);
+    assert!(!completed.contains("Press it again"), "{completed}");
+    assert!(completed.contains("/iq cleanup"), "{completed}");
 }
 
 #[test]
