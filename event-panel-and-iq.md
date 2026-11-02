@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T01:49:53.549Z
+Updated: 2026-11-02T01:49:57.501Z
 Next ids: c3 D5 R4 S1
 
 ## Goal
@@ -18,7 +18,7 @@ The event-panel-and-iq drive is stopped at ship (no ship boundary recorded). Its
 
 ## Next step
 
-Watch both drives. When the iq-competition drive stops on pipeline gate-findings (mitosis 0.10.1 writes gate property reason null), set each null reason to "" in ~/.mitosis/runs/barnacle/iq-competition/state.json, set its drive/state.json state back to review with reason null, and run pipeline drive start --slug iq-competition. Merge event-panel fix commits into the IQ branch before the IQ review.
+On the event-panel validator's result: record round 2, run pipeline verdict, fix confirmed blockers and advisories on mitosis/event-panel, then record the ship boundary and ship. When the iq-competition drive enters review, set each null gate reason to "" in ~/.mitosis/runs/barnacle/iq-competition/state.json before its reviewers finish, so gate-findings never halts it. Merge event-panel fix commits into the IQ branch before the IQ review.
 
 Needs: D1, D2, R2.
 
