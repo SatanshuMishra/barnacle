@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T01:49:59.223Z
+Updated: 2026-11-02T01:54:37.619Z
 Next ids: c3 D5 R4 S1
 
 ## Goal
@@ -14,11 +14,11 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-The event-panel-and-iq drive is stopped at ship (no ship boundary recorded). Its round 1 green was false: after the gate-findings halt and restart, the drive collected none of the code reviewer's findings (C1 MEDIUM typed-dates window zone mismatch, C2 LOW zone menu cut, C3 LOW repeated PanelPart lists). A corrective round 2 in review/round-2 is validating those three; the ledger holds round 1 as empty. MSP event-panel is at aa274cf on mitosis/event-panel. Slug iq-competition is building MSP iq-competition stacked on mitosis/event-panel at aa274cf (5 serial Lanes). The check-author's API readings (back() returns the draft, every IqStore call returns Result, SetupDraft accessors) bind the IQ steps.
+The event-panel-and-iq drive is stopped at ship (no ship boundary recorded). Corrective round 2 is recorded with verdict diagnose: C1 (MEDIUM, kind "window day zone mismatch": with_typed_dates measures the window from today in the server zone, ready() from UTC) is confirmed; C2 and C3 are rejected as not introduced. A diagnosis agent is running on C1. An uncommitted receipt test, typed_dates_measure_the_window_from_the_same_day_as_create in tests/event_draft.rs of trees/event-panel, fails at aa274cf. The planned fix makes within_window_of take now_unix and measure from UTC through within_window. MSP event-panel is at aa274cf on mitosis/event-panel. Slug iq-competition is building MSP iq-competition stacked on mitosis/event-panel at aa274cf; lanes iq-rules, iq-text and iq-store are done, iq-setup and iq-discord remain. The check-author's API readings (back() returns the draft, every IqStore call returns Result, SetupDraft accessors) bind the IQ steps.
 
 ## Next step
 
-On the event-panel validator's result: record round 2, run pipeline verdict, fix confirmed blockers and advisories on mitosis/event-panel, then record the ship boundary and ship. When the iq-competition drive enters review, set each null gate reason to "" in ~/.mitosis/runs/barnacle/iq-competition/state.json before its reviewers finish, so gate-findings never halts it. Merge event-panel fix commits into the IQ branch before the IQ review.
+On the C1 diagnosis: save and record it with pipeline diagnosis, rerun pipeline verdict, then commit the receipt test, commit the fix naming C1, run pipeline fix-check, and review round 3. Then record the ship boundary and ship. When the iq-competition drive enters review, set each null gate reason to "" in ~/.mitosis/runs/barnacle/iq-competition/state.json before its reviewers finish, so gate-findings never halts it. Merge event-panel fix commits into the IQ branch before the IQ review.
 
 Needs: D1, D2, R2.
 
