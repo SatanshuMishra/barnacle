@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T01:29:49.601Z
+Updated: 2026-11-02T01:29:50.904Z
 Next ids: c3 D5 R3 S1
 
 ## Goal
@@ -18,9 +18,9 @@ The drive for slug event-panel-and-iq is in its build state (plan 2e92988afdef):
 
 ## Next step
 
-Watch pipeline drive status for slug event-panel-and-iq until awaiting-merge; then write the IQ run home's feature.json (feature: the event-panel MSP branch, commit: its head, core main, remote origin), replace EVENT_PANEL_BRANCH in its run.zsh, plan it, record its build boundary and drive slug iq-competition.
+Watch both drives (slugs event-panel-and-iq and iq-competition); when event-panel's review adds fix commits, merge mitosis/event-panel into the IQ branch before the IQ review; at awaiting-merge for both, report the stacked pull requests.
 
-Needs: D1, D2, D3.
+Needs: D1, D2, R2.
 
 ## Decisions in force
 
