@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T20:09:11.145Z
+Updated: 2026-11-02T20:09:13.393Z
 Next ids: c2 D7 R1 S1
 
 ## Goal
@@ -17,7 +17,7 @@ access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat
 
 ## Next step
 
-When the access-roles validator finishes, save its last JSON array as review/round-1/access-roles.verdicts.json, run pipeline record and verdict, then fix every confirmed advisory plus the unfinished UPDATES_NOT_SET_UP text (updating tests/text.rs) on mitosis/access-roles and merge the fixes into mitosis/panel-inputs.
+When the panel-inputs build finishes, merge mitosis/access-roles (d1dce61) into mitosis/panel-inputs, write its lane assumptions, and run its review round 1; then record the iq-judging hand-off and build it from mitosis/panel-inputs.
 
 Needs: D5, D6.
 
