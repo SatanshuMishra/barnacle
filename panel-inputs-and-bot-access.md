@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T18:25:19.834Z
+Updated: 2026-11-02T18:25:23.516Z
 Next ids: c2 D5 R1 S1
 
 ## Goal
@@ -17,7 +17,9 @@ Interphase Phase 9, unattended: the spec, record and items are written and pass 
 
 ## Next step
 
-Apply the spec review's real findings to the record scripts, rerun build_record.py, add_tasks.py and surface_probe.py --unattended, check_record --complete, re-render and recheck spec and items, verify and delete the guard, set the record handed-off, then pipeline Stage 2 (guarantees, hand-off decision, feature branch, CHARTER.md, worker-rules.txt with prevent.md, items.json, graph.json, run.zsh, plan-only, build).
+Run pipeline feature-branch --type feat, then write CHARTER.md, worker-rules.txt (base plus pipeline prevent output), items.json, graph.json and run.zsh in ~/.mitosis/barnacle/panel-inputs-and-bot-access, run run.zsh --plan-only, then build.
+
+Needs: D1, D2, D4.
 
 ## Decisions in force
 
