@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T21:02:12.744Z
+Updated: 2026-11-02T21:53:51.092Z
 Next ids: c2 D7 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat/panel-inputs-and-bot-access); its two confirmed advisories (C1 /announce Send organiser re-check, C2 a test rolling back 0010) and the UPDATES_NOT_SET_UP rewording are fixed on mitosis/access-roles at d1dce61, covering tests and clippy pass, fix-check clean against review/access-roles.record.json (criteria 5.1-5.4 only, since fix-check refuses 5.23, which has no test rows). The fixes are not yet in mitosis/panel-inputs, which the panel-inputs build is still producing from d461aab: all three lanes (member-zones, event-inputs, iq-setup-inputs) are ok and the MSP is in its gate; review must add time_zone to tests/discord.rs:483 and tests/event_commands.rs:20, which pin the old /event option lists outside every write-set (worker-rules.txt in the panel-inputs and iq-judging homes tells Workers to report such tests in notes rather than fail). iq-judging waits for mitosis/panel-inputs.
+access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat/panel-inputs-and-bot-access); its two confirmed advisories (C1 /announce Send organiser re-check, C2 a test rolling back 0010) and the UPDATES_NOT_SET_UP rewording are fixed on mitosis/access-roles at d1dce61, covering tests and clippy pass, fix-check clean against review/access-roles.record.json (criteria 5.1-5.4 only, since fix-check refuses 5.23, which has no test rows). The fixes are not yet in mitosis/panel-inputs, which the panel-inputs build is still producing from d461aab: all three lanes are ok and committed on mitosis/panel-inputs at d2a626a; its gate passed the with-work and reverted runs for all 30 properties and is in mutation, and the branch stays untouched until the gate ends; review must add time_zone to tests/discord.rs:483 and tests/event_commands.rs:20, which pin the old /event option lists outside every write-set (worker-rules.txt in the panel-inputs and iq-judging homes tells Workers to report such tests in notes rather than fail). iq-judging waits for mitosis/panel-inputs.
 
 ## Next step
 
