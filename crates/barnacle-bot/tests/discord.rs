@@ -357,7 +357,8 @@ fn the_commands_outside_events_keep_their_options() {
             "about",
             "voice",
             "updates",
-            "announce"
+            "announce",
+            "iq"
         ]
     );
     let expected: Vec<(String, Vec<String>)> = [
@@ -379,6 +380,14 @@ fn the_commands_outside_events_keep_their_options() {
         ("voice hub list", &[]),
         ("updates setup", &["channel", "role"]),
         ("announce", &[]),
+        ("iq start", &[]),
+        ("iq edit", &[]),
+        ("iq stop", &[]),
+        ("iq complete", &[]),
+        ("iq cleanup", &[]),
+        ("iq judges", &[]),
+        ("iq points", &["member", "points", "reason"]),
+        ("iq leaderboard", &[]),
     ]
     .iter()
     .map(|(path, options)| {

@@ -16,6 +16,7 @@ use super::announcer::cancel_row;
 use super::announcer::round_embed;
 use super::announcer::silhouette_attachment;
 use super::herald::announcement_content;
+use super::iq;
 use super::rooms::MISSING_PERMISSIONS;
 use super::rooms::UNKNOWN_CHANNEL;
 use super::rooms::refused;
@@ -195,6 +196,49 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
             ),
             ..announce()
         },
+        poise::Command {
+            description: Some("Run the IQ Competition".into()),
+            subcommands: vec![
+                poise::Command {
+                    description: Some("Set up a new IQ Competition, or resume a paused one".into()),
+                    ..iq::iq_start()
+                },
+                poise::Command {
+                    description: Some(
+                        "Change the running competition's criteria, rules, roles and judges".into(),
+                    ),
+                    ..iq::iq_edit()
+                },
+                poise::Command {
+                    description: Some("Pause the competition".into()),
+                    ..iq::iq_stop()
+                },
+                poise::Command {
+                    description: Some("Announce the winner after the competition ends".into()),
+                    ..iq::iq_complete()
+                },
+                poise::Command {
+                    description: Some(
+                        "Delete the competition's channels and archive its scores".into(),
+                    ),
+                    ..iq::iq_cleanup()
+                },
+                poise::Command {
+                    description: Some("Hand out and take away the IQ-Judge role".into()),
+                    ..iq::iq_judges()
+                },
+                poise::Command {
+                    description: Some("Give or take a member's points, as a judge".into()),
+                    ..iq::iq_points()
+                },
+                poise::Command {
+                    description: Some("Show the competition's leaderboard".into()),
+                    ..iq::iq_leaderboard()
+                },
+            ],
+            subcommand_required: true,
+            ..iq::iq()
+        },
     ]
 }
 
@@ -224,7 +268,7 @@ pub fn rehearsal() -> Vec<poise::Command<Data, Error>> {
     }]
 }
 
-fn place(ctx: Context<'_>) -> Option<Place> {
+pub(super) fn place(ctx: Context<'_>) -> Option<Place> {
     let guild = ctx.guild_id()?;
     Some(Place {
         guild: GuildId::new(guild.get()),
@@ -239,7 +283,7 @@ pub fn private_reply(content: impl Into<String>) -> poise::CreateReply {
         .ephemeral(true)
 }
 
-async fn private(ctx: Context<'_>, content: impl Into<String>) -> Result<(), Error> {
+pub(super) async fn private(ctx: Context<'_>, content: impl Into<String>) -> Result<(), Error> {
     ctx.send(private_reply(content)).await?;
     Ok(())
 }
@@ -264,7 +308,7 @@ fn reported(ctx: Context<'_>, failure: &Failure) -> String {
     failure::command_failed(&ctx.command().qualified_name, failure)
 }
 
-async fn fail(ctx: Context<'_>, failure: Failure) -> Result<(), Error> {
+pub(super) async fn fail(ctx: Context<'_>, failure: Failure) -> Result<(), Error> {
     let reply = reported(ctx, &failure);
     private(ctx, reply).await
 }
@@ -947,7 +991,7 @@ async fn event_create(
     }
 }
 
-async fn recent_zones(ctx: Context<'_>, guild: GuildId, now_unix: i64) -> Vec<String> {
+pub(super) async fn recent_zones(ctx: Context<'_>, guild: GuildId, now_unix: i64) -> Vec<String> {
     match ctx.data().signups.store().events_in(guild).await {
         Ok(events) => event_draft::server_zones(&events, now_unix),
         Err(error) => {

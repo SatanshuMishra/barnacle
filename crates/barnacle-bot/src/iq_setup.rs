@@ -464,6 +464,13 @@ impl SetupDraft {
         })
     }
 
+    pub fn unpicked(&self) -> SetupDraft {
+        SetupDraft {
+            picked: None,
+            ..self.clone()
+        }
+    }
+
     pub fn remove_picked(&self) -> Result<SetupDraft, SetupRefusal> {
         let position = self
             .picked
