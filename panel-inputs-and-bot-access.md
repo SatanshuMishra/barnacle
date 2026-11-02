@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T17:45:52.237Z
+Updated: 2026-11-02T17:45:53.794Z
 Next ids: c2 D1 R1 S1
 
 ## Goal
@@ -27,4 +27,5 @@ Record the owner's answers to the intent round and round 1 in docs/specs/panel-i
 
 ## Where the details live
 
+- Spec workspace: docs/specs/panel-inputs-and-bot-access.{decisions.md,record.json,guard.json}
 - Owner feedback items a-h and the access-role request are in the session transcript of 2026-11-02; the live-probe log is /private/tmp/claude-501/-Users-satanshumishra-Documents-DevLabs-barnacle/54bd6046-bf94-46f7-a742-87b3d50c95da/scratchpad/live-probe/bot.log
