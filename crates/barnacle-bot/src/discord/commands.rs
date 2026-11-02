@@ -11,6 +11,7 @@ use poise::serenity_prelude as serenity;
 use super::Context;
 use super::Data;
 use super::Error;
+use super::access::organiser_check;
 use super::announcer::SILHOUETTE_FILE;
 use super::announcer::cancel_row;
 use super::announcer::round_embed;
@@ -888,12 +889,7 @@ async fn about(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(
-    slash_command,
-    guild_only,
-    default_member_permissions = "MANAGE_GUILD",
-    required_permissions = "MANAGE_GUILD"
-)]
+#[poise::command(slash_command, guild_only, check = "organiser_check")]
 async fn event(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -952,7 +948,7 @@ pub fn cached_event_channel(
     })
 }
 
-#[poise::command(slash_command, rename = "create")]
+#[poise::command(slash_command, rename = "create", check = "organiser_check")]
 async fn event_create(
     ctx: Context<'_>,
     #[description = "The event's name, for example Ranked Sprint"]
@@ -1006,7 +1002,7 @@ pub(super) async fn recent_zones(ctx: Context<'_>, guild: GuildId, now_unix: i64
     }
 }
 
-#[poise::command(slash_command, rename = "edit")]
+#[poise::command(slash_command, rename = "edit", check = "organiser_check")]
 async fn event_edit(
     ctx: Context<'_>,
     #[description = "The event, picked from the list"]
@@ -1068,7 +1064,7 @@ async fn event_edit(
     }
 }
 
-#[poise::command(slash_command, rename = "repost")]
+#[poise::command(slash_command, rename = "repost", check = "organiser_check")]
 async fn event_repost(
     ctx: Context<'_>,
     #[description = "The event, picked from the list"]
@@ -1182,7 +1178,7 @@ async fn event_repost(
     }
 }
 
-#[poise::command(slash_command, rename = "end")]
+#[poise::command(slash_command, rename = "end", check = "organiser_check")]
 async fn event_end(
     ctx: Context<'_>,
     #[description = "The event, picked from the list"]
@@ -1225,7 +1221,7 @@ async fn event_end(
     }
 }
 
-#[poise::command(slash_command, rename = "list")]
+#[poise::command(slash_command, rename = "list", check = "organiser_check")]
 async fn event_list(ctx: Context<'_>) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -1244,12 +1240,7 @@ pub fn event_list_reply(events: &[Event], now_unix: i64) -> poise::CreateReply {
     private_reply(text::event_list(&lines))
 }
 
-#[poise::command(
-    slash_command,
-    guild_only,
-    default_member_permissions = "MANAGE_GUILD",
-    required_permissions = "MANAGE_GUILD"
-)]
+#[poise::command(slash_command, guild_only, check = "organiser_check")]
 async fn rehearse(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -1266,7 +1257,7 @@ async fn posts_of(store: &Attendance, events: &[Event]) -> Result<Vec<(i64, Vec<
     Ok(posts)
 }
 
-#[poise::command(slash_command, rename = "start")]
+#[poise::command(slash_command, rename = "start", check = "organiser_check")]
 #[allow(clippy::too_many_arguments)]
 async fn rehearse_start(
     ctx: Context<'_>,
@@ -1386,7 +1377,7 @@ async fn rehearse_start(
     }
 }
 
-#[poise::command(slash_command, rename = "next")]
+#[poise::command(slash_command, rename = "next", check = "organiser_check")]
 async fn rehearse_next(ctx: Context<'_>) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -1437,7 +1428,7 @@ async fn rehearse_next(ctx: Context<'_>) -> Result<(), Error> {
     .await
 }
 
-#[poise::command(slash_command, rename = "reset")]
+#[poise::command(slash_command, rename = "reset", check = "organiser_check")]
 async fn rehearse_reset(ctx: Context<'_>) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -1461,17 +1452,12 @@ async fn rehearse_reset(ctx: Context<'_>) -> Result<(), Error> {
     private(ctx, text::reset_done(&purged)).await
 }
 
-#[poise::command(
-    slash_command,
-    guild_only,
-    default_member_permissions = "MANAGE_GUILD",
-    required_permissions = "MANAGE_GUILD"
-)]
+#[poise::command(slash_command, guild_only, check = "organiser_check")]
 async fn updates(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command, rename = "setup")]
+#[poise::command(slash_command, rename = "setup", check = "organiser_check")]
 async fn updates_setup(
     ctx: Context<'_>,
     #[description = "Channel for Barnacle update posts"]
@@ -1507,12 +1493,7 @@ async fn updates_setup(
     private(ctx, text::updates_setup_reply(place.channel, ping, verdict)).await
 }
 
-#[poise::command(
-    slash_command,
-    guild_only,
-    owners_only,
-    default_member_permissions = "MANAGE_GUILD"
-)]
+#[poise::command(slash_command, guild_only, owners_only, check = "organiser_check")]
 async fn announce(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild) = ctx.guild_id() else {
         return Ok(());
@@ -1558,17 +1539,12 @@ fn send_row(version: &str) -> serenity::CreateActionRow {
     ])
 }
 
-#[poise::command(
-    slash_command,
-    guild_only,
-    default_member_permissions = "MANAGE_CHANNELS",
-    required_permissions = "MANAGE_CHANNELS"
-)]
+#[poise::command(slash_command, guild_only, check = "organiser_check")]
 async fn voice(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command)]
+#[poise::command(slash_command, check = "organiser_check")]
 async fn hub(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -1655,7 +1631,7 @@ fn with_readiness(reply: String, blockers: &[&str]) -> String {
     }
 }
 
-#[poise::command(slash_command, rename = "create")]
+#[poise::command(slash_command, rename = "create", check = "organiser_check")]
 async fn hub_create(
     ctx: Context<'_>,
     #[description = "Rooms are named this plus a number: cb gives cb-1, cb-2"]
@@ -1735,7 +1711,7 @@ async fn hub_create(
     .await
 }
 
-#[poise::command(slash_command, rename = "edit")]
+#[poise::command(slash_command, rename = "edit", check = "organiser_check")]
 async fn hub_edit(
     ctx: Context<'_>,
     #[description = "The Join to Create channel to change"]
@@ -1834,7 +1810,7 @@ async fn hub_edit(
     .await
 }
 
-#[poise::command(slash_command, rename = "remove")]
+#[poise::command(slash_command, rename = "remove", check = "organiser_check")]
 async fn hub_remove(
     ctx: Context<'_>,
     #[description = "The Join to Create channel to delete"]
@@ -1859,7 +1835,7 @@ async fn hub_remove(
     private(ctx, voice_text::hub_removed(&hub.name)).await
 }
 
-#[poise::command(slash_command, rename = "list")]
+#[poise::command(slash_command, rename = "list", check = "organiser_check")]
 async fn hub_list(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild) = ctx.guild_id() else {
         return Ok(());

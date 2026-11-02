@@ -35,6 +35,7 @@ pub const CHOOSE_PREFIX: &str = "barnacle-cb-pick:";
 pub const HOURS_PREFIX: &str = "barnacle-cb-hours:";
 pub const PANEL_PREFIX: &str = "barnacle-event:";
 pub const IQ_PANEL_PREFIX: &str = "iq-panel:";
+pub const ACCESS_PANEL_PREFIX: &str = "barnacle-access:";
 pub const EVENT_NAME_LIMIT: usize = 100;
 
 const ALL_TARGET: &str = "all";
@@ -434,6 +435,46 @@ pub fn iq_panel_part(custom_id: &str) -> Option<(u64, IqPanelPart)> {
     let [panel, part] = <[&str; PANEL_FIELDS]>::try_from(fields).ok()?;
     let panel = canonical_id(panel).and_then(|id| u64::try_from(id).ok())?;
     let part = IqPanelPart::ALL
+        .into_iter()
+        .find(|known| known.text() == part)?;
+    Some((panel, part))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessPanelPart {
+    Roles,
+    Save,
+    Cancel,
+}
+
+impl AccessPanelPart {
+    const ALL: [AccessPanelPart; 3] = [
+        AccessPanelPart::Roles,
+        AccessPanelPart::Save,
+        AccessPanelPart::Cancel,
+    ];
+
+    fn text(self) -> &'static str {
+        match self {
+            AccessPanelPart::Roles => "roles",
+            AccessPanelPart::Save => "save",
+            AccessPanelPart::Cancel => "cancel",
+        }
+    }
+}
+
+pub fn access_panel_id(panel: u64, part: AccessPanelPart) -> String {
+    format!("{ACCESS_PANEL_PREFIX}{panel}:{}", part.text())
+}
+
+pub fn access_panel_part(custom_id: &str) -> Option<(u64, AccessPanelPart)> {
+    let fields: Vec<&str> = custom_id
+        .strip_prefix(ACCESS_PANEL_PREFIX)?
+        .split(':')
+        .collect();
+    let [panel, part] = <[&str; PANEL_FIELDS]>::try_from(fields).ok()?;
+    let panel = canonical_id(panel).and_then(|id| u64::try_from(id).ok())?;
+    let part = AccessPanelPart::ALL
         .into_iter()
         .find(|known| known.text() == part)?;
     Some((panel, part))

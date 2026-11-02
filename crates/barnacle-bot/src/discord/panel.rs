@@ -3,6 +3,7 @@ use barnacle_guess::UserId;
 use poise::serenity_prelude as serenity;
 
 use super::Data;
+use super::access::organiser_pressed;
 use super::commands;
 use super::commands::CheckedPing;
 use super::events::Answer;
@@ -62,6 +63,7 @@ pub(super) async fn pressed(
                 panel,
                 user,
                 now_ms,
+                guild,
                 &scope,
             )
             .await
@@ -276,6 +278,7 @@ fn changed(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn save(
     data: &Data,
     serenity_context: &serenity::Context,
@@ -283,8 +286,12 @@ async fn save(
     panel: u64,
     user: UserId,
     now_ms: u64,
+    guild: GuildId,
     scope: &Scope,
 ) {
+    if !organiser_pressed(data, serenity_context, component, guild, scope).await {
+        return;
+    }
     if !acknowledge(serenity_context, component, scope).await {
         return;
     }

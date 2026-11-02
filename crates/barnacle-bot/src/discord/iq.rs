@@ -12,6 +12,8 @@ use poise::serenity_prelude as serenity;
 use super::Context;
 use super::Data;
 use super::Error;
+use super::access::organiser_check;
+use super::access::organiser_pressed;
 use super::commands;
 use super::events::Answer;
 use super::events::acknowledge;
@@ -68,7 +70,6 @@ const DELETE_CHANNELS_LABEL: &str = "Delete channels";
 const SAVE_JUDGES_LABEL: &str = "Save judges";
 const NOTHING_CREATED: &str = "Cancelled. Nothing was created.";
 const ZERO_POINTS: &str = "Give or take at least 1 point. 0 changes nothing.";
-const MANAGE_SERVER_NEEDED: &str = "You need Manage Server to use this button.";
 const LOG_FAILED: &str =
     "The points were saved, but the note in the submissions channel was not posted";
 const ANNOUNCED_LINES: usize = 5;
@@ -238,12 +239,7 @@ pub(super) async fn iq(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(
-    slash_command,
-    rename = "start",
-    guild_only,
-    required_permissions = "MANAGE_GUILD"
-)]
+#[poise::command(slash_command, rename = "start", guild_only, check = "organiser_check")]
 pub(super) async fn iq_start(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild) = guild_of(ctx) else {
         return Ok(());
@@ -288,12 +284,7 @@ pub(super) async fn iq_start(ctx: Context<'_>) -> Result<(), Error> {
     }
 }
 
-#[poise::command(
-    slash_command,
-    rename = "edit",
-    guild_only,
-    required_permissions = "MANAGE_GUILD"
-)]
+#[poise::command(slash_command, rename = "edit", guild_only, check = "organiser_check")]
 pub(super) async fn iq_edit(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild) = guild_of(ctx) else {
         return Ok(());
@@ -318,12 +309,7 @@ pub(super) async fn iq_edit(ctx: Context<'_>) -> Result<(), Error> {
     }
 }
 
-#[poise::command(
-    slash_command,
-    rename = "stop",
-    guild_only,
-    required_permissions = "MANAGE_GUILD"
-)]
+#[poise::command(slash_command, rename = "stop", guild_only, check = "organiser_check")]
 pub(super) async fn iq_stop(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild) = guild_of(ctx) else {
         return Ok(());
@@ -360,7 +346,7 @@ pub(super) async fn iq_stop(ctx: Context<'_>) -> Result<(), Error> {
     slash_command,
     rename = "complete",
     guild_only,
-    required_permissions = "MANAGE_GUILD"
+    check = "organiser_check"
 )]
 pub(super) async fn iq_complete(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild) = guild_of(ctx) else {
@@ -417,7 +403,7 @@ pub(super) async fn iq_complete(ctx: Context<'_>) -> Result<(), Error> {
     slash_command,
     rename = "cleanup",
     guild_only,
-    required_permissions = "MANAGE_GUILD"
+    check = "organiser_check"
 )]
 pub(super) async fn iq_cleanup(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild) = guild_of(ctx) else {
@@ -452,7 +438,7 @@ pub(super) async fn iq_cleanup(ctx: Context<'_>) -> Result<(), Error> {
     slash_command,
     rename = "judges",
     guild_only,
-    required_permissions = "MANAGE_GUILD"
+    check = "organiser_check"
 )]
 pub(super) async fn iq_judges(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild) = guild_of(ctx) else {
@@ -1334,35 +1320,6 @@ fn judges_rows(panel: u64, judges: &[UserId]) -> Vec<serenity::CreateActionRow> 
     ]
 }
 
-fn manages_server(component: &serenity::ComponentInteraction) -> bool {
-    component
-        .member
-        .as_ref()
-        .and_then(|member| member.permissions)
-        .is_some_and(|permissions| permissions.manage_guild())
-}
-
-async fn refuse_manage_server(
-    serenity_context: &serenity::Context,
-    component: &serenity::ComponentInteraction,
-    scope: &Scope,
-) {
-    failure::refused(
-        "interaction.refused",
-        "an IQ Competition button was pressed by a member without Manage Server",
-        "missing_user_permissions",
-        scope,
-    );
-    tell(
-        serenity_context,
-        component,
-        Answer::Response,
-        MANAGE_SERVER_NEEDED,
-        scope,
-    )
-    .await;
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn finish(
     data: &Data,
@@ -1374,8 +1331,7 @@ async fn finish(
     guild: GuildId,
     scope: &Scope,
 ) {
-    if !manages_server(component) {
-        refuse_manage_server(serenity_context, component, scope).await;
+    if !organiser_pressed(data, serenity_context, component, guild, scope).await {
         return;
     }
     let drafts = &data.iq_drafts;
@@ -1470,8 +1426,7 @@ async fn confirmed(
     guild: GuildId,
     scope: &Scope,
 ) {
-    if !manages_server(component) {
-        refuse_manage_server(serenity_context, component, scope).await;
+    if !organiser_pressed(data, serenity_context, component, guild, scope).await {
         return;
     }
     if !acknowledge(serenity_context, component, scope).await {

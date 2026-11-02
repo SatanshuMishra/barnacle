@@ -23,6 +23,7 @@ use barnacle_bot::schedule::Zone;
 use barnacle_bot::schedule::parse_day;
 use barnacle_bot::solves::Ranking;
 use barnacle_bot::wiring;
+use barnacle_bot::wiring::AccessPanelPart;
 use barnacle_bot::wiring::ChannelAccess;
 use barnacle_bot::wiring::ChannelProblem;
 use barnacle_bot::wiring::EventChoice;
@@ -1156,4 +1157,32 @@ fn cached(
     channel.guild_id = serenity::GuildId::new(guild);
     channel.kind = kind;
     (channel.id, channel)
+}
+
+#[test]
+fn each_access_panel_part_reads_back_from_its_id() {
+    for (id, part) in [
+        ("barnacle-access:12:roles", AccessPanelPart::Roles),
+        ("barnacle-access:12:save", AccessPanelPart::Save),
+        ("barnacle-access:12:cancel", AccessPanelPart::Cancel),
+    ] {
+        assert_eq!(wiring::access_panel_part(id), Some((12, part)), "{id}");
+        assert_eq!(wiring::access_panel_id(12, part), id);
+    }
+}
+
+#[test]
+fn a_malformed_access_panel_id_is_ignored() {
+    for id in [
+        "barnacle-access:012:save",
+        "barnacle-access:12:Save",
+        "barnacle-access:12:days",
+        "barnacle-access:12",
+        "barnacle-access:12:save:x",
+        "barnacle-event:12:save",
+    ] {
+        assert_eq!(wiring::access_panel_part(id), None, "{id}");
+    }
+    assert_eq!(wiring::panel_part("barnacle-access:12:save"), None);
+    assert_eq!(wiring::iq_panel_part("barnacle-access:12:save"), None);
 }

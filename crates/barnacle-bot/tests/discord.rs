@@ -5,11 +5,13 @@ use barnacle_bot::attendance::HourTally;
 use barnacle_bot::attendance::SignupView;
 use barnacle_bot::discord::Data;
 use barnacle_bot::discord::Error;
+use barnacle_bot::discord::access_rows;
 use barnacle_bot::discord::allowed_mentions;
 use barnacle_bot::discord::announcement_message;
 use barnacle_bot::discord::command_list;
 use barnacle_bot::discord::command_list_for;
 use barnacle_bot::discord::hours_menu_reply;
+use barnacle_bot::discord::organiser_roles_text;
 use barnacle_bot::discord::signup_rows;
 use barnacle_bot::ids::Ping;
 use barnacle_bot::ids::RoleId;
@@ -358,7 +360,8 @@ fn the_commands_outside_events_keep_their_options() {
             "voice",
             "updates",
             "announce",
-            "iq"
+            "iq",
+            "barnacle"
         ]
     );
     let expected: Vec<(String, Vec<String>)> = [
@@ -388,6 +391,7 @@ fn the_commands_outside_events_keep_their_options() {
         ("iq judges", &[]),
         ("iq points", &["member", "points", "reason"]),
         ("iq leaderboard", &[]),
+        ("barnacle access", &[]),
     ]
     .iter()
     .map(|(path, options)| {
@@ -450,12 +454,13 @@ fn the_event_command_has_its_five_subcommands() {
     assert!(event.subcommand_required);
     assert_eq!(
         event.default_member_permissions,
-        serenity::Permissions::MANAGE_GUILD
+        serenity::Permissions::empty()
     );
-    assert_eq!(
-        event.required_permissions,
-        serenity::Permissions::MANAGE_GUILD
-    );
+    assert_eq!(event.required_permissions, serenity::Permissions::empty());
+    assert_eq!(event.checks.len(), 1);
+    for subcommand in &event.subcommands {
+        assert_eq!(subcommand.checks.len(), 1, "{}", subcommand.name);
+    }
     assert_eq!(
         names(&event.subcommands),
         ["create", "edit", "repost", "end", "list"]
@@ -616,7 +621,7 @@ fn every_server_is_sent_guess_series_with_its_rounds_bounds() {
 }
 
 #[test]
-fn announce_is_owner_only_and_updates_setup_needs_manage_server() {
+fn announce_is_owner_only_and_updates_setup_is_for_organisers() {
     let commands = command_list(false);
     let named = |name: &str| {
         commands
@@ -629,19 +634,19 @@ fn announce_is_owner_only_and_updates_setup_needs_manage_server() {
     assert!(announce.guild_only);
     assert_eq!(
         announce.default_member_permissions,
-        serenity::Permissions::MANAGE_GUILD
+        serenity::Permissions::empty()
     );
+    assert_eq!(announce.checks.len(), 1);
     let updates = named("updates");
     assert!(updates.guild_only);
     assert!(updates.subcommand_required);
     assert_eq!(
         updates.default_member_permissions,
-        serenity::Permissions::MANAGE_GUILD
+        serenity::Permissions::empty()
     );
-    assert_eq!(
-        updates.required_permissions,
-        serenity::Permissions::MANAGE_GUILD
-    );
+    assert_eq!(updates.required_permissions, serenity::Permissions::empty());
+    assert_eq!(updates.checks.len(), 1);
+    assert_eq!(updates.subcommands[0].checks.len(), 1);
     assert_eq!(names(&updates.subcommands), ["setup"]);
     assert_eq!(
         updates.subcommands[0]
@@ -675,5 +680,112 @@ fn an_update_post_is_a_plain_message_that_pings_only_its_role() {
             serenity::CreateAllowedMentions::new().roles([serenity::RoleId::new(123)])
         )
         .unwrap()
+    );
+}
+
+#[test]
+fn voice_and_rehearse_are_for_organisers_at_every_level() {
+    let commands = command_list(true);
+    for name in ["voice", "rehearse"] {
+        let command = commands
+            .iter()
+            .find(|command| command.name == name)
+            .unwrap_or_else(|| panic!("{name} is registered"));
+        assert_eq!(
+            command.default_member_permissions,
+            serenity::Permissions::empty(),
+            "{name}"
+        );
+        assert_eq!(
+            command.required_permissions,
+            serenity::Permissions::empty(),
+            "{name}"
+        );
+        let mut pending: Vec<&poise::Command<Data, Error>> = vec![command];
+        while let Some(next) = pending.pop() {
+            assert_eq!(next.checks.len(), 1, "{name} {}", next.name);
+            pending.extend(next.subcommands.iter());
+        }
+    }
+}
+
+#[test]
+fn the_access_command_is_listed_for_administrators_only() {
+    for rehearsing in [false, true] {
+        let commands = command_list(rehearsing);
+        let barnacle = commands
+            .iter()
+            .find(|command| command.name == "barnacle")
+            .expect("barnacle is registered");
+        assert!(barnacle.guild_only);
+        assert!(barnacle.subcommand_required);
+        assert_eq!(
+            barnacle.default_member_permissions,
+            serenity::Permissions::ADMINISTRATOR
+        );
+        assert_eq!(
+            barnacle.required_permissions,
+            serenity::Permissions::ADMINISTRATOR
+        );
+        assert_eq!(names(&barnacle.subcommands), ["access"]);
+        assert!(barnacle.subcommands[0].parameters.is_empty());
+    }
+}
+
+#[test]
+fn the_access_panel_offers_up_to_25_roles_with_the_stored_ones_picked() {
+    let rows = serde_json::to_value(access_rows(42, &[RoleId::new(7), RoleId::new(9)])).unwrap();
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    let menu = &rows[0]["components"][0];
+    assert_eq!(menu["custom_id"], "barnacle-access:42:roles");
+    assert_eq!(menu["type"], 6);
+    assert_eq!(menu["min_values"], 0);
+    assert_eq!(menu["max_values"], 25);
+    assert_eq!(
+        menu["default_values"],
+        serde_json::json!([
+            {"id": 7, "type": "role"},
+            {"id": 9, "type": "role"},
+        ])
+    );
+    let buttons: Vec<(&str, &str)> = rows[1]["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|button| {
+            (
+                button["custom_id"].as_str().unwrap(),
+                button["label"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        buttons,
+        [
+            ("barnacle-access:42:save", "Save"),
+            ("barnacle-access:42:cancel", "Cancel"),
+        ]
+    );
+}
+
+#[test]
+fn the_access_panel_starts_empty_when_no_roles_are_stored() {
+    let rows = serde_json::to_value(access_rows(42, &[])).unwrap();
+    let menu = &rows[0]["components"][0];
+    assert_eq!(menu["min_values"], 0);
+    assert_eq!(menu["max_values"], 25);
+    assert!(menu.get("default_values").is_none(), "{menu}");
+}
+
+#[test]
+fn saved_organiser_roles_are_named_as_role_mentions() {
+    assert_eq!(
+        organiser_roles_text(&[RoleId::new(1), RoleId::new(2)]),
+        "Organiser roles: <@&1>, <@&2>."
+    );
+    assert_eq!(
+        organiser_roles_text(&[]),
+        "No organiser roles set. Only Administrators can run organiser commands."
     );
 }
