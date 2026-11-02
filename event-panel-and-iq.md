@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T11:37:11.076Z
+Updated: 2026-11-02T11:37:17.844Z
 Next ids: c3 D6 R5 S1
 
 ## Goal
@@ -18,7 +18,7 @@ MSP iq-competition builds on 29f9d49, the merge of feat/event-panel-and-iq (eef1
 
 ## Next step
 
-Read the round-4 reviewers' replies, then validator, record and verdict, and drive to green. Then, since a proven head reuses the weak gate unchanged, regate the final head by hand with `run.zsh --resume --gate-classes ~/.mitosis/barnacle/iq-competition/gate-classes.json` (the 21 weak properties classed covered-elsewhere, BUSY_TIMEOUT named), ship it, and open the pull request against feat/event-panel-and-iq.
+Read the regate's JSON result (the 21 weak properties classed covered-elsewhere in ~/.mitosis/barnacle/iq-competition/gate-classes.json, BUSY_TIMEOUT named). Once it passes, ship 0036a69 (proof, outcome, comment with assumptions, record_decision for the ship boundary, `SHIP=1 run.zsh --resume --proven-head iq-competition=<head> --gate-classes ...`) and open the pull request against feat/event-panel-and-iq with mitosis's title and body, assigned to the owner.
 
 Needs: D1, D4, R3, R4.
 
