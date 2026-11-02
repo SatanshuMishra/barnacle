@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T17:45:53.794Z
+Updated: 2026-11-02T17:50:49.948Z
 Next ids: c2 D1 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-Interphase interview, slug panel-inputs-and-bot-access: the intent round and frontier round 1 (Q1-Q15, including the lighthouse skip as Q14) are with the owner. Settled so far: three IQ emoji fields (Denied, Awarded, Confirm awarded) that must all differ. Grounded facts: serenity 0.12.5 modals hold text inputs only; interactions carry no time zone; catch-up skips judge reactions on posts the bot already marked (discord/iq.rs catch_up_one); event length is stored in whole hours; judging_reaction has a CHECK of 4 values in migration 0009.
+Interphase interview, slug panel-inputs-and-bot-access: the intent (I1-I5) and round 1 are settled and recorded (all recommendations accepted, lighthouse skipped); frontier round 2 (Q16-Q22: no removal below zero, required reason, a judge-only #iq-judge-log channel and what it logs) is with the owner. /iq points today lets a total go negative (iq_store.rs adjust) and treats the reason as optional. Grounded facts: serenity 0.12.5 modals hold text inputs only; interactions carry no time zone; catch-up skips judge reactions on posts the bot already marked (discord/iq.rs catch_up_one); event length is stored in whole hours; judging_reaction has a CHECK of 4 values in migration 0009.
 
 ## Next step
 
