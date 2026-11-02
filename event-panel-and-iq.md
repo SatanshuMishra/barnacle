@@ -1,7 +1,7 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: parked
-Updated: 2026-11-02T16:27:06.779Z
-Next ids: c3 D7 R5 S2
+Updated: 2026-11-02T16:27:17.561Z
+Next ids: c3 D7 R6 S2
 
 ## Goal
 
@@ -29,8 +29,7 @@ Needs: D1, D2, R3, R4.
 
 ## Open risks
 
-- R3 pipeline 0.12.0 bugs worked around by hand: gate-findings refuses mitosis 0.10.1's null gate reasons; pipeline suite cannot fingerprint Rust compile errors; a restarted drive loses the reviewers' findings; the drive's 14400-second limit is shorter than the mutant gate and no partial gate is kept; fix-check refuses an unproven criterion with no acceptance line. Integration's lighthouse step may meet them again.
-- R4 mitosis 0.10.1 samples Rust mutants untraced, so 21 IQ properties needed covered-elsewhere gate classes, and #54's Testing table reads them as not proven; run.zsh still names mitosis/event-panel as the feature branch, so mitosis reports that stale base.
+- R5 Live Discord behaviour (criterion 5.23) is unproven in #55: rendering, reaction delivery, channel and role creation and permission overwrites need a dev-bot run against a real server before or after merge.
 
 ## Settled, do not reopen
 
@@ -47,3 +46,4 @@ Needs: D1, D2, R3, R4.
 - IQ review rounds, one line each with verdict and fix commits: ~/.mitosis/barnacle/iq-competition/rounds.md
 - IQ mutant evidence: the 24 sampled mutants and the full suite's result on each, in ~/.mitosis/barnacle/iq-competition/review/round-1/iq-competition.gate-mutants-{sample,suite}.json
 - IQ ship result, PR title and body as mitosis wrote them: ~/.mitosis/barnacle/iq-competition/review/ship.out and iq-competition.pr-{title.txt,body.md}
+- FEATURE pull request fields as rendered: /private/tmp/claude-501/-Users-satanshumishra-Documents-DevLabs-barnacle/54bd6046-bf94-46f7-a742-87b3d50c95da/scratchpad/feature-pr.json
