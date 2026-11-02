@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T00:01:32.440Z
+Updated: 2026-11-02T00:02:08.214Z
 Next ids: c3 D4 R3 S1
 
 ## Goal
@@ -14,11 +14,11 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-The drive for slug event-panel-and-iq is running (plan 2e92988afdef: the check-author locks all seven test files on feat/event-panel-and-iq, then one Lane builds event-wizard as MSP event-panel). Its run home holds only the check-author and event-wizard items.
+The drive for slug event-panel-and-iq is running (plan 2e92988afdef: the check-author locks all seven test files on feat/event-panel-and-iq, then one Lane builds event-wizard as MSP event-panel). Its run home holds only the check-author and event-wizard items. The IQ run home is prepared except feature.json and the EVENT_PANEL_BRANCH placeholder in its run.zsh.
 
 ## Next step
 
-Watch pipeline drive status for slug event-panel-and-iq until awaiting-merge; then build the IQ run home ~/.mitosis/barnacle/iq-competition (items: the five iq steps with check-author and event-wizard stripped from after; feature.json pointing at the event-panel MSP branch and head), plan it, record its build boundary and drive it.
+Watch pipeline drive status for slug event-panel-and-iq until awaiting-merge; then write the IQ run home's feature.json (feature: the event-panel MSP branch, commit: its head, core main, remote origin), replace EVENT_PANEL_BRANCH in its run.zsh, plan it, record its build boundary and drive slug iq-competition.
 
 Needs: D1, D2, D3.
 
