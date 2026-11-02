@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T10:16:50.589Z
+Updated: 2026-11-02T10:17:30.396Z
 Next ids: c3 D6 R5 S1
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-The owner merged #53 into feat/event-panel-and-iq (eef145a), which holds the C1 fix that mitosis/iq-competition (6b96b2d, cut at aa274cf) lacks. MSP iq-competition is built and committed but held back gate-failed: 21 of 55 properties judged weak (R4). IQ review round 1 runs by hand (the drive is stopped): diff, obligations, standards (S1 LOW), gate findings (G1-G21 LOW) and the three reviewer briefs are written under review/round-1; the suite against the base checkout bases/iq-competition and a full-suite run over the 24 sampled mutants run in the background.
+The owner merged #53 into feat/event-panel-and-iq (eef145a), which holds the C1 fix that mitosis/iq-competition (6b96b2d, cut at aa274cf) lacks. MSP iq-competition is built and committed but held back gate-failed: 21 of 55 properties judged weak (R4). IQ review round 1 runs by hand (the drive is stopped): diff, obligations, standards (S1 LOW), gate findings (G1-G21 LOW) are written under review/round-1, and the round suite passes with no findings; code-reviewer, conformance-auditor and security-reviewer run in the background, as does a full-suite run over the 24 sampled mutants.
 
 ## Next step
 
