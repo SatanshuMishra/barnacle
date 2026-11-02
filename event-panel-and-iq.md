@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T10:34:10.617Z
+Updated: 2026-11-02T10:34:12.535Z
 Next ids: c3 D6 R5 S1
 
 ## Goal
@@ -18,7 +18,7 @@ The owner merged #53 into feat/event-panel-and-iq (eef145a), which holds the C1 
 
 ## Next step
 
-When the validator replies, save its verdicts, run record and verdict, and fix what it confirms; copy the scratchpad's iq_limits.rs (three boundary tests, proven to kill the ADJUSTMENT_LIMIT ±1 and SNOWFLAKE_TIME_LIMIT +1 survivors) into crates/barnacle-bot/tests/, then write --gate-classes covered-elsewhere for the weak properties, naming BUSY_TIMEOUT as unobservable, for the ship run. Then merge origin/feat/event-panel-and-iq into mitosis/iq-competition, review it as round 2, drive to green and open the pull request against feat/event-panel-and-iq.
+When the diagnoses reply, save each and run pipeline diagnosis; fix C1, C2, C3-C7 and S1-S3 on mitosis/iq-competition in one receipt-first pass; copy the scratchpad's iq_limits.rs (three boundary tests, proven to kill the ADJUSTMENT_LIMIT ±1 and SNOWFLAKE_TIME_LIMIT +1 survivors) into crates/barnacle-bot/tests/, then write --gate-classes covered-elsewhere for the weak properties, naming BUSY_TIMEOUT as unobservable, for the ship run. Then merge origin/feat/event-panel-and-iq into mitosis/iq-competition, review it as round 2, drive to green and open the pull request against feat/event-panel-and-iq.
 
 Needs: D1, D4, R2, R3, R4.
 
