@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T18:13:29.084Z
+Updated: 2026-11-02T18:13:47.894Z
 Next ids: c2 D4 R1 S1
 
 ## Goal
@@ -34,4 +34,5 @@ Apply the spec review's real findings to the record scripts, rerun build_record.
 - Spec workspace: docs/specs/panel-inputs-and-bot-access.{md,decisions.md,record.json,items.json,guard.json}
 - Record builder scripts (rerunning build_record.py wipes the probes): /private/tmp/claude-501/-Users-satanshumishra-Documents-DevLabs-barnacle/54bd6046-bf94-46f7-a742-87b3d50c95da/scratchpad/{build_record.py,add_tasks.py}
 - Security readings for the final report, not the PR: /announce keeps owner-only plus the organiser check; panel final buttons re-check access.
+- Run home: ~/.mitosis/barnacle/panel-inputs-and-bot-access (earlier runs' scripts to copy are in ~/.mitosis/barnacle/archive/)
 - Owner feedback items a-h and the access-role request are in the session transcript of 2026-11-02; the live-probe log is /private/tmp/claude-501/-Users-satanshumishra-Documents-DevLabs-barnacle/54bd6046-bf94-46f7-a742-87b3d50c95da/scratchpad/live-probe/bot.log
