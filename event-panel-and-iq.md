@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T01:42:00.854Z
+Updated: 2026-11-02T01:49:53.549Z
 Next ids: c3 D5 R4 S1
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-Two drives run. Slug event-panel-and-iq is reviewing MSP event-panel on mitosis/event-panel (gate 25 of 25 pass at 276bf27; glossary and ADRs committed at aa274cf). Slug iq-competition is building MSP iq-competition stacked on mitosis/event-panel at aa274cf (5 serial Lanes). The check-author's API readings (back() returns the draft, every IqStore call returns Result, SetupDraft accessors) bind the IQ steps.
+The event-panel-and-iq drive is stopped at ship (no ship boundary recorded). Its round 1 green was false: after the gate-findings halt and restart, the drive collected none of the code reviewer's findings (C1 MEDIUM typed-dates window zone mismatch, C2 LOW zone menu cut, C3 LOW repeated PanelPart lists). A corrective round 2 in review/round-2 is validating those three; the ledger holds round 1 as empty. MSP event-panel is at aa274cf on mitosis/event-panel. Slug iq-competition is building MSP iq-competition stacked on mitosis/event-panel at aa274cf (5 serial Lanes). The check-author's API readings (back() returns the draft, every IqStore call returns Result, SetupDraft accessors) bind the IQ steps.
 
 ## Next step
 
