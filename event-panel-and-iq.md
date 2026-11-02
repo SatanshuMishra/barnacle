@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T02:31:23.210Z
+Updated: 2026-11-02T02:31:26.078Z
 Next ids: c3 D6 R4 S1
 
 ## Goal
