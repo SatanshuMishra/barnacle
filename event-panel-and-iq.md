@@ -1,7 +1,7 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-01T23:59:19.341Z
-Next ids: c3 D4 R2 S1
+Updated: 2026-11-02T00:01:28.424Z
+Next ids: c3 D4 R3 S1
 
 ## Goal
 
@@ -18,9 +18,9 @@ The spec is handed off. Feature branch feat/event-panel-and-iq is cut from main 
 
 ## Next step
 
-Build target/debug in the checkout, cut the feature branch with pipeline feature-branch, commit receipts.config.json on it, write run.zsh and items.json in the run home, run --plan-only, then pipeline drive start.
+Watch pipeline drive status for slug event-panel-and-iq until awaiting-merge; then build the IQ run home ~/.mitosis/barnacle/iq-competition (items: the five iq steps with check-author and event-wizard stripped from after; feature.json pointing at the event-panel MSP branch and head), plan it, record its build boundary and drive it.
 
-Needs: D1, D2, R1.
+Needs: D1, D2, D3.
 
 ## Decisions in force
 
@@ -30,7 +30,7 @@ Needs: D1, D2, R1.
 
 ## Open risks
 
-- R1 The checkout has no target/debug, so seed.py fails and every acceptance run is inconclusive until cargo builds it.
+- R2 mitosis fuses Steps sharing a file into one MSP, so the IQ Competition must be a second run stacked on the event-panel MSP branch; a fix round on event-panel after the IQ run starts would need merging into the IQ branch. Bears on c2.
 
 ## Settled, do not reopen
 
