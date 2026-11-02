@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T18:28:40.259Z
+Updated: 2026-11-02T19:03:59.406Z
 Next ids: c2 D6 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-Interphase Phase 9, unattended: the spec, record and items are written and pass check_record --complete, check_spec and check_items; 23 criteria (5.23 live Discord unproven), 57 locked acceptance tests in 7 new test files, 7 Steps in 3 MSPs (access-roles: organiser-access, organiser-commands; panel-inputs: member-zones, event-inputs, iq-setup-inputs; iq-judging: iq-marks-store, iq-judging-discord). The glossary (Event days, Organiser, Member's zone, Judging marks, Judge log) and ADRs 0003-0005 are written. The record scripts hold, not yet applied to the record: tests of 5.3-5.4 moved to organiser_commands.rs and the points-reason test to iq_judging.rs (so each locked file compiles at its own Step's gate), plus the schema_migrations and run_script facts in the tasks. The one spec review is running. The run home holds dispatch.zsh and worker-rules.base.txt.
+Stage 2, building run 1 of 3 (access-roles) on FEATURE branch feat/panel-inputs-and-bot-access. Interphase is handed off: 23 criteria (5.23 live Discord unproven), 60 locked acceptance tests in 8 files, 7 Steps; the spec review's 17 findings are fixed. The check-author lock commit (425f25a) and organiser-access (c10a7fc) are on mitosis/access-roles; organiser-commands is being built in lane 1. Runs panel-inputs and iq-judging are set up but not planned, since their base branches do not exist yet.
 
 ## Next step
 
