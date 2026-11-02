@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T11:14:38.929Z
+Updated: 2026-11-02T11:25:13.451Z
 Next ids: c3 D6 R5 S1
 
 ## Goal
@@ -14,11 +14,11 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-mitosis/iq-competition is at 5c5c38c (pushed), which fixes every round-2 finding and marks a server caught up when a competition starts or resumes there, on top of 29f9d49, the merge of feat/event-panel-and-iq (eef145a, holding #53). MSP iq-competition is held back gate-failed: 21 of 55 properties judged weak (R4). IQ review runs by hand, because the drive is stopped. At 5c5c38c the round-3 suite passes (838 tests), clippy and fmt are clean and standard-checks finds nothing; pipeline fix-check passes against 29f9d49 and every selecting check prints nothing. Round 3 (29f9d49..5c5c38c) is recorded with verdict diagnose: P1 fixed; blocker C1 (a failed live save still moves the mark once caught up, kind "failed save passed by live mark") confirmed; advisory S2 (overlapping Ready handlers can re-mark a server caught up after a newer forget_all) confirmed; S1 rejected as C1's duplicate. The diagnosis agent for C1's kind is running. Briefs, replies, verdicts and the diagnosis go in the run home's review/round-3/.
+mitosis/iq-competition is at 5c5c38c (pushed), which fixes every round-2 finding and marks a server caught up when a competition starts or resumes there, on top of 29f9d49, the merge of feat/event-panel-and-iq (eef145a, holding #53). MSP iq-competition is held back gate-failed: 21 of 55 properties judged weak (R4). IQ review runs by hand, because the drive is stopped. At 5c5c38c the round-3 suite passes (838 tests), clippy and fmt are clean and standard-checks finds nothing; pipeline fix-check passes against 29f9d49 and every selecting check prints nothing. mitosis/iq-competition is at 0a56ad2 (pushed), which fixes round 3's blocker C1 and advisory S2: checks hold their message in iq::Unsettled and the mark never passes the lowest held one, and CaughtUp numbers each connection. At 0a56ad2: 840 tests pass, clippy and fmt clean, fix-check passes against 5c5c38c, every selecting check prints nothing. Round 4 (5c5c38c..0a56ad2) suite passes and standard-checks finds nothing; code-reviewer and security-reviewer are running. Rounds 1-3 are in the run home's rounds.md.
 
 ## Next step
 
-Read and record the diagnosis. The planned fix: a check outcome with Failed that never moves the mark; catch-up stops its walk at a failed message; a failed live check forgets its server and rewinds the mark below the message (a new IqStore rewind, NULL kept); CaughtUp gains a generation so a stale Ready's finish is ignored. Receipt tests first, then fix, fix-check, round 4. Then, since a proven head reuses the weak gate unchanged, regate the final head by hand with `run.zsh --resume --gate-classes ~/.mitosis/barnacle/iq-competition/gate-classes.json` (the 21 weak properties classed covered-elsewhere, BUSY_TIMEOUT named), ship it, and open the pull request against feat/event-panel-and-iq.
+Read the round-4 reviewers' replies, then validator, record and verdict, and drive to green. The planned fix: a check outcome with Failed that never moves the mark; catch-up stops its walk at a failed message; a failed live check forgets its server and rewinds the mark below the message (a new IqStore rewind, NULL kept); CaughtUp gains a generation so a stale Ready's finish is ignored. Receipt tests first, then fix, fix-check, round 4. Then, since a proven head reuses the weak gate unchanged, regate the final head by hand with `run.zsh --resume --gate-classes ~/.mitosis/barnacle/iq-competition/gate-classes.json` (the 21 weak properties classed covered-elsewhere, BUSY_TIMEOUT named), ship it, and open the pull request against feat/event-panel-and-iq.
 
 Needs: D1, D4, R3, R4.
 
