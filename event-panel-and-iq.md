@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: parked
-Updated: 2026-11-02T16:24:26.087Z
+Updated: 2026-11-02T16:25:59.614Z
 Next ids: c3 D7 R5 S2
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-Integration is running on feat/event-panel-and-iq at b3655be (#53 and #54 merged): `pipeline checks` and `pipeline suite` (integration worktree ~/.mitosis/runs/barnacle/event-panel-and-iq/integration) are running; integration-plan and integration-ready follow. The /event run home's CHARTER.md points its Record line at review/record.provable.json, because checks refuses criterion 5.23 (R3); CHARTER.md.orig beside it is restored before Clean-up.
+Integration is running on feat/event-panel-and-iq at b3655be (#53 and #54 merged): 80 of 80 acceptance checks pass at b3655be; `pipeline suite` (integration worktree ~/.mitosis/runs/barnacle/event-panel-and-iq/integration) is running; integration-plan and integration-ready follow. The /event run home's CHARTER.md points its Record line at review/record.provable.json, because checks refuses criterion 5.23 (R3); CHARTER.md.orig beside it is restored before Clean-up.
 
 ## Next step
 
