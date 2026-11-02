@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T02:31:26.078Z
+Updated: 2026-11-02T02:42:47.555Z
 Next ids: c3 D6 R4 S1
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-mitosis/event-panel is pushed at 8894afe; it holds the C1 fix (6d6dba9, 8894afe) that mitosis/iq-competition, cut at aa274cf, lacks. Slug iq-competition has built all five lanes and mitosis is gating MSP iq-competition.
+The owner merged #53 into feat/event-panel-and-iq (eef145a), which now holds the C1 fix that mitosis/iq-competition, cut at aa274cf, lacks. Slug iq-competition has built all five lanes and mitosis is gating MSP iq-competition's 55 acceptance tests.
 
 ## Next step
 
