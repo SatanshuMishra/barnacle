@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T20:04:29.834Z
+Updated: 2026-11-02T20:09:11.145Z
 Next ids: c2 D7 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-access-roles is built and gated (8 of 8 pass, reconcile clean) on mitosis/access-roles at d461aab, base 425f25a (the lock commit, now on feat/panel-inputs-and-bot-access); its round 1 suite passes scoped (857 passed, 0 failed, every target except the six later-Step locked files, which fail to compile the same way on the base, so the full-run U1 is not a finding); conformance found all of 5.1-5.4 met; 5 LOW candidates (C1 /announce Send re-checks only ownership; C2 and S1 no test for the 0010 down migration; C3 a sixth copy of the table-check helpers; T1 the down migration's DROP TABLE) are with the validator. panel-inputs is resumed a second time: twice it stopped cleaning lane 0's clone because the Worker session's graphify Stop hook wrote graphify-out into it; every run home's dispatch.zsh now exports GRAPHIFY_DENY_ROOTS with ~/.mitosis, which a probe showed stops the hook in a clone. member-zones is built and held; event-inputs and iq-setup-inputs are building. iq-judging waits for mitosis/panel-inputs. access-roles left text::UPDATES_NOT_SET_UP unchanged because tests/text.rs asserts the old text.
+access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat/panel-inputs-and-bot-access); its two confirmed advisories (C1 /announce Send organiser re-check, C2 a test rolling back 0010) and the UPDATES_NOT_SET_UP rewording are fixed on mitosis/access-roles at d1dce61, covering tests and clippy pass, fix-check clean against review/access-roles.record.json (criteria 5.1-5.4 only, since fix-check refuses 5.23, which has no test rows). The fixes are not yet in mitosis/panel-inputs, which the panel-inputs build is still producing from d461aab: member-zones is built and held, event-inputs and iq-setup-inputs are building. iq-judging waits for mitosis/panel-inputs.
 
 ## Next step
 
