@@ -8,10 +8,12 @@ use barnacle_bot::iq::Checked;
 use barnacle_bot::iq::CleanupRefusal;
 use barnacle_bot::iq::CompleteRefusal;
 use barnacle_bot::iq::Criterion;
+use barnacle_bot::iq::Judged;
 use barnacle_bot::iq::Problem;
 use barnacle_bot::iq::Score;
 use barnacle_bot::iq::StartChoice;
 use barnacle_bot::iq::Status;
+use barnacle_bot::iq::Unsettled;
 use barnacle_bot::iq::board_rows;
 use barnacle_bot::iq::check_submission;
 use barnacle_bot::iq::end_unix;
@@ -371,12 +373,25 @@ fn a_live_check_moves_the_mark_only_after_its_server_caught_up() {
 #[test]
 fn a_new_connection_forgets_every_caught_up_server() {
     let caught_up = CaughtUp::default();
+    let connection = caught_up.connect();
     assert!(!caught_up.holds(GuildId::new(5)));
-    caught_up.finish(GuildId::new(5));
+    caught_up.finish(GuildId::new(5), connection);
     assert!(caught_up.holds(GuildId::new(5)));
     assert!(!caught_up.holds(GuildId::new(6)));
-    caught_up.forget_all();
+    caught_up.connect();
     assert!(!caught_up.holds(GuildId::new(5)));
+}
+
+#[test]
+fn an_older_connection_cannot_mark_a_server_caught_up() {
+    let caught_up = CaughtUp::default();
+    let older = caught_up.connect();
+    let newer = caught_up.connect();
+    caught_up.finish(GuildId::new(5), older);
+    assert!(!caught_up.holds(GuildId::new(5)));
+    caught_up.finish(GuildId::new(5), newer);
+    assert!(caught_up.holds(GuildId::new(5)));
+    assert_eq!(caught_up.current(), newer);
 }
 
 #[test]
@@ -385,4 +400,21 @@ fn a_left_member_or_deleted_role_counts_as_taken_away() {
     assert!(role_already_off(Kind::UnknownRole));
     assert!(!role_already_off(Kind::MissingPermissions));
     assert!(!role_already_off(Kind::RateLimited));
+}
+
+#[test]
+fn the_last_seen_mark_stays_below_every_check_that_failed_or_is_still_running() {
+    let unsettled = Unsettled::default();
+    let guild = GuildId::new(5);
+    let failed = unsettled.hold(guild, 2000);
+    let running = unsettled.hold(guild, 3000);
+    let later = unsettled.hold(guild, 4000);
+    failed.settle(Judged::Failed);
+    later.settle(Judged::Valid);
+    assert_eq!(unsettled.mark_ceiling(guild, 4000), Some(1999));
+    running.settle(Judged::Valid);
+    assert_eq!(unsettled.mark_ceiling(guild, 4000), Some(1999));
+    unsettled.hold(guild, 2000).settle(Judged::Valid);
+    assert_eq!(unsettled.mark_ceiling(guild, 4000), Some(4000));
+    assert_eq!(unsettled.mark_ceiling(GuildId::new(6), 4000), Some(4000));
 }
