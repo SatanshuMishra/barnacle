@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T04:32:03.460Z
+Updated: 2026-11-02T05:02:08.434Z
 Next ids: c3 D6 R4 S1
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-The owner merged #53 into feat/event-panel-and-iq (eef145a), which now holds the C1 fix that mitosis/iq-competition, cut at aa274cf, lacks. Slug iq-competition has built all five lanes and mitosis is gating MSP iq-competition's 55 acceptance tests: with-work and reverted runs are done, and the mutant runs are in progress, about 40 seconds per mutant and up to 12 per test when a test kills none.
+The owner merged #53 into feat/event-panel-and-iq (eef145a), which now holds the C1 fix that mitosis/iq-competition, cut at aa274cf, lacks. Slug iq-competition has built all five lanes and mitosis is gating MSP iq-competition's 55 acceptance tests: with-work and reverted runs are done, and the mutant runs are past 25 of 55 tests, about 40 seconds per mutant and up to 12 per test when a test kills none.
 
 ## Next step
 
