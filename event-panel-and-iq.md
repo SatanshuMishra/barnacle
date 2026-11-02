@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
-Status: active
-Updated: 2026-11-02T13:15:11.392Z
+Status: parked
+Updated: 2026-11-02T13:15:18.437Z
 Next ids: c3 D7 R5 S2
 
 ## Goal
@@ -18,9 +18,9 @@ Both pull requests are open and assigned: #53 merged into feat/event-panel-and-i
 
 ## Next step
 
-{"kind": "action", "text": "Run `SHIP=1 ~/.mitosis/barnacle/iq-competition/run.zsh --resume --proven-head iq-competition=0036a6955b5cc53a3ea4a2ec89e58fe0da9b3a8e --gate-classes ~/.mitosis/barnacle/iq-competition/gate-classes.json`, then open the IQ pull request against feat/event-panel-and-iq with mitosis's title and body, assign it to the owner and post review/iq-competition.comment.md."}
+The owner starts Integration by saying #54 (the IQ pull request) merged into feat/event-panel-and-iq; then resume this thread, sync, run lighthouse on feat/event-panel-and-iq (or skip it per D2) and open the FEATURE pull request into main.
 
-Needs: D6, D1, R4.
+Needs: D1, D2, R3, R4.
 
 ## Decisions in force
 
