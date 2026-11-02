@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T10:27:50.814Z
+Updated: 2026-11-02T10:27:56.164Z
 Next ids: c3 D6 R5 S1
 
 ## Goal
@@ -45,4 +45,4 @@ Needs: D1, D4, R2, R3, R4.
 - Run homes: ~/.mitosis/barnacle/event-panel-and-iq (the /event run) and ~/.mitosis/barnacle/iq-competition (the stacked IQ run)
 - Build state: ~/.mitosis/runs/barnacle/<slug>/state.json; review rounds under each run home's review/
 - Provable record copy for pipeline fix-check (criterion 5.23 left out, it has no acceptance line): ~/.mitosis/barnacle/event-panel-and-iq/review/record.provable.json
-- IQ mutant evidence: the 24 sampled mutants and the full suite's result on each, in the session scratchpad's iq_mutants.json and suite_mutants.json
+- IQ mutant evidence: the 24 sampled mutants and the full suite's result on each, in ~/.mitosis/barnacle/iq-competition/review/round-1/iq-competition.gate-mutants-{sample,suite}.json
