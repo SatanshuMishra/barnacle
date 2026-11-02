@@ -383,7 +383,7 @@ fn the_commands_outside_events_keep_their_options() {
         ("voice hub list", &[]),
         ("updates setup", &["channel", "role"]),
         ("announce", &[]),
-        ("iq start", &[]),
+        ("iq start", &["time_zone"]),
         ("iq edit", &[]),
         ("iq stop", &[]),
         ("iq complete", &[]),
@@ -480,10 +480,18 @@ fn the_event_command_has_its_five_subcommands() {
         })
         .collect();
     let expected: Vec<(String, Vec<(String, bool)>)> = [
-        ("create", &[("name", true), ("template", false)][..]),
+        (
+            "create",
+            &[("name", true), ("template", false), ("time_zone", false)][..],
+        ),
         (
             "edit",
-            &[("event", true), ("name", false), ("channel", false)],
+            &[
+                ("event", true),
+                ("name", false),
+                ("channel", false),
+                ("time_zone", false),
+            ],
         ),
         ("repost", &[("event", true), ("ping_again", false)]),
         ("end", &[("event", true)]),
