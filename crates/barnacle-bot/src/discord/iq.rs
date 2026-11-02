@@ -1536,6 +1536,7 @@ async fn resume(
         StartChoice::Setup => return Ok(iq_text::NO_COMPETITION_RUNNING.to_owned()),
     }
     data.iq.resume(competition.id, super::now_unix()).await?;
+    data.iq_caught_up.finish(competition.guild);
     failure::record("iq.resumed", "an IQ Competition resumed", scope);
     notice(
         http,
@@ -1856,7 +1857,10 @@ async fn start_competition(
         .create(&plan.competition(built.channels, created_at_ms))
         .await;
     let competition = match saved {
-        Ok(CreateOutcome::Created(competition)) => competition,
+        Ok(CreateOutcome::Created(competition)) => {
+            data.iq_caught_up.finish(competition.guild);
+            competition
+        }
         Ok(CreateOutcome::AlreadyLive) => {
             undo(&serenity_context.http, plan.guild, made, scope).await;
             return Ok(iq_text::already_running(&plan.name));
