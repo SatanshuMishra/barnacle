@@ -568,3 +568,17 @@ async fn an_addition_to_a_negative_total_is_saved() {
         AdjustOutcome::BelowZero { total: -40 }
     );
 }
+
+#[tokio::test]
+async fn a_recorded_post_reads_as_recorded_until_forgotten() {
+    let store = store().await;
+    let november = running(&store).await;
+    kraken_posted(&store, november.id, 900, PLAYER).await;
+    kraken_posted(&store, november.id, 901, SECOND_PLAYER).await;
+    store.award(901, JUDGE, AWARDED_AT_MS).await.unwrap();
+    assert!(store.recorded(november.id, 900).await.unwrap());
+    assert!(store.recorded(november.id, 901).await.unwrap());
+    assert!(!store.recorded(november.id, 902).await.unwrap());
+    store.forget(november.id, 900).await.unwrap();
+    assert!(!store.recorded(november.id, 900).await.unwrap());
+}
