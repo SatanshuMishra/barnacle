@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T11:29:41.383Z
+Updated: 2026-11-02T11:37:11.076Z
 Next ids: c3 D6 R5 S1
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-MSP iq-competition builds on 29f9d49, the merge of feat/event-panel-and-iq (eef145a, holding #53), and is held back gate-failed: 21 of 55 properties judged weak (R4). IQ review runs by hand, because the drive is stopped. mitosis/iq-competition is at 0a56ad2 (pushed), which fixes round 3's blocker C1 and advisory S2: checks hold their message in iq::Unsettled and the mark never passes the lowest held one, and CaughtUp numbers each connection. At 0a56ad2: 840 tests pass, clippy and fmt clean, fix-check passes against 5c5c38c, every selecting check prints nothing. Round 4 (5c5c38c..0a56ad2) suite passes and standard-checks finds nothing; both reviewers replied with no blocker and the same LOW (C1/S1: a failed-lookup hold in message_created, keyed by server, pins the mark for the process lifetime, even for non-submission messages and across competitions; code-reviewer's fix keys holds by channel); the validator is running. Rounds 1-3 are in the run home's rounds.md.
+MSP iq-competition builds on 29f9d49, the merge of feat/event-panel-and-iq (eef145a, holding #53), and is held back gate-failed: 21 of 55 properties judged weak (R4). IQ review runs by hand, because the drive is stopped. Review is green: round 4 recorded green, and its advisories C1 and S1 (a failed hold keyed by server pinned the mark) are fixed at 0036a69 (pushed) by keying holds by channel. At 0036a69: 841 tests pass, clippy and fmt clean, fix-check passes against 0a56ad2, every selecting check prints nothing. The hand regate of 0036a69 (`run.zsh --resume --gate-classes`) is running, writing the run home's review/regate.out. Rounds 1-3 are in the run home's rounds.md.
 
 ## Next step
 
