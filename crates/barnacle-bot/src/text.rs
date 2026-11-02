@@ -25,17 +25,18 @@ use crate::attendance::SignupView;
 use crate::attendance::TickReport;
 use crate::attendance::next_post_at;
 use crate::attendance_store::Event;
-use crate::event_draft::PANEL_LIFETIME_MINUTES;
 use crate::event_draft::ROLE_LIMIT;
 use crate::event_draft::Template;
 use crate::failure::join_names;
 use crate::ids::ChannelId;
 use crate::ids::Ping;
+use crate::panels::PANEL_LIFETIME_MINUTES;
 use crate::schedule::Hour;
 use crate::schedule::Hours;
 use crate::schedule::MAX_HOURS;
 use crate::schedule::Session;
 use crate::schedule::Span;
+use crate::schedule::StartTime;
 use crate::schedule::Weekdays;
 use crate::solves::Ranking;
 use crate::solves::Standing;
@@ -98,10 +99,34 @@ pub const CREATE_LABEL: &str = "Create";
 pub const SAVE_LABEL: &str = "Save";
 pub const WEEKDAYS_PLACEHOLDER: &str = "Weekdays";
 pub const ROLES_PLACEHOLDER: &str = "Roles to ping";
+pub const FIRST_DAY_PLACEHOLDER: &str = "First day";
+pub const LAST_DAY_PLACEHOLDER: &str = "Last day";
+pub const HOUR_PLACEHOLDER: &str = "Start hour";
+pub const MINUTE_PLACEHOLDER: &str = "Start minute";
+pub const LENGTH_PLACEHOLDER: &str = "How long each session runs";
+pub const ZONE_PLACEHOLDER: &str = "Time zone";
+pub const NEXT_TIME_LABEL: &str = "Next: time";
+pub const NEXT_PINGS_LABEL: &str = "Next: pings";
+pub const BACK_LABEL: &str = "Back";
+pub const TYPE_DATES_LABEL: &str = "Type dates further out";
+pub const ANOTHER_ZONE_LABEL: &str = "Another zone";
+pub const ANOTHER_ZONE_DESCRIPTION: &str = "Type any zone";
+pub const DATES_MODAL_TITLE: &str = "Dates further out";
+pub const FIRST_DAY_INPUT_LABEL: &str = "First day";
+pub const LAST_DAY_INPUT_LABEL: &str = "Last day";
+pub const FIRST_DAY_EXAMPLE: &str = "2026-12-14";
+pub const LAST_DAY_EXAMPLE: &str = "2026-12-18";
+pub const ZONE_MODAL_TITLE: &str = "Another time zone";
+pub const ZONE_INPUT_LABEL: &str = "Time zone, for example Asia/Tokyo";
+pub const DAYS_PROMPT: &str =
+    "Pick the first day, the last day and the days of the week it runs on.";
+pub const LAST_DAY_BEFORE_FIRST: &str = "The last day is before the first day.";
+pub const NO_WEEKDAY_IN_DATES: &str = "None of the picked weekdays fall between those dates.";
+pub const EVERY_SESSION_STARTED: &str =
+    "Every session in these dates has already started. Pick a later start time or more days.";
 const CLEAR_FAILED_EDIT: &str = "Some sign-up posts outside the new schedule could not be cleared; edit the event again to retry.";
 const REFRESH_FAILED: &str =
     "Some sign-up posts could not be redrawn; edit the event again once Barnacle can edit them.";
-const NO_SESSION_IN_SPAN: &str = "No session falls within those dates.";
 const RESET_BLOCKED_HEAD: &str =
     "Some sign-up posts could not be removed, so no event or answer was deleted.";
 const RESET_BLOCKED_TAIL: &str =
@@ -414,6 +439,7 @@ pub enum Refusal {
     RepostSuperseded,
     SeriesRoundsOutOfRange,
     TemplateUnknown,
+    FirstDayPast,
     MissingOptions(Vec<&'static str>),
     StartFormat,
     HoursOutOfRange,
@@ -459,6 +485,7 @@ impl Refusal {
             Refusal::RepostSuperseded => "repost_superseded",
             Refusal::SeriesRoundsOutOfRange => "series_rounds_out_of_range",
             Refusal::TemplateUnknown => "template_unknown",
+            Refusal::FirstDayPast => "first_day_past",
             Refusal::MissingOptions(_) => "missing_options",
             Refusal::StartFormat => "start_format",
             Refusal::HoursOutOfRange => "hours_out_of_range",
@@ -481,7 +508,7 @@ impl Refusal {
                 missing_bot_permissions(names, *channel)
             }
             Refusal::DateFormat => {
-                "Dates look like 2026-09-16. Run the command again with the dates written that way."
+                "Write each day as 2026-12-14. A day name in brackets after it is fine too."
                     .to_owned()
             }
             Refusal::LastDayBeforeFirst => {
@@ -508,7 +535,7 @@ impl Refusal {
                     .to_owned()
             }
             Refusal::NothingToChange => {
-                "Nothing to change. Give a new name, dates, start, hours, time zone or channel, or change the weekdays or pings in the panel."
+                "Nothing to change. Pick new days, a new time or new pings in the panel, or run the command again with a new name or channel."
                     .to_owned()
             }
             Refusal::RehearsalOnly => {
@@ -578,28 +605,31 @@ impl Refusal {
                 SeriesLength::MAX
             ),
             Refusal::TemplateUnknown => format!(
-                "Barnacle offers one template, {}. Pick it from the list, or leave template out and give start, hours and time_zone.",
+                "Barnacle offers one template, {}. Pick it from the list, or leave template out and pick the days and time in the panel.",
                 Template::ClanBattles.name()
             ),
+            Refusal::FirstDayPast => {
+                "The first day is in the past. Pick today or a later day.".to_owned()
+            }
             Refusal::MissingOptions(names) => format!(
-                "Without a template, an event needs {}. Run the command again with {}, or pick the {} template.",
+                "The panel still needs {}. Pick {} from the menus, then press the button again.",
                 join_names(names),
-                them(names.len()),
-                Template::ClanBattles.name()
+                them(names.len())
             ),
             Refusal::StartFormat => {
-                "A start time is written on a 24-hour clock, such as 17:00 or 5:30. Run the command again with the start written that way."
+                "A session starts on the hour or at a quarter past, half past or a quarter to. Pick the start hour and minute from the menus."
                     .to_owned()
             }
-            Refusal::HoursOutOfRange => format!(
-                "An event runs 1 to {MAX_HOURS} hours. Run the command again with hours from 1 to {MAX_HOURS}."
-            ),
+            Refusal::HoursOutOfRange => {
+                format!("An event runs 1 to {MAX_HOURS} hours. Pick a length from the menu.")
+            }
             Refusal::ZoneUnknown => {
-                "Barnacle knows a time zone by its place, such as America/Denver or Europe/Berlin, or as UTC. Pick one of the zones suggested as you type."
+                "Barnacle knows a time zone by its place, such as America/Denver or Europe/Berlin, or as UTC. Pick one from the menu, or type one written that way."
                     .to_owned()
             }
             Refusal::WeekdaysInvalid => {
-                "Pick at least one weekday, from Monday to Sunday, in the menu.".to_owned()
+                "Pick at least one weekday, from Monday to Sunday, that falls between the first and last day."
+                    .to_owned()
             }
             Refusal::TooManyRoles => format!(
                 "An event pings at most {ROLE_LIMIT} roles. Pick {ROLE_LIMIT} or fewer."
@@ -1018,46 +1048,118 @@ pub fn event_edited(after: &Event, cleared: &PostsReport, refreshed: &PostsRepor
     failures_noted(&reply, cleared.failures + refreshed.failures)
 }
 
-pub fn panel_preview(
-    name: &str,
-    channel: ChannelId,
-    span: &Span,
-    pings: &[Ping],
-    now_unix: i64,
+pub fn step_line(number: usize, name: &str) -> String {
+    format!("**Step {number} of 3:** {name}")
+}
+
+pub fn panel_heading(name: &str, channel: ChannelId) -> String {
+    format!("**{}** in <#{}>", escape(name), channel.get())
+}
+
+pub fn days_line(
+    first_day: Option<Date>,
+    last_day: Option<Date>,
+    weekdays: Option<Weekdays>,
+    session_count: usize,
 ) -> String {
-    let schedule = span.schedule();
-    let first = span.sessions().next();
-    let start = first
-        .map(|session| format!(" at {}", clock_time(session.start_unix())))
-        .unwrap_or_default();
-    let count = match first {
-        Some(session) => format!(
+    match (first_day, last_day, weekdays) {
+        (Some(first), Some(last), Some(weekdays)) => format!(
+            "{} from {} to {}: {}.",
+            weekdays_plural(weekdays),
+            day_label(first),
+            day_label(last),
+            sessions(session_count)
+        ),
+        (Some(first), Some(last), None) => format!(
+            "Runs from {} to {}. Now pick the days of the week.",
+            day_label(first),
+            day_label(last)
+        ),
+        (_, _, Some(weekdays)) => format!(
+            "{}. Now pick the first and last day.",
+            weekdays_plural(weekdays)
+        ),
+        (_, _, None) => DAYS_PROMPT.to_owned(),
+    }
+}
+
+pub fn time_line(start: StartTime, zone: &str, hours: Hours) -> String {
+    format!("Starts at {start} {zone} and runs {}.", hours_phrase(hours))
+}
+
+pub fn first_session_line(span: &Span, now_unix: i64) -> Option<String> {
+    span.next_session(now_unix).map(|session| {
+        format!(
             "First session: {}. {}, {} still ahead.",
             full_time(session.start_unix()),
             sessions(span.session_count()),
             span.sessions_left(now_unix)
-        ),
-        None => NO_SESSION_IN_SPAN.to_owned(),
-    };
-    let pinged = if pings.is_empty() {
-        "nobody".to_owned()
+        )
+    })
+}
+
+pub fn pings_summary(pings: &[Ping]) -> String {
+    if pings.is_empty() {
+        "Pings nobody.".to_owned()
     } else {
-        ping_mentions(pings)
+        format!("Pings {}.", ping_mentions(pings))
+    }
+}
+
+pub fn day_label(date: Date) -> String {
+    date.strftime("%a %-d %b").to_string()
+}
+
+pub fn day_offset(days: i32) -> String {
+    match days {
+        0 => "Today".to_owned(),
+        1 => "Tomorrow".to_owned(),
+        -1 => "Yesterday".to_owned(),
+        later if later > 1 => format!("In {later} days"),
+        earlier => format!("{} days ago", earlier.unsigned_abs()),
+    }
+}
+
+pub fn hour_label(hour: i8) -> String {
+    format!("{hour:02}:00")
+}
+
+pub fn hour_description(hour: i8) -> String {
+    let twelve = match hour % 12 {
+        0 => 12,
+        other => other,
     };
-    [
-        format!("**{}** in <#{}>", escape(name), channel.get()),
-        format!(
-            "{} to {}. {}{start}, {}, {}.",
-            span.first_day(),
-            span.last_day(),
-            weekdays_phrase(schedule.weekdays()),
-            hours_phrase(schedule.hours()),
-            schedule.zone().name()
-        ),
-        count,
-        format!("Pings {pinged}."),
-    ]
-    .join("\n")
+    let half = if hour < 12 { "AM" } else { "PM" };
+    format!("{twelve} {half}")
+}
+
+pub fn minute_label(minute: i8) -> String {
+    format!(":{minute:02}")
+}
+
+pub fn length_label(hours: Hours) -> String {
+    hours_phrase(hours)
+}
+
+fn weekdays_plural(weekdays: Weekdays) -> String {
+    weekdays
+        .days()
+        .into_iter()
+        .map(weekday_plural)
+        .collect::<Vec<&str>>()
+        .join(", ")
+}
+
+fn weekday_plural(day: Weekday) -> &'static str {
+    match day {
+        Weekday::Monday => "Mondays",
+        Weekday::Tuesday => "Tuesdays",
+        Weekday::Wednesday => "Wednesdays",
+        Weekday::Thursday => "Thursdays",
+        Weekday::Friday => "Fridays",
+        Weekday::Saturday => "Saturdays",
+        Weekday::Sunday => "Sundays",
+    }
 }
 
 pub fn everyone_label(on: bool) -> &'static str {
@@ -1066,10 +1168,6 @@ pub fn everyone_label(on: bool) -> &'static str {
     } else {
         "Ping @everyone: off"
     }
-}
-
-pub fn date_label(date: Date) -> String {
-    format!("{date} ({})", weekday_name(date.weekday()))
 }
 
 fn weekdays_phrase(weekdays: Weekdays) -> String {

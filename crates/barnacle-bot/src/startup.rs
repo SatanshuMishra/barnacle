@@ -24,6 +24,8 @@ use crate::attendance_store::Attendance;
 use crate::attendance_store::AttendanceError;
 use crate::config::Config;
 use crate::config::ConfigError;
+use crate::iq_store::IqStore;
+use crate::iq_store::IqStoreError;
 use crate::lookup::Directory;
 use crate::solves::Solves;
 use crate::solves::SolvesError;
@@ -131,6 +133,14 @@ pub enum StartupError {
         #[source]
         source: AttendanceError,
     },
+    #[error(
+        "the IQ Competition tables are missing from {path}; back the file up, then add them with `sqlite3 {path} < migrations/0009_iq_competition.sql`"
+    )]
+    Iq {
+        path: PathBuf,
+        #[source]
+        source: IqStoreError,
+    },
 }
 
 fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
@@ -150,6 +160,7 @@ pub struct Stores {
     pub attendance: Attendance,
     pub voice: VoiceStore,
     pub updates: UpdatesStore,
+    pub iq: IqStore,
 }
 
 pub struct Loaded {
@@ -266,18 +277,25 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
             path: path.to_owned(),
             source,
         })?;
-    let updates = UpdatesStore::with_pool(pool)
+    let updates = UpdatesStore::with_pool(pool.clone())
         .await
         .map_err(|source| StartupError::Updates {
             path: path.to_owned(),
             source,
         })?;
     let attendance = attendance?;
+    let iq = IqStore::with_pool(pool)
+        .await
+        .map_err(|source| StartupError::Iq {
+            path: path.to_owned(),
+            source,
+        })?;
     Ok(Stores {
         solves,
         attendance,
         voice,
         updates,
+        iq,
     })
 }
 

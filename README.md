@@ -102,7 +102,15 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 
     Every season becomes a Clan Battles event named after its number and codename, with its posts and answers kept. The file carries the same run-once guard.
 
-14. Put the bot's token where the bot can find it. Copy `env.example` to `.env` and fill in the one value:
+14. Add the IQ Competition tables once:
+
+    ```bash
+    sqlite3 data/barnacle.sqlite3 < migrations/0009_iq_competition.sql
+    ```
+
+    It adds the IQ Competition's tables without touching the others, and carries the same run-once guard.
+
+15. Put the bot's token where the bot can find it. Copy `env.example` to `.env` and fill in the one value:
 
     ```bash
     cp env.example .env && chmod 600 .env
@@ -110,7 +118,7 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 
     `.env` is ignored by git. A `DISCORD_TOKEN` already exported in your shell wins over the file, so you can override it for one run without editing anything.
 
-15. Start the bot:
+16. Start the bot:
 
     ```bash
     cargo run --release -p barnacle-bot
@@ -139,6 +147,10 @@ For Join to Create, the same database stores the server and channel IDs of each 
 
 - `migrations/0005_voice_rooms.down.sql` removes both tables. Rooms open at that moment are no longer tracked and have to be deleted by hand.
 
+For the IQ Competition, the same database stores each competition's name, dates, time zone, criteria, rules, channel IDs, target role IDs and judges' user IDs, and for every valid submission the message ID, the poster's user ID, the criterion and its points, and which judge awarded it. Points changed with `/iq points` are stored with the member's and the judge's user IDs and the reason the judge typed. Message text and screenshots are never stored. Clean-up archives a competition rather than deleting it, so its scores and settings stay.
+
+- `migrations/0009_iq_competition.down.sql` removes every IQ Competition table and everything in them, archived competitions included. Back the file up before running it.
+
 For update announcements, the same database stores each server's updates channel, ping role and last announced version, with no names.
 
 - `migrations/0007_bot_updates.down.sql` removes the table. Every server has to choose its updates channel again, and the next `/announce` there posts the running version's notes again.
@@ -151,19 +163,15 @@ An event holds one session on each of its weekdays from its first day to its las
 
 `/event create` takes:
 - `name`, from 1 to 100 characters once surrounding spaces are trimmed. Two running events in one server cannot share a name, whatever its case; an event that has ended, or whose last post has been deleted, gives its name up.
-- `first_day` and `last_day`, written `YYYY-MM-DD`. While you type, the bot suggests dates from yesterday to six months ahead, each with its weekday. The dates have to sit within six months either side of today, and at least one session has to be still to start.
-- `template`, which fills in the start, hours and time zone. The one template, Clan Battles, runs 23:30 UTC for 4 hours on Wednesday, Thursday, Saturday and Sunday. Any of `start`, `hours` and `time_zone` given beside it replaces the template's value.
-- `start`, on a 24-hour clock such as `17:00` or `5:30`, in the event's time zone.
-- `hours`, from 1 to 24.
-- `time_zone`, a place name such as `America/Denver` or `Europe/Berlin`, or `UTC`, picked from the suggestions. The suggestions list the zones of the server's running events first. An abbreviation such as `MDT`, an offset such as `UTC-6` and a name without a place such as `EST` are refused: they do not follow the place's own daylight saving changes, so a start written with one drifts by an hour twice a year.
+- `template`, optional. The one template, Clan Battles, picks Wednesday, Thursday, Saturday and Sunday, a 23:30 start, 4 hours and UTC for you, leaving only the dates to pick. Every value it picks can still be changed on the panel.
 
-Without a template, `start`, `hours` and `time_zone` are all needed, and the reply names any that were left out.
+`/event create` saves nothing yet. It opens a private panel that walks through three steps, and the top of the panel always says which step it is on and sums up what has been picked so far: the days and how many sessions they hold, the start and length, and the first session still ahead.
 
-`/event create` saves nothing yet. It opens a private panel that previews the event, its first session and how many sessions it holds, with:
-- a weekday menu, pre-selected with the template's weekdays, or with the first day's weekday when there is no template;
-- a role menu of up to five roles to ping, empty at first;
-- a Ping @everyone button, off at first;
-- Create, which checks the event again and saves it, and Cancel, which closes the panel and saves nothing.
+1. Days. A first-day menu lists today and the next 24 days, each with its weekday and how far off it is, and a last-day menu lists 25 days from the first day picked. "Today" is the date in the time zone of the server's most recently used event, or UTC when the server has none. A weekday menu picks the days of the week the event runs on; nothing is picked for you. Type dates further out opens a form for a first and last day written `YYYY-MM-DD`, with or without the weekday in brackets after it, such as `2026-11-06 (Friday)`. A typed first day before today, a last day before the first, and dates more than six months either side of today are refused. Next: time stays greyed out until a first day, a last day not before it, and at least one weekday that falls between them are picked.
+2. Time. Menus pick the start hour, from 00:00 to 23:00, the start minute, on the hour or at :15, :30 or :45, how many hours each session runs, from 1 to 24, and the time zone. The zone menu lists the zones of the server's running events first, then a fixed list of common zones, and ends with Another zone, which opens a form for any place name such as `Asia/Tokyo`. An abbreviation such as `MDT`, an offset such as `UTC-6` and a name without a place such as `EST` are refused: they do not follow the place's own daylight saving changes, so a start written with one drifts by an hour twice a year. Next: pings stays greyed out until all four are picked.
+3. Pings. A role menu picks up to five roles to ping, empty at first, and a Ping @everyone button is off at first. Create checks the event again and saves it. Create stays greyed out, and the panel says so, when every session in the picked dates has already started.
+
+Back returns to the step before with every value kept, and Cancel closes the panel and saves nothing.
 
 Only the admin who opened a panel can use it. A panel expires 15 minutes after it opens, and when the bot restarts; run the command again to open a new one.
 
@@ -172,7 +180,7 @@ The roles picked on the panel are pinged in that order when a sign-up post goes 
 An event of up to four hours shows Attend all and Nope all, then a row for each hour. A longer event shows Attend all, Nope all and Choose hours: Choose hours opens a private menu that lists each hour with its start and end, the member picks the hours they attend, and the post shows each member's hours as ranges such as `1–3, 5`.
 
 Four more commands work on running events. Edit, repost and end each pick the event by name from a list as you type.
-- `/event edit` opens the same panel, pre-selected with the event's weekdays, roles and Ping @everyone setting and showing any of `name`, `first_day`, `last_day`, `start`, `hours`, `time_zone` and `channel` given, with Save in place of Create. Save changes only what was changed on the panel or in the options, so a change another admin saved to another field in the meantime stays; with nothing changed it is refused. A change to the dates, weekdays, start time or time zone needs a session still to start; a change to only the name, hours, roles or channel does not. The posts of sessions the new schedule no longer holds are deleted, and the rest are redrawn where they stand without pinging again. Lowering the hours deletes the answers for the hours above the new count. `channel` takes a text channel of this server: the event's posts are deleted from its old channel first, and if any of them cannot be deleted, nothing changes and the event stays where it is. An event that ended, or was removed, after the panel opened is refused as not found.
+- `/event edit` takes the event and, optionally, a new `name` and a new `channel`, then opens the same three-step panel at the Days step with the event's dates, weekdays, start, hours, time zone, roles and Ping @everyone setting already picked. The date menus list the event's own first and last day even when they fall outside the 25 days shown, and an edit may keep a first day that has already passed. Save takes the place of Create. Save changes only what was changed on the panel or in the options, so a change another admin saved to another field in the meantime stays; with nothing changed it is refused. A change to the dates, weekdays, start time or time zone needs a session still to start; a change to only the name, hours, roles or channel does not. The posts of sessions the new schedule no longer holds are deleted, and the rest are redrawn where they stand without pinging again. Lowering the hours deletes the answers for the hours above the new count. `channel` takes a text channel of this server: the event's posts are deleted from its old channel first, and if any of them cannot be deleted, nothing changes and the event stays where it is. An event that ended, or was removed, after the panel opened is refused as not found.
 - `/event repost event:<event>` sends the event's open sign-up post again at the bottom of its channel, for when an admin deleted it by accident or it has scrolled out of sight. It deletes the old post if it is still there, sends the same session's post with every answer kept, and records the new post in the old one's place. Only a post still open for answers is reposted; with none open, the reply says when the next one goes up. `ping_again` is false by default, so a repost pings nobody. `ping_again:true` pings the event's roles once more, and is refused when the event pings nobody, or when the person running it could not ping those roles themselves: they need Mention @everyone, @here, and All Roles in the event's channel, or every role has to be mentionable. Like Create, a repost with `ping_again:true` checks each role against the bot's own permissions, opens its reply with a warning for any role that cannot sound, and logs each check.
 - `/event end event:<event>` stops an event at once: every sign-up post it still has is deleted from Discord and nothing more posts. If any post cannot be deleted, the event keeps running so you can fix the bot's permissions and run it again. Every answer already given stays in the database, and the event's name is free to reuse. An event that never posted is removed outright.
 - `/event list` lists the server's running events, each with its channel, dates, weekdays, start time, hours, time zone, sessions still ahead and next sign-up post.
@@ -220,6 +228,25 @@ A room copies the Join to Create channel's category, position, permissions, bitr
 Discord only lets a bot set an overwrite for a permission the bot itself holds. When a Join to Create channel's overwrites name a permission Barnacle's role lacks, Discord refuses the room, Barnacle logs a warning and the member stays where they are, so grant that permission to Barnacle's role. An overwrite naming Manage Permissions can only be copied by an administrator.
 
 Barnacle only sees members join while it is running. Someone already sitting in a Join to Create channel when Barnacle starts has to leave and join it again, and a room left empty while Barnacle was stopped closes five minutes after Barnacle starts.
+
+## IQ Competition
+
+An IQ Competition is a points competition among the clan, run in Discord. Players post a criterion's name with two screenshots, the bot checks the post's format, and a judge's reaction awards the points. A server runs one competition at a time.
+
+Barnacle needs Manage Channels and Manage Roles in the server to set a competition up, and Add Reactions and Mention Everyone to mark posts and ping the target roles. Add them to Barnacle's role by hand, or invite it with `permissions=275200069200` in the link above, which adds those to the usual set. Barnacle's role must sit above the IQ-Judge role, so it can hand that role out.
+
+`/iq start`, `/iq edit`, `/iq stop`, `/iq complete`, `/iq cleanup` and `/iq judges` need Manage Server, and every button they show checks Manage Server again when pressed. `/iq points` needs the IQ-Judge role, and `/iq leaderboard` is open to everyone. Every reply is visible only to the person who ran the command, except the leaderboard.
+
+- `/iq start` opens a private setup panel in five steps. Basics picks a template, the first and last day and the time zone the competition ends in; the competition ends at the end of its last day there. Templates are the server's last 10 competitions, and picking one copies its criteria, rules, roles, judges and judging reaction. Criteria adds, edits and removes criteria, each with the name players type, a description and its points from 1 to 1000; names must differ ignoring capitals. Rules takes up to 4000 characters. Who picks the roles that take part, the judges and the judging reaction: trophy, star, hundred or crown. Review sums it up and checks Barnacle's permissions and role position first, and Start competition stays disabled until they pass. Starting finds or creates the IQ-Judge role and hands it to the judges, creates a category named after the competition with #iq-announcements and #iq-submissions inside, visible only to the target roles, the judges and Barnacle, and posts the rules and criteria in #iq-announcements, pinging the target roles. #iq-announcements is read-only for players and judges. If any step fails, Barnacle deletes what it created and saves nothing. While a competition is paused, `/iq start` offers to resume it instead; a completed one has to be cleaned up first.
+- `/iq edit` opens the same panel at the Criteria step for the running or paused competition. Its name, dates and time zone stay fixed. Save changes edits the announcement in place, updates who can see the channels, hands out or takes away IQ-Judge, and posts a short note in #iq-announcements, without pinging, saying what changed.
+- `/iq stop` pauses the competition after a confirmation and posts a notice in #iq-announcements without pinging. Posts made while paused are never checked, even after it resumes.
+- `/iq complete` works only after the competition has ended. After a confirmation it posts the result in #iq-announcements, pinging the target roles and the winners, and lists every player tied for first place.
+- `/iq cleanup` works on a paused or completed competition. After a confirmation it deletes the category and both channels and archives the competition, keeping its scores, criteria and rules as a template. A channel already deleted by hand counts as deleted.
+- `/iq judges` shows a member picker filled with the current judges. Saving hands IQ-Judge to the members picked and takes it from the members unpicked.
+- `/iq points member:<member> points:<points> reason:<reason>` gives a member points, or takes them with a negative number, from -1000 to 1000. The reason is optional and holds up to 200 characters. The change is logged in #iq-submissions without pinging.
+- `/iq leaderboard` shows the top 10 of the running competition, or the top 9 and the requester's own place, with the requester's line in bold. With no competition running it names the last competition's winner.
+
+A post in #iq-submissions counts when its whole text is a criterion's name, ignoring capitals, and it has exactly 2 images attached and no other file. Barnacle adds a green check to a valid post and a red cross to an invalid one, and replies to an invalid post with what to fix, mentioning only its author. Edited posts are not checked again, so players post again instead. A judge's judging reaction on a valid post awards its points once; judges may approve their own posts. Removing a reaction changes nothing, and judges correct mistakes with `/iq points`. When Barnacle starts, it checks every post made since the last one it saw and counts judging reactions already on them. A judging reaction added while Barnacle was stopped, to a post it had already checked, is missed; correct it with `/iq points`.
 
 ## Deploying to a server
 

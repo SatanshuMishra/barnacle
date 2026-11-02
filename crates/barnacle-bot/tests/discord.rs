@@ -357,7 +357,8 @@ fn the_commands_outside_events_keep_their_options() {
             "about",
             "voice",
             "updates",
-            "announce"
+            "announce",
+            "iq"
         ]
     );
     let expected: Vec<(String, Vec<String>)> = [
@@ -379,6 +380,14 @@ fn the_commands_outside_events_keep_their_options() {
         ("voice hub list", &[]),
         ("updates setup", &["channel", "role"]),
         ("announce", &[]),
+        ("iq start", &[]),
+        ("iq edit", &[]),
+        ("iq stop", &[]),
+        ("iq complete", &[]),
+        ("iq cleanup", &[]),
+        ("iq judges", &[]),
+        ("iq points", &["member", "points", "reason"]),
+        ("iq leaderboard", &[]),
     ]
     .iter()
     .map(|(path, options)| {
@@ -415,13 +424,19 @@ fn option_json(command: &poise::Command<Data, Error>, name: &str) -> serde_json:
 }
 
 #[test]
-fn the_hours_options_take_1_to_24() {
-    for name in ["create", "edit"] {
-        let hours = option_json(&event_subcommand(name), "hours");
-        assert_eq!(hours["type"], 4, "{name}");
-        assert_eq!(hours["min_value"], 1.0, "{name}");
-        assert_eq!(hours["max_value"], 24.0, "{name}");
-    }
+fn the_template_option_offers_clan_battles() {
+    let template = option_json(&event_subcommand("create"), "template");
+    assert_eq!(template["type"], 4);
+    assert_eq!(template["required"], false);
+    assert_eq!(
+        template["choices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|choice| choice["name"].as_str().unwrap())
+            .collect::<Vec<&str>>(),
+        ["Clan Battles"]
+    );
 }
 
 #[test]
@@ -460,30 +475,10 @@ fn the_event_command_has_its_five_subcommands() {
         })
         .collect();
     let expected: Vec<(String, Vec<(String, bool)>)> = [
-        (
-            "create",
-            &[
-                ("name", true),
-                ("first_day", true),
-                ("last_day", true),
-                ("template", false),
-                ("start", false),
-                ("hours", false),
-                ("time_zone", false),
-            ][..],
-        ),
+        ("create", &[("name", true), ("template", false)][..]),
         (
             "edit",
-            &[
-                ("event", true),
-                ("name", false),
-                ("first_day", false),
-                ("last_day", false),
-                ("start", false),
-                ("hours", false),
-                ("time_zone", false),
-                ("channel", false),
-            ],
+            &[("event", true), ("name", false), ("channel", false)],
         ),
         ("repost", &[("event", true), ("ping_again", false)]),
         ("end", &[("event", true)]),

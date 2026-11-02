@@ -3,6 +3,7 @@ mod board;
 mod commands;
 mod events;
 mod herald;
+mod iq;
 mod panel;
 mod rooms;
 
@@ -21,13 +22,16 @@ use tokio::sync::Semaphore;
 use crate::attendance::Signups;
 use crate::attendance_store::Attendance;
 use crate::config::CommandScope;
-use crate::event_draft::Drafts;
+use crate::event_draft::Draft;
 use crate::failure;
 use crate::failure::Failure;
 use crate::failure::Scope;
 use crate::ids::GuildId;
+use crate::iq_setup;
+use crate::iq_store::IqStore;
 use crate::logging;
 use crate::lookup::Directory;
+use crate::panels::Drafts;
 use crate::release_notes;
 use crate::release_notes::NotesError;
 use crate::solves::Solves;
@@ -74,7 +78,11 @@ pub struct Data {
     pub rehearsal: Vec<GuildId>,
     pub voice: Arc<VoiceRooms<DiscordRooms>>,
     pub updates: Arc<Updates<DiscordHerald>>,
-    pub drafts: Arc<Drafts>,
+    pub drafts: Arc<Drafts<Draft>>,
+    pub iq: IqStore,
+    pub iq_drafts: Arc<iq_setup::Drafts>,
+    pub iq_caught_up: Arc<crate::iq::CaughtUp>,
+    pub iq_unsettled: Arc<crate::iq::Unsettled>,
 }
 
 fn now_unix() -> i64 {
@@ -124,6 +132,7 @@ pub async fn run(
     attendance: Attendance,
     voice: VoiceStore,
     updates: UpdatesStore,
+    iq: IqStore,
 ) -> Result<(), Box<RunError>> {
     let version = env!("CARGO_PKG_VERSION");
     let releases = release_notes::all().map_err(RunError::Notes)?;
@@ -133,7 +142,8 @@ pub async fn run(
     let intents = serenity::GatewayIntents::GUILDS
         | serenity::GatewayIntents::GUILD_MESSAGES
         | serenity::GatewayIntents::MESSAGE_CONTENT
-        | serenity::GatewayIntents::GUILD_VOICE_STATES;
+        | serenity::GatewayIntents::GUILD_VOICE_STATES
+        | serenity::GatewayIntents::GUILD_MESSAGE_REACTIONS;
     let rehearsal_guilds: Vec<GuildId> = rehearsal.iter().copied().map(GuildId::new).collect();
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
@@ -266,6 +276,10 @@ pub async fn run(
                     voice,
                     updates,
                     drafts: Arc::new(Drafts::default()),
+                    iq,
+                    iq_drafts: Arc::new(iq_setup::Drafts::default()),
+                    iq_caught_up: Arc::new(crate::iq::CaughtUp::default()),
+                    iq_unsettled: Arc::new(crate::iq::Unsettled::default()),
                 };
                 tracing::info!(
                     "event.name" = "service.started",
