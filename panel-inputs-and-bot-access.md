@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T20:09:33.841Z
+Updated: 2026-11-02T20:27:53.720Z
 Next ids: c2 D7 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat/panel-inputs-and-bot-access); its two confirmed advisories (C1 /announce Send organiser re-check, C2 a test rolling back 0010) and the UPDATES_NOT_SET_UP rewording are fixed on mitosis/access-roles at d1dce61, covering tests and clippy pass, fix-check clean against review/access-roles.record.json (criteria 5.1-5.4 only, since fix-check refuses 5.23, which has no test rows). The fixes are not yet in mitosis/panel-inputs, which the panel-inputs build is still producing from d461aab: member-zones is built and held, event-inputs and iq-setup-inputs are building. iq-judging waits for mitosis/panel-inputs.
+access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat/panel-inputs-and-bot-access); its two confirmed advisories (C1 /announce Send organiser re-check, C2 a test rolling back 0010) and the UPDATES_NOT_SET_UP rewording are fixed on mitosis/access-roles at d1dce61, covering tests and clippy pass, fix-check clean against review/access-roles.record.json (criteria 5.1-5.4 only, since fix-check refuses 5.23, which has no test rows). The fixes are not yet in mitosis/panel-inputs, which the panel-inputs build is still producing from d461aab: member-zones is built and held; event-inputs finished its work (16 acceptance pass) but reported failed because tests/discord.rs:483 and tests/event_commands.rs:20 pin the old /event option lists and lie outside its write-set, so worker-rules.txt in the panel-inputs and iq-judging homes now tells a Worker to report ok and name such tests, and the build is resumed reusing lane 1's clone; review must add time_zone to those two tests. iq-judging waits for mitosis/panel-inputs.
 
 ## Next step
 
