@@ -1,7 +1,7 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T18:25:19.503Z
-Next ids: c2 D4 R1 S1
+Updated: 2026-11-02T18:25:19.834Z
+Next ids: c2 D5 R1 S1
 
 ## Goal
 
@@ -24,6 +24,7 @@ Apply the spec review's real findings to the record scripts, rerun build_record.
 - D1 The run is unattended from the owner's instruction: no questions or read-back; gaps become assumptions citing intent lines.
 - D2 Lighthouse is skipped; criterion 5.23 (live Discord) stays unproven for the owner's dev-bot check.
 - D3 An award the startup rescan counts gets the same judge log line as a live award, with no offline tag (owner).
+- D4 Interphase hand-off: build the spec as three stacked MSPs: Build now: cut the FEATURE branch, set up the run home, run --plan-only, then build the three MSPs in order access-roles, panel-inputs, iq-judging.
 
 ## Open risks
 
