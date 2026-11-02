@@ -2573,7 +2573,6 @@ pub(super) async fn reacted(
         serenity_context,
         &competition,
         reaction.message_id.get(),
-        None,
         judge,
         &scope,
     )
@@ -2631,7 +2630,6 @@ async fn award(
     serenity_context: &serenity::Context,
     competition: &Competition,
     message: u64,
-    fetched: Option<&serenity::Message>,
     judge: UserId,
     scope: &Scope,
 ) {
@@ -2656,7 +2654,6 @@ async fn award(
                 serenity_context,
                 competition,
                 message,
-                fetched,
                 (judge, user, points),
                 scope,
             )
@@ -2694,7 +2691,6 @@ async fn awarded(
     serenity_context: &serenity::Context,
     competition: &Competition,
     message: u64,
-    fetched: Option<&serenity::Message>,
     (judge, player, points): (UserId, UserId, u32),
     scope: &Scope,
 ) {
@@ -2715,20 +2711,18 @@ async fn awarded(
         }
     };
     mark(http, channel, message_id, &competition.marks.confirm, scope).await;
-    let criterion = match fetched {
-        Some(found) => criterion_of(competition, found),
-        None => match bounded(channel.message(http, message_id)).await {
-            Ok(found) => criterion_of(competition, &found),
-            Err(error) => {
-                failure::report(
-                    "iq.award.unread",
-                    "an awarded submission could not be read, so its criterion is not named",
-                    &Failure::from_error(&error),
-                    scope,
-                );
-                UNREAD_CRITERION.to_owned()
-            }
-        },
+    let criterion = match data.iq.criterion(message).await {
+        Ok(Some(criterion)) => criterion,
+        Ok(None) => UNREAD_CRITERION.to_owned(),
+        Err(error) => {
+            failure::report(
+                "iq.award.unread",
+                "an awarded submission's criterion could not be read, so it is not named",
+                &Failure::from_error(&error),
+                scope,
+            );
+            UNREAD_CRITERION.to_owned()
+        }
     };
     let link = format!(
         "{MESSAGE_LINK}/{}/{}/{message}",
@@ -2737,31 +2731,6 @@ async fn awarded(
     );
     let line = iq_text::judge_log_award(judge, player, &criterion, i64::from(points), &link);
     log_judging(data, serenity_context, competition, &line, scope).await;
-}
-
-fn criterion_of(competition: &Competition, message: &serenity::Message) -> String {
-    let attachments: Vec<iq::Attachment> = message
-        .attachments
-        .iter()
-        .map(|attachment| iq::Attachment {
-            content_type: attachment.content_type.clone(),
-        })
-        .collect();
-    match iq::check_submission(&message.content, &attachments, &competition.criteria) {
-        Checked::Valid { criterion, .. } => criterion,
-        Checked::Invalid(_) => {
-            let typed: String = message
-                .content
-                .trim()
-                .chars()
-                .take(iq_setup::CRITERION_NAME_LIMIT)
-                .collect();
-            match typed.is_empty() {
-                true => UNREAD_CRITERION.to_owned(),
-                false => typed,
-            }
-        }
-    }
 }
 
 async fn log_judging(
@@ -3212,7 +3181,6 @@ async fn catch_up_one(
             serenity_context,
             competition,
             message.id.get(),
-            Some(message),
             judge,
             &scope.clone().user(judge),
         )
@@ -3321,7 +3289,6 @@ async fn rescan_one(
             serenity_context,
             competition,
             message,
-            Some(&found),
             judge,
             &scope.clone().user(judge),
         )

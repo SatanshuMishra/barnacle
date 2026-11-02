@@ -661,6 +661,15 @@ impl IqStore {
         rows.into_iter().map(to_unsigned).collect()
     }
 
+    pub async fn criterion(&self, message: u64) -> Result<Option<String>, IqStoreError> {
+        Ok(
+            sqlx::query_scalar("SELECT criterion FROM iq_submissions WHERE message_id = ?")
+                .bind(to_integer(message.into())?)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
     pub async fn recorded(&self, competition: i64, message: u64) -> Result<bool, IqStoreError> {
         let found: Option<i64> = sqlx::query_scalar(
             "SELECT 1 FROM iq_submissions WHERE competition_id = ? AND message_id = ?",
