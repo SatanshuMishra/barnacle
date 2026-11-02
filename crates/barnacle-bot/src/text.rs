@@ -65,7 +65,8 @@ pub const STILL_PLAYING_LABEL: &str = "Yes";
 pub const SERIES_REFUSED: &str =
     "Only the player who started this series, or someone who can manage messages, can do that.";
 pub const NOT_AN_ORGANISER: &str = "Only organisers can use this command. An Administrator can name organiser roles with /barnacle access.";
-pub const UPDATES_NOT_SET_UP: &str = "This server has no updates channel yet. Someone with Manage Server can set one with /updates setup.";
+pub const UPDATES_NOT_SET_UP: &str =
+    "This server has no updates channel yet. An organiser can set one with /updates setup.";
 pub const ANNOUNCE_OWNERS_ONLY: &str = "Only the owner of Barnacle can post its update notes.";
 pub const SEND_LABEL: &str = "Send";
 pub const SOMETHING_WENT_WRONG: &str = "Something went wrong. Nothing was changed.";
