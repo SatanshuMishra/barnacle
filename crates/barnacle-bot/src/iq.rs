@@ -555,6 +555,10 @@ pub fn should_check(status: Status, end_unix: i64, sent_unix: i64) -> bool {
     }
 }
 
+pub fn checks_at_catch_up(checkable: bool, bot_marked: bool, recorded: bool) -> bool {
+    checkable && !bot_marked && !recorded
+}
+
 pub fn moves_last_seen(path: CheckPath, caught_up: bool) -> bool {
     match path {
         CheckPath::CatchUp => true,

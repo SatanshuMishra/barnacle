@@ -3168,13 +3168,31 @@ async fn catch_up_one(
 ) {
     let http: &serenity::Http = &serenity_context.http;
     let scope = message_scope(competition.guild, message);
-    if !checkable(message) || already_marked(message, &competition.marks) {
-        seen(data, competition, message, &scope).await;
-        return;
-    }
     let hold = data
         .iq_unsettled
         .hold(competition.submissions, message.id.get());
+    let recorded = match data.iq.recorded(competition.id, message.id.get()).await {
+        Ok(recorded) => recorded,
+        Err(error) => {
+            failure::report(
+                "iq.catch_up.unread",
+                "a submission could not be looked up, so catch-up left it for the next start",
+                &Failure::from_error(&error),
+                &scope,
+            );
+            hold.settle(Judged::Failed);
+            return;
+        }
+    };
+    if !iq::checks_at_catch_up(
+        checkable(message),
+        already_marked(message, &competition.marks),
+        recorded,
+    ) {
+        hold.settle(Judged::Ignored);
+        seen(data, competition, message, &scope).await;
+        return;
+    }
     let judged = check_message(
         data,
         http,
