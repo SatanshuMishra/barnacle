@@ -193,6 +193,16 @@ pub enum IqStoreError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigChange {
+    pub competition: i64,
+    pub criteria: Vec<Criterion>,
+    pub rules: String,
+    pub roles: Vec<RoleId>,
+    pub judges: Vec<UserId>,
+    pub reaction: JudgingReaction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewCompetition {
     pub guild: GuildId,
     pub name: String,
@@ -408,15 +418,16 @@ impl IqStore {
             .transpose()
     }
 
-    pub async fn update_config(
-        &self,
-        id: i64,
-        criteria: &[Criterion],
-        rules: &str,
-        roles: &[RoleId],
-        judges: &[UserId],
-        reaction: JudgingReaction,
-    ) -> Result<(), IqStoreError> {
+    pub async fn update_config(&self, change: &ConfigChange) -> Result<(), IqStoreError> {
+        let ConfigChange {
+            competition: id,
+            criteria,
+            rules,
+            roles,
+            judges,
+            reaction,
+        } = change;
+        let id = *id;
         let mut transaction = self.pool.begin().await?;
         let changed =
             sqlx::query("UPDATE iq_competitions SET rules = ?, judging_reaction = ? WHERE id = ?")

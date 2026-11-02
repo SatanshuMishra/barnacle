@@ -133,6 +133,23 @@ pub enum CleanupRefusal {
     Running,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckPath {
+    Live,
+    CatchUp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Done {
+    JudgesChanged,
+    ChannelsUpdated,
+    AnnouncementUpdated,
+    SettingsSaved,
+    Completed,
+    ChannelsDeleted,
+    Archived,
+}
+
 pub fn check_submission(text: &str, attachments: &[Attachment], criteria: &[Criterion]) -> Checked {
     let typed = text.trim();
     let matched = criteria
@@ -305,6 +322,10 @@ pub fn should_check(status: Status, end_unix: i64, sent_unix: i64) -> bool {
         Status::Running => sent_unix < end_unix,
         Status::Stopped | Status::Completed | Status::Archived => false,
     }
+}
+
+pub fn moves_last_seen(path: CheckPath) -> bool {
+    matches!(path, CheckPath::CatchUp)
 }
 
 pub fn adjustment(points: i64) -> Option<i64> {

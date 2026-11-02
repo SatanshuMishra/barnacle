@@ -15,6 +15,7 @@ use crate::ids::RoleId;
 use crate::iq::Criterion;
 use crate::iq::JudgingReaction;
 use crate::iq_store::Competition;
+pub use crate::iq_store::ConfigChange;
 use crate::iq_store::NewCompetition;
 use crate::iq_text;
 use crate::panels;
@@ -146,16 +147,6 @@ impl SetupPlan {
             created_at_ms,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfigChange {
-    pub competition: i64,
-    pub criteria: Vec<Criterion>,
-    pub rules: String,
-    pub roles: Vec<RoleId>,
-    pub judges: Vec<UserId>,
-    pub reaction: JudgingReaction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

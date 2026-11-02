@@ -25,10 +25,13 @@ use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::RoleId;
 use crate::iq;
+use crate::iq::CheckPath;
 use crate::iq::Checked;
 use crate::iq::CleanupRefusal;
 use crate::iq::CompleteRefusal;
 use crate::iq::Criterion;
+use crate::iq::Done;
+use crate::iq::Standing;
 use crate::iq::StartChoice;
 use crate::iq::Status;
 use crate::iq_setup;
@@ -65,7 +68,6 @@ const SAVE_JUDGES_LABEL: &str = "Save judges";
 const NOTHING_CREATED: &str = "Cancelled. Nothing was created.";
 const ZERO_POINTS: &str = "Give or take at least 1 point. 0 changes nothing.";
 const MANAGE_SERVER_NEEDED: &str = "You need Manage Server to use this button.";
-const IQ_FAILED: &str = "The IQ Competition was not changed";
 const LOG_FAILED: &str =
     "The points were saved, but the note in the submissions channel was not posted";
 const ANNOUNCED_LINES: usize = 5;
@@ -80,7 +82,9 @@ const SETUP_ACCESS: serenity::Permissions =
     serenity::Permissions::MANAGE_CHANNELS.union(serenity::Permissions::MANAGE_ROLES);
 const QUIET_FOR_PLAYERS: serenity::Permissions = serenity::Permissions::SEND_MESSAGES
     .union(serenity::Permissions::ADD_REACTIONS)
-    .union(serenity::Permissions::CREATE_PUBLIC_THREADS);
+    .union(serenity::Permissions::CREATE_PUBLIC_THREADS)
+    .union(serenity::Permissions::CREATE_PRIVATE_THREADS)
+    .union(serenity::Permissions::SEND_MESSAGES_IN_THREADS);
 const ANNOUNCING_BOT: serenity::Permissions =
     serenity::Permissions::SEND_MESSAGES.union(serenity::Permissions::MENTION_EVERYONE);
 const POSTING_PLAYERS: serenity::Permissions = serenity::Permissions::SEND_MESSAGES
@@ -90,6 +94,41 @@ const POSTING_PLAYERS: serenity::Permissions = serenity::Permissions::SEND_MESSA
 const CHECKING_BOT: serenity::Permissions = serenity::Permissions::ADD_REACTIONS
     .union(serenity::Permissions::READ_MESSAGE_HISTORY)
     .union(serenity::Permissions::SEND_MESSAGES);
+
+#[derive(Debug)]
+struct Unfinished {
+    done: Vec<Done>,
+    error: IqError,
+}
+
+impl Unfinished {
+    fn untouched(error: impl Into<IqError>) -> Self {
+        Self {
+            done: Vec::new(),
+            error: error.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct Progress {
+    done: Vec<Done>,
+}
+
+impl Progress {
+    fn with(self, step: Done) -> Self {
+        Self {
+            done: self.done.into_iter().chain([step]).collect(),
+        }
+    }
+
+    fn stopped(&self, error: impl Into<IqError>) -> Unfinished {
+        Unfinished {
+            done: self.done.clone(),
+            error: error.into(),
+        }
+    }
+}
 
 #[derive(Debug)]
 enum IqError {
@@ -202,7 +241,6 @@ pub(super) async fn iq(_ctx: Context<'_>) -> Result<(), Error> {
     slash_command,
     rename = "start",
     guild_only,
-    default_member_permissions = "MANAGE_GUILD",
     required_permissions = "MANAGE_GUILD"
 )]
 pub(super) async fn iq_start(ctx: Context<'_>) -> Result<(), Error> {
@@ -253,7 +291,6 @@ pub(super) async fn iq_start(ctx: Context<'_>) -> Result<(), Error> {
     slash_command,
     rename = "edit",
     guild_only,
-    default_member_permissions = "MANAGE_GUILD",
     required_permissions = "MANAGE_GUILD"
 )]
 pub(super) async fn iq_edit(ctx: Context<'_>) -> Result<(), Error> {
@@ -284,7 +321,6 @@ pub(super) async fn iq_edit(ctx: Context<'_>) -> Result<(), Error> {
     slash_command,
     rename = "stop",
     guild_only,
-    default_member_permissions = "MANAGE_GUILD",
     required_permissions = "MANAGE_GUILD"
 )]
 pub(super) async fn iq_stop(ctx: Context<'_>) -> Result<(), Error> {
@@ -323,7 +359,6 @@ pub(super) async fn iq_stop(ctx: Context<'_>) -> Result<(), Error> {
     slash_command,
     rename = "complete",
     guild_only,
-    default_member_permissions = "MANAGE_GUILD",
     required_permissions = "MANAGE_GUILD"
 )]
 pub(super) async fn iq_complete(ctx: Context<'_>) -> Result<(), Error> {
@@ -354,14 +389,9 @@ pub(super) async fn iq_complete(ctx: Context<'_>) -> Result<(), Error> {
         Ok(()) => {
             ctx.defer_ephemeral().await?;
             let standings = iq::standings(&ctx.data().iq.scores(competition.id).await?);
-            let winners = iq::winners(&standings);
-            let users: Vec<UserId> = winners.iter().map(|standing| standing.user).collect();
-            let names = names_of(&ctx.serenity_context().http, guild, &users).await;
-            let winner_names: Vec<&str> = users
-                .iter()
-                .map(|user| iq_text::name_of(*user, &names))
-                .collect();
-            let points = winners.first().map_or(0, |standing| standing.points);
+            let (named, points) =
+                named_winners(&ctx.serenity_context().http, guild, &standings).await;
+            let winner_names: Vec<&str> = named.iter().map(String::as_str).collect();
             let question = iq_text::complete_question(
                 &competition.name,
                 end,
@@ -386,7 +416,6 @@ pub(super) async fn iq_complete(ctx: Context<'_>) -> Result<(), Error> {
     slash_command,
     rename = "cleanup",
     guild_only,
-    default_member_permissions = "MANAGE_GUILD",
     required_permissions = "MANAGE_GUILD"
 )]
 pub(super) async fn iq_cleanup(ctx: Context<'_>) -> Result<(), Error> {
@@ -422,7 +451,6 @@ pub(super) async fn iq_cleanup(ctx: Context<'_>) -> Result<(), Error> {
     slash_command,
     rename = "judges",
     guild_only,
-    default_member_permissions = "MANAGE_GUILD",
     required_permissions = "MANAGE_GUILD"
 )]
 pub(super) async fn iq_judges(ctx: Context<'_>) -> Result<(), Error> {
@@ -461,7 +489,8 @@ pub(super) async fn iq_points(
         return Ok(());
     };
     let data = ctx.data();
-    let judge_role = data.iq.judge_role(guild).await?;
+    let judge_role =
+        current_judge_role(data, ctx.cache(), guild, &Scope::default().guild(guild)).await;
     let holds = match (judge_role, ctx.author_member().await) {
         (Some(role), Some(held)) => held.roles.iter().any(|id| id.get() == role.get()),
         _ => false,
@@ -558,14 +587,8 @@ pub(super) async fn iq_leaderboard(ctx: Context<'_>) -> Result<(), Error> {
         None => match data.iq.last_archived(guild).await? {
             Some(last) => {
                 let standings = iq::standings(&data.iq.scores(last.id).await?);
-                let winners = iq::winners(&standings);
-                let users: Vec<UserId> = winners.iter().map(|standing| standing.user).collect();
-                let names = names_of(http, guild, &users).await;
-                let winner_names: Vec<&str> = users
-                    .iter()
-                    .map(|user| iq_text::name_of(*user, &names))
-                    .collect();
-                let points = winners.first().map_or(0, |standing| standing.points);
+                let (named, points) = named_winners(http, guild, &standings).await;
+                let winner_names: Vec<&str> = named.iter().map(String::as_str).collect();
                 iq_text::no_competition(Some((&last.name, &winner_names, points)))
             }
             None => iq_text::no_competition(None),
@@ -793,6 +816,21 @@ async fn post(
         sent.push(message.id.get());
     }
     Ok(sent)
+}
+
+async fn named_winners(
+    http: &serenity::Http,
+    guild: GuildId,
+    standings: &[Standing],
+) -> (Vec<String>, i64) {
+    let winners = iq::winners(standings);
+    let users: Vec<UserId> = winners.iter().map(|standing| standing.user).collect();
+    let names = names_of(http, guild, &users).await;
+    let named = users
+        .iter()
+        .map(|user| iq_text::name_of(*user, &names).to_owned())
+        .collect();
+    (named, winners.first().map_or(0, |standing| standing.points))
 }
 
 async fn names_of(
@@ -1391,7 +1429,9 @@ async fn finish(
         return;
     }
     let answer = match &ready {
-        SetupReady::Start(plan) => start_competition(data, serenity_context, plan, scope).await,
+        SetupReady::Start(plan) => start_competition(data, serenity_context, plan, scope)
+            .await
+            .map_err(Unfinished::untouched),
         SetupReady::Edit(change) => save_changes(data, serenity_context, change, scope).await,
     };
     match answer {
@@ -1400,7 +1440,7 @@ async fn finish(
         }
         Err(error) => {
             drafts.open(panel, draft, now_ms);
-            let content = failed_text(
+            let content = unfinished_text(
                 "an IQ Competition could not be started or saved",
                 &error,
                 scope,
@@ -1438,10 +1478,14 @@ async fn confirmed(
     }
     let http = &serenity_context.http;
     let answer = match part {
-        IqPanelPart::ConfirmResume => resume(data, http, guild, scope).await,
-        IqPanelPart::ConfirmStop => stop(data, http, guild, scope).await,
+        IqPanelPart::ConfirmResume => resume(data, http, guild, scope)
+            .await
+            .map_err(Unfinished::untouched),
+        IqPanelPart::ConfirmStop => stop(data, http, guild, scope)
+            .await
+            .map_err(Unfinished::untouched),
         IqPanelPart::ConfirmComplete => complete(data, http, guild, scope).await,
-        IqPanelPart::ConfirmCleanup => clean_up(data, http, guild, scope).await,
+        IqPanelPart::ConfirmCleanup => clean_up(data, serenity_context, guild, scope).await,
         IqPanelPart::JudgesSave => match data.iq_drafts.take(panel, user, now_ms) {
             Ok(draft) => save_judges(data, serenity_context, guild, draft.judges(), scope).await,
             Err(refusal) => Ok(turned_text(&Turned::Panel(refusal), scope)),
@@ -1471,7 +1515,7 @@ async fn confirmed(
     };
     let content = match answer {
         Ok(content) => content,
-        Err(error) => failed_text("an IQ Competition button did not finish", &error, scope),
+        Err(error) => unfinished_text("an IQ Competition button did not finish", &error, scope),
     };
     edit_reply(serenity_context, component, content, scope).await;
 }
@@ -1554,11 +1598,11 @@ async fn complete(
     http: &serenity::Http,
     guild: GuildId,
     scope: &Scope,
-) -> Result<String, IqError> {
-    let Some(competition) = data.iq.live(guild).await? else {
+) -> Result<String, Unfinished> {
+    let Some(competition) = data.iq.live(guild).await.map_err(Unfinished::untouched)? else {
         return Ok(iq_text::NO_COMPETITION_RUNNING.to_owned());
     };
-    let end = end_unix(&competition)?;
+    let end = end_unix(&competition).map_err(Unfinished::untouched)?;
     match iq::may_complete(competition.status, end, super::now_unix()) {
         Ok(()) => {}
         Err(CompleteRefusal::TooEarly) => {
@@ -1566,7 +1610,13 @@ async fn complete(
         }
         Err(CompleteRefusal::NotLive) => return Ok(iq_text::needs_cleanup(&competition.name)),
     }
-    let standings = iq::standings(&data.iq.scores(competition.id).await?);
+    let standings = iq::standings(
+        &data
+            .iq
+            .scores(competition.id)
+            .await
+            .map_err(Unfinished::untouched)?,
+    );
     let winners = iq::winners(&standings);
     let shown: Vec<UserId> = standings
         .iter()
@@ -1579,14 +1629,31 @@ async fn complete(
     let winner_users: Vec<serenity::UserId> = winners
         .iter()
         .map(|standing| discord_user(standing.user))
-        .collect::<Result<_, _>>()?;
+        .collect::<Result<_, _>>()
+        .map_err(Unfinished::untouched)?;
     let mentions = serenity::CreateAllowedMentions::new()
-        .roles(target_roles(&competition.roles)?)
+        .roles(target_roles(&competition.roles).map_err(Unfinished::untouched)?)
         .users(winner_users);
-    post(http, competition.announcements, &text, mentions).await?;
     data.iq
         .set_status(competition.id, Status::Completed)
-        .await?;
+        .await
+        .map_err(Unfinished::untouched)?;
+    if let Err(error) = post(http, competition.announcements, &text, mentions).await {
+        return Err(
+            match data.iq.set_status(competition.id, competition.status).await {
+                Ok(()) => Unfinished::untouched(error),
+                Err(reverted) => {
+                    failure::report(
+                        "iq.complete.unreverted",
+                        "the winner announcement failed and the competition could not be set back",
+                        &Failure::from_error(&IqError::from(reverted)),
+                        scope,
+                    );
+                    Progress::default().with(Done::Completed).stopped(error)
+                }
+            },
+        );
+    }
     failure::record(
         "iq.completed",
         "an IQ Competition's winner was announced",
@@ -1597,11 +1664,12 @@ async fn complete(
 
 async fn clean_up(
     data: &Data,
-    http: &serenity::Http,
+    serenity_context: &serenity::Context,
     guild: GuildId,
     scope: &Scope,
-) -> Result<String, IqError> {
-    let Some(competition) = data.iq.live(guild).await? else {
+) -> Result<String, Unfinished> {
+    let http = &serenity_context.http;
+    let Some(competition) = data.iq.live(guild).await.map_err(Unfinished::untouched)? else {
         return Ok(iq_text::NO_COMPETITION_RUNNING.to_owned());
     };
     match iq::may_clean_up(competition.status) {
@@ -1610,20 +1678,50 @@ async fn clean_up(
             return Ok(iq_text::cleanup_while_running(&competition.name));
         }
     }
+    let progress = Progress::default();
+    if let Some(role) = current_judge_role(data, &serenity_context.cache, guild, scope).await {
+        change_judges(http, guild, role, &competition.judges, &[])
+            .await
+            .map_err(|error| progress.stopped(error))?;
+    }
+    let progress = match competition.judges.is_empty() {
+        true => progress,
+        false => progress.with(Done::JudgesChanged),
+    };
     for channel in [
         competition.submissions,
         competition.announcements,
         competition.category,
     ] {
-        remove_channel(http, discord_channel(channel)?).await?;
+        remove_channel(
+            http,
+            discord_channel(channel).map_err(|error| progress.stopped(error))?,
+        )
+        .await
+        .map_err(|error| progress.stopped(error))?;
     }
-    data.iq.archive(competition.id).await?;
+    let progress = progress.with(Done::ChannelsDeleted);
+    data.iq
+        .archive(competition.id)
+        .await
+        .map_err(|error| progress.stopped(error))?;
     failure::record(
         "iq.cleaned_up",
         "an IQ Competition was cleaned up and archived",
         scope,
     );
-    let templates = data.iq.templates(guild).await?.len();
+    let templates = match data.iq.templates(guild).await {
+        Ok(templates) => templates.len(),
+        Err(error) => {
+            failure::report(
+                "iq.cleanup.templates_unread",
+                "the saved templates could not be counted after clean-up",
+                &Failure::from_error(&IqError::from(error)),
+                scope,
+            );
+            0
+        }
+    };
     Ok(iq_text::cleaned_up(&competition.name, templates))
 }
 
@@ -1644,11 +1742,13 @@ async fn save_judges(
     guild: GuildId,
     judges: &[UserId],
     scope: &Scope,
-) -> Result<String, IqError> {
-    let Some(competition) = data.iq.live(guild).await? else {
+) -> Result<String, Unfinished> {
+    let Some(competition) = data.iq.live(guild).await.map_err(Unfinished::untouched)? else {
         return Ok(iq_text::NO_COMPETITION_RUNNING.to_owned());
     };
-    let role = judge_role(data, serenity_context, guild, scope).await?;
+    let role = judge_role(data, serenity_context, guild, scope)
+        .await
+        .map_err(Unfinished::untouched)?;
     change_judges(
         &serenity_context.http,
         guild,
@@ -1656,17 +1756,20 @@ async fn save_judges(
         &competition.judges,
         judges,
     )
-    .await?;
+    .await
+    .map_err(Unfinished::untouched)?;
+    let progress = Progress::default().with(Done::JudgesChanged);
     data.iq
-        .update_config(
-            competition.id,
-            &competition.criteria,
-            &competition.rules,
-            &competition.roles,
-            judges,
-            competition.reaction,
-        )
-        .await?;
+        .update_config(&ConfigChange {
+            competition: competition.id,
+            criteria: competition.criteria.clone(),
+            rules: competition.rules.clone(),
+            roles: competition.roles.clone(),
+            judges: judges.to_vec(),
+            reaction: competition.reaction,
+        })
+        .await
+        .map_err(|error| progress.stopped(error))?;
     failure::record(
         "iq.judges.saved",
         "the IQ-Judge role was handed out and taken away",
@@ -1950,9 +2053,14 @@ async fn save_changes(
     serenity_context: &serenity::Context,
     change: &ConfigChange,
     scope: &Scope,
-) -> Result<String, IqError> {
+) -> Result<String, Unfinished> {
     let http = &serenity_context.http;
-    let Some(before) = data.iq.competition(change.competition).await? else {
+    let Some(before) = data
+        .iq
+        .competition(change.competition)
+        .await
+        .map_err(Unfinished::untouched)?
+    else {
         return Ok(iq_text::NO_COMPETITION_RUNNING.to_owned());
     };
     match before.status {
@@ -1963,70 +2071,86 @@ async fn save_changes(
     let roles_changed = !same_set(&before.roles, &change.roles);
     let judges_changed = !same_set(&before.judges, &change.judges);
     let role = match roles_changed || judges_changed {
-        true => Some(judge_role(data, serenity_context, before.guild, scope).await?),
+        true => Some(
+            judge_role(data, serenity_context, before.guild, scope)
+                .await
+                .map_err(Unfinished::untouched)?,
+        ),
         false => None,
     };
-    data.iq
-        .update_config(
-            before.id,
-            &change.criteria,
-            &change.rules,
-            &change.roles,
-            &change.judges,
-            change.reaction,
-        )
-        .await?;
     let text = iq_text::start_announcement(
         &before.name,
-        end_unix(&before)?,
+        end_unix(&before).map_err(Unfinished::untouched)?,
         &change.roles,
         before.submissions,
         &change.criteria,
         &change.rules,
         &change.judges,
     );
-    let held = data.iq.announcements(before.id).await?;
+    let held = data
+        .iq
+        .announcements(before.id)
+        .await
+        .map_err(Unfinished::untouched)?;
+    let progress = Progress::default();
+    let progress = match (role, roles_changed) {
+        (Some(role), true) => {
+            let seats = Seats {
+                guild: discord_guild(before.guild).map_err(Unfinished::untouched)?,
+                judge: role,
+                bot: serenity_context.cache.current_user().id,
+            };
+            let targets = target_roles(&change.roles).map_err(Unfinished::untouched)?;
+            for (channel, room) in [
+                (before.category, Room::Category),
+                (before.announcements, Room::Announcements),
+                (before.submissions, Room::Submissions),
+            ] {
+                bounded(
+                    discord_channel(channel)
+                        .map_err(|error| progress.stopped(error))?
+                        .edit(
+                            http.as_ref(),
+                            serenity::EditChannel::new()
+                                .permissions(overwrites(seats, &targets, room)),
+                        ),
+                )
+                .await
+                .map_err(|error| progress.stopped(error))?;
+            }
+            progress.with(Done::ChannelsUpdated)
+        }
+        _ => progress,
+    };
+    let progress = match (role, judges_changed) {
+        (Some(role), true) => {
+            change_judges(http, before.guild, role, &before.judges, &change.judges)
+                .await
+                .map_err(|error| progress.stopped(error))?;
+            progress.with(Done::JudgesChanged)
+        }
+        _ => progress,
+    };
     let kept = sync_announcements(
         http,
         before.announcements,
         &held,
         &iq::message_chunks(&text),
     )
-    .await?;
-    data.iq.set_announcements(before.id, &kept).await?;
-    if let Some(role) = role {
-        if roles_changed {
-            let seats = Seats {
-                guild: discord_guild(before.guild)?,
-                judge: role,
-                bot: serenity_context.cache.current_user().id,
-            };
-            let targets = target_roles(&change.roles)?;
-            for (channel, room) in [
-                (before.category, Room::Category),
-                (before.announcements, Room::Announcements),
-                (before.submissions, Room::Submissions),
-            ] {
-                bounded(discord_channel(channel)?.edit(
-                    http.as_ref(),
-                    serenity::EditChannel::new().permissions(overwrites(seats, &targets, room)),
-                ))
-                .await?;
-            }
-        }
-        if judges_changed {
-            change_judges(http, before.guild, role, &before.judges, &change.judges).await?;
-        }
-    }
+    .await
+    .map_err(|error| progress.stopped(error))?;
+    let progress = progress.with(Done::AnnouncementUpdated);
+    data.iq
+        .set_announcements(before.id, &kept)
+        .await
+        .map_err(|error| progress.stopped(error))?;
+    data.iq
+        .update_config(change)
+        .await
+        .map_err(|error| progress.stopped(error))?;
     let (added, altered, removed) = criteria_changes(&before.criteria, &change.criteria);
     let note = iq_text::edit_note(&added, &altered, &removed, before.rules != change.rules);
-    post(
-        http,
-        before.announcements,
-        &note,
-        serenity::CreateAllowedMentions::new(),
-    )
-    .await?;
+    notice(http, before.announcements, &note, scope).await;
     failure::record(
         "iq.edited",
         "an IQ Competition's settings were changed",
@@ -2155,7 +2279,15 @@ pub(super) async fn message_created(
             return;
         }
     };
-    check_message(data, &serenity_context.http, &competition, message, &scope).await;
+    check_message(
+        data,
+        &serenity_context.http,
+        &competition,
+        message,
+        CheckPath::Live,
+        &scope,
+    )
+    .await;
 }
 
 fn checkable(message: &serenity::Message) -> bool {
@@ -2179,10 +2311,13 @@ async fn check_message(
     http: &serenity::Http,
     competition: &Competition,
     message: &serenity::Message,
+    path: CheckPath,
     scope: &Scope,
 ) -> Option<bool> {
     let valid = judge_message(data, http, competition, message, scope).await;
-    seen(data, competition, message, scope).await;
+    if iq::moves_last_seen(path) {
+        seen(data, competition, message, scope).await;
+    }
     valid
 }
 
@@ -2337,9 +2472,10 @@ pub(super) async fn reacted(
     if !unicode_is(&reaction.emoji, competition.reaction.emoji()) {
         return;
     }
+    let judge_role = current_judge_role(data, &serenity_context.cache, guild, &scope).await;
     let holds = holds_judge_role(
-        data,
         &serenity_context.http,
+        judge_role,
         guild,
         judge,
         reaction.member.as_ref(),
@@ -2358,15 +2494,29 @@ pub(super) async fn reacted(
     award(data, reaction.message_id.get(), judge, &scope).await;
 }
 
-async fn holds_judge_role(
+async fn current_judge_role(
     data: &Data,
+    cache: &serenity::Cache,
+    guild: GuildId,
+    scope: &Scope,
+) -> Option<serenity::RoleId> {
+    let stored = stored_judge_role(data, guild, scope).await;
+    find_judge_role(cache, guild, stored).or_else(|| {
+        stored
+            .and_then(|role| NonZeroU64::new(role.get()))
+            .map(serenity::RoleId::from)
+    })
+}
+
+async fn holds_judge_role(
     http: &serenity::Http,
+    judge_role: Option<serenity::RoleId>,
     guild: GuildId,
     user: UserId,
     member: Option<&serenity::Member>,
     scope: &Scope,
 ) -> bool {
-    let Some(role) = stored_judge_role(data, guild, scope).await else {
+    let Some(role) = judge_role else {
         return false;
     };
     let holds = |roles: &[serenity::RoleId]| roles.iter().any(|held| held.get() == role.get());
@@ -2475,6 +2625,8 @@ async fn catch_up(
     scope: &Scope,
 ) -> Result<(), IqError> {
     let http: &serenity::Http = &serenity_context.http;
+    let judge_role =
+        current_judge_role(data, &serenity_context.cache, competition.guild, scope).await;
     let channel = discord_channel(competition.submissions)?;
     let first = competition
         .last_seen
@@ -2492,7 +2644,7 @@ async fn catch_up(
         .await?;
         page.sort_by_key(|message| message.id);
         for message in &page {
-            catch_up_one(data, http, competition, message).await;
+            catch_up_one(data, http, competition, judge_role, message).await;
         }
         match page.last() {
             Some(last) if page.len() == usize::from(PAGE_SIZE) => after = last.id.get(),
@@ -2512,6 +2664,7 @@ async fn catch_up_one(
     data: &Data,
     http: &serenity::Http,
     competition: &Competition,
+    judge_role: Option<serenity::RoleId>,
     message: &serenity::Message,
 ) {
     let scope = message_scope(competition.guild, message);
@@ -2519,11 +2672,11 @@ async fn catch_up_one(
         seen(data, competition, message, &scope).await;
         return;
     }
-    let valid = check_message(data, http, competition, message, &scope).await;
+    let valid = check_message(data, http, competition, message, CheckPath::CatchUp, &scope).await;
     if valid != Some(true) {
         return;
     }
-    if let Some(judge) = reacted_judge(data, http, competition, message, &scope).await {
+    if let Some(judge) = reacted_judge(http, competition, judge_role, message, &scope).await {
         award(data, message.id.get(), judge, &scope.clone().user(judge)).await;
     }
 }
@@ -2537,9 +2690,9 @@ fn already_marked(message: &serenity::Message) -> bool {
 }
 
 async fn reacted_judge(
-    data: &Data,
     http: &serenity::Http,
     competition: &Competition,
+    judge_role: Option<serenity::RoleId>,
     message: &serenity::Message,
     scope: &Scope,
 ) -> Option<UserId> {
@@ -2570,7 +2723,7 @@ async fn reacted_judge(
     };
     for user in users.iter().filter(|user| !user.bot) {
         let judge = UserId::new(user.id.get());
-        if holds_judge_role(data, http, competition.guild, judge, None, scope).await {
+        if holds_judge_role(http, judge_role, competition.guild, judge, None, scope).await {
             return Some(judge);
         }
     }
@@ -2755,5 +2908,11 @@ fn setup_code(refusal: &SetupRefusal) -> &'static str {
 fn failed_text(summary: &str, error: &IqError, scope: &Scope) -> String {
     let failure = Failure::from_error(error);
     failure::report("interaction.failed", summary, &failure, scope);
-    failure::failed(IQ_FAILED, &failure)
+    failure::failed(&iq_text::unfinished(&[]), &failure)
+}
+
+fn unfinished_text(summary: &str, unfinished: &Unfinished, scope: &Scope) -> String {
+    let failure = Failure::from_error(&unfinished.error);
+    failure::report("interaction.failed", summary, &failure, scope);
+    failure::failed(&iq_text::unfinished(&unfinished.done), &failure)
 }

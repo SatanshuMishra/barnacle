@@ -6,6 +6,7 @@ use crate::ids::ChannelId;
 use crate::ids::RoleId;
 use crate::iq::BoardRow;
 use crate::iq::Criterion;
+use crate::iq::Done;
 use crate::iq::JudgingReaction;
 use crate::iq::Problem;
 use crate::iq::Standing;
@@ -29,6 +30,35 @@ pub const COMPLETED: &str = "Posted. Run /iq cleanup when you are ready to remov
 pub const CANCELLED: &str = "Cancelled. Nothing changed.";
 pub const NO_POINTS_YET: &str = "No points yet.";
 
+pub fn unfinished(done: &[Done]) -> String {
+    match done {
+        [] => "The IQ Competition was not changed".to_owned(),
+        _ => {
+            let steps: Vec<&str> = done.iter().map(|step| done_line(*step)).collect();
+            format!(
+                "The IQ Competition was only partly changed: {}. Press it again to finish the rest",
+                join_names(&steps)
+            )
+        }
+    }
+}
+
+fn done_line(step: Done) -> &'static str {
+    match step {
+        Done::JudgesChanged => "the IQ-Judge role was handed out and taken away",
+        Done::ChannelsUpdated => "the channel permissions were updated",
+        Done::AnnouncementUpdated => "the announcement was updated",
+        Done::SettingsSaved => "the new settings were saved",
+        Done::Completed => "the competition was marked complete",
+        Done::ChannelsDeleted => "the channels were deleted",
+        Done::Archived => "the scores were archived",
+    }
+}
+
+fn plain_text(typed: &str) -> String {
+    escape(&typed.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
 pub fn submission_reply(problems: &[Problem]) -> String {
     let lead = match problems.len() {
         1 => "**Not counted.** One thing to fix:".to_owned(),
@@ -51,7 +81,10 @@ fn problem_line(problem: &Problem) -> String {
             "The message has no criterion name. Write just the name, for example {example}."
         ),
         Problem::UnknownName { typed, closest } => {
-            format!("No criterion is called \"{typed}\". The closest is {closest}.")
+            format!(
+                "No criterion is called \"{}\". The closest is {closest}.",
+                plain_text(typed)
+            )
         }
         Problem::ScreenshotCount(count) => {
             let noun = match count {

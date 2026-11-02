@@ -1,6 +1,6 @@
 use barnacle_bot::iq::Attachment;
-use barnacle_bot::iq::CheckPath;
 use barnacle_bot::iq::BoardRow;
+use barnacle_bot::iq::CheckPath;
 use barnacle_bot::iq::Checked;
 use barnacle_bot::iq::CleanupRefusal;
 use barnacle_bot::iq::CompleteRefusal;

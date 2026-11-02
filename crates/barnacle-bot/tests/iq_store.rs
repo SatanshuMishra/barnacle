@@ -11,6 +11,7 @@ use barnacle_bot::iq::Score;
 use barnacle_bot::iq::Status;
 use barnacle_bot::iq_store::AwardOutcome;
 use barnacle_bot::iq_store::Competition;
+use barnacle_bot::iq_store::ConfigChange;
 use barnacle_bot::iq_store::CreateOutcome;
 use barnacle_bot::iq_store::IqStore;
 use barnacle_bot::iq_store::NewCompetition;
@@ -278,14 +279,14 @@ async fn points_are_kept_as_they_were_when_posted() {
         criterion("Drunken Kraken", "Five kills in one battle.", 7),
     ];
     store
-        .update_config(
-            november.id,
-            &edited,
-            RULES,
-            &[RoleId::new(31)],
-            &[JUDGE, SECOND_JUDGE],
-            JudgingReaction::Trophy,
-        )
+        .update_config(&ConfigChange {
+            competition: november.id,
+            criteria: edited,
+            rules: RULES.to_owned(),
+            roles: vec![RoleId::new(31)],
+            judges: vec![JUDGE, SECOND_JUDGE],
+            reaction: JudgingReaction::Trophy,
+        })
         .await
         .unwrap();
     assert_eq!(
