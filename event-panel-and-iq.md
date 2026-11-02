@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: parked
-Updated: 2026-11-02T16:28:58.131Z
+Updated: 2026-11-02T16:30:05.276Z
 Next ids: c3 D7 R6 S2
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-Clean-up is running: #55 merged into main (b9e3780), and the owner's checkout is fast-forwarded to it. Run metrics and `pipeline clean` for both slugs come next.
+Done: #55 merged into main (b9e3780) and the owner's checkout is fast-forwarded to it. `pipeline clean` removed both runs' worktrees, branches and run folders and kept nothing; the IQ run's feature.json was pointed at feat/event-panel-and-iq first, since its stale mitosis/event-panel value made clean refuse. Records are archived under ~/.mitosis/barnacle/archive/{event-panel-and-iq,iq-competition}/.
 
 ## Next step
 
