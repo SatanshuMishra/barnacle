@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: parked
-Updated: 2026-11-02T16:27:17.561Z
+Updated: 2026-11-02T16:27:22.163Z
 Next ids: c3 D7 R6 S2
 
 ## Goal
@@ -18,9 +18,9 @@ Integration is done: the FEATURE pull request https://github.com/SatanshuMishra/
 
 ## Next step
 
-The owner starts Integration by saying #54 (the IQ pull request) merged into feat/event-panel-and-iq; then resume this thread, sync, run lighthouse on feat/event-panel-and-iq (or skip it per D2) and open the FEATURE pull request into main.
+The owner starts Clean-up by saying #55 (feat/event-panel-and-iq into main) merged; then resume this thread, sync main, run `pipeline clean` for slug event-panel-and-iq (and the iq-competition run home), remove the integration worktree, and close the thread.
 
-Needs: D1, D2, R3, R4.
+Needs: R5.
 
 ## Decisions in force
 
