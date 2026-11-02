@@ -32,8 +32,6 @@ use barnacle_guess::RoundOptions;
 use barnacle_guess::Snowflake;
 use barnacle_guess::UserId;
 use fakes::FakeBoard;
-use jiff::ToSpan;
-use jiff::civil::Date;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
@@ -49,34 +47,6 @@ pub const CB_EVENTS: &str = include_str!("../../../../migrations/0008_events.sql
 pub const CB_EVENTS_DOWN: &str = include_str!("../../../../migrations/0008_events.down.sql");
 const CLI_DIRECTIVE: &str = ".bail on\n";
 pub const BUILD: u32 = 13187581;
-pub const FIRST_ZONES: [&str; 25] = [
-    "Africa/Abidjan",
-    "Africa/Accra",
-    "Africa/Addis_Ababa",
-    "Africa/Algiers",
-    "Africa/Asmara",
-    "Africa/Asmera",
-    "Africa/Bamako",
-    "Africa/Bangui",
-    "Africa/Banjul",
-    "Africa/Bissau",
-    "Africa/Blantyre",
-    "Africa/Brazzaville",
-    "Africa/Bujumbura",
-    "Africa/Cairo",
-    "Africa/Casablanca",
-    "Africa/Ceuta",
-    "Africa/Conakry",
-    "Africa/Dakar",
-    "Africa/Dar_es_Salaam",
-    "Africa/Djibouti",
-    "Africa/Douala",
-    "Africa/El_Aaiun",
-    "Africa/Freetown",
-    "Africa/Gaborone",
-    "Africa/Harare",
-];
-
 pub type StoredPost = (i64, String, i64, String, i64);
 pub type StoredAnswer = (i64, String, i64, i64, i64, i64, i64);
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,6 +240,7 @@ pub fn every_refusal() -> Vec<Refusal> {
         Refusal::RepostSuperseded,
         Refusal::SeriesRoundsOutOfRange,
         Refusal::TemplateUnknown,
+        Refusal::FirstDayPast,
         Refusal::MissingOptions(vec!["name", "first_day"]),
         Refusal::StartFormat,
         Refusal::HoursOutOfRange,
@@ -313,6 +284,7 @@ pub fn every_refusal() -> Vec<Refusal> {
             | Refusal::RepostSuperseded
             | Refusal::SeriesRoundsOutOfRange
             | Refusal::TemplateUnknown
+            | Refusal::FirstDayPast
             | Refusal::MissingOptions(_)
             | Refusal::StartFormat
             | Refusal::HoursOutOfRange
@@ -326,16 +298,6 @@ pub fn every_refusal() -> Vec<Refusal> {
         }
     }
     refusals
-}
-
-pub fn date_run(first: &str) -> Vec<(String, String)> {
-    first
-        .parse::<Date>()
-        .unwrap()
-        .series(1.day())
-        .take(25)
-        .map(|date| (date.strftime("%Y-%m-%d (%A)").to_string(), date.to_string()))
-        .collect()
 }
 
 pub async fn posts_and_answers(

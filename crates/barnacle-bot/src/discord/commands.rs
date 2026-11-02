@@ -115,14 +115,14 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
             subcommands: vec![
                 poise::Command {
                     description: Some(
-                        "Set up an event in this channel, then settle its weekdays and pings"
+                        "Set up an event in this channel, then pick its days, time and pings"
                             .into(),
                     ),
                     ..event_create()
                 },
                 poise::Command {
                     description: Some(
-                        "Change an event, then settle its weekdays and pings before saving".into(),
+                        "Change an event, then check its days, time and pings before saving".into(),
                     ),
                     ..event_edit()
                 },
@@ -880,39 +880,6 @@ async fn chosen(ctx: Context<'_>, guild: GuildId, text: &str) -> Result<Option<E
     Ok(wiring::chosen_event(&events, text, super::now_unix()).cloned())
 }
 
-async fn suggest_dates(_ctx: Context<'_>, partial: &str) -> serenity::CreateAutocompleteResponse {
-    let choices = schedule::today(super::now_unix())
-        .map(|today| event_draft::date_suggestions(partial, today))
-        .unwrap_or_default();
-    serenity::CreateAutocompleteResponse::new().set_choices(
-        choices
-            .into_iter()
-            .map(|(label, value)| serenity::AutocompleteChoice::new(label, value))
-            .collect(),
-    )
-}
-
-async fn suggest_zones(ctx: Context<'_>, partial: &str) -> serenity::CreateAutocompleteResponse {
-    let zones = match ctx.guild_id() {
-        Some(guild) => event_draft::zone_choices(
-            partial,
-            ctx.data()
-                .signups
-                .store()
-                .events_in(GuildId::new(guild.get()))
-                .await,
-            super::now_unix(),
-        ),
-        None => Vec::new(),
-    };
-    serenity::CreateAutocompleteResponse::new().set_choices(
-        zones
-            .into_iter()
-            .map(|zone| serenity::AutocompleteChoice::new(zone.clone(), zone))
-            .collect(),
-    )
-}
-
 async fn open_panel(ctx: Context<'_>, draft: Draft) -> Result<(), Error> {
     let Some(now_ms) = super::now_ms() else {
         return fail(ctx, Failure::internal(CLOCK_BEFORE_1970)).await;
@@ -942,32 +909,14 @@ pub fn cached_event_channel(
 }
 
 #[poise::command(slash_command, rename = "create")]
-#[allow(clippy::too_many_arguments)]
 async fn event_create(
     ctx: Context<'_>,
     #[description = "The event's name, for example Ranked Sprint"]
     #[max_length = 100]
     name: String,
-    #[description = "The first day, written YYYY-MM-DD"]
-    #[autocomplete = "suggest_dates"]
-    first_day: String,
-    #[description = "The last day, written YYYY-MM-DD"]
-    #[autocomplete = "suggest_dates"]
-    last_day: String,
-    #[description = "Fill in the start, hours and time zone from a template"]
+    #[description = "Fill in the weekdays, start, length and time zone from a template"]
     #[choices("Clan Battles")]
     template: Option<&'static str>,
-    #[description = "When each session starts, on a 24-hour clock, for example 17:00"]
-    #[max_length = 8]
-    start: Option<String>,
-    #[description = "How many hours each session runs, from 1 to 24"]
-    #[min = 1]
-    #[max = 24]
-    hours: Option<i64>,
-    #[description = "The time zone of the start time, for example America/Denver"]
-    #[max_length = 64]
-    #[autocomplete = "suggest_zones"]
-    time_zone: Option<String>,
 ) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -980,27 +929,40 @@ async fn event_create(
     }
     let options = CreateOptions {
         name,
-        first_day,
-        last_day,
         template: template.map(str::to_owned),
-        start,
-        hours,
-        time_zone,
     };
+    let now_unix = super::now_unix();
     match Draft::create(
         &options,
         place.guild,
         place.channel,
         UserId::new(ctx.author().id.get()),
-        super::now_unix(),
+        now_unix,
     ) {
-        Ok(draft) => open_panel(ctx, draft).await,
+        Ok(draft) => {
+            let zones = recent_zones(ctx, place.guild, now_unix).await;
+            open_panel(ctx, draft.with_server_zones(zones)).await
+        }
         Err(refusal) => refuse(ctx, refusal).await,
     }
 }
 
+async fn recent_zones(ctx: Context<'_>, guild: GuildId, now_unix: i64) -> Vec<String> {
+    match ctx.data().signups.store().events_in(guild).await {
+        Ok(events) => event_draft::server_zones(&events, now_unix),
+        Err(error) => {
+            failure::report(
+                "command.failed",
+                "the server's events could not be read, so the time zone menu lists only the common zones",
+                &Failure::from_error(&error),
+                &Scope::of_command(ctx),
+            );
+            Vec::new()
+        }
+    }
+}
+
 #[poise::command(slash_command, rename = "edit")]
-#[allow(clippy::too_many_arguments)]
 async fn event_edit(
     ctx: Context<'_>,
     #[description = "The event, picked from the list"]
@@ -1009,23 +971,6 @@ async fn event_edit(
     #[description = "A new name"]
     #[max_length = 100]
     name: Option<String>,
-    #[description = "A new first day, written YYYY-MM-DD"]
-    #[autocomplete = "suggest_dates"]
-    first_day: Option<String>,
-    #[description = "A new last day, written YYYY-MM-DD"]
-    #[autocomplete = "suggest_dates"]
-    last_day: Option<String>,
-    #[description = "A new start time, on a 24-hour clock, for example 17:00"]
-    #[max_length = 8]
-    start: Option<String>,
-    #[description = "How many hours each session runs, from 1 to 24"]
-    #[min = 1]
-    #[max = 24]
-    hours: Option<i64>,
-    #[description = "A new time zone for the start time, for example America/Denver"]
-    #[max_length = 64]
-    #[autocomplete = "suggest_zones"]
-    time_zone: Option<String>,
     #[description = "A text channel to move the sign-up posts to"]
     #[channel_types("Text")]
     channel: Option<serenity::ChannelId>,
@@ -1033,7 +978,9 @@ async fn event_edit(
     let Some(place) = place(ctx) else {
         return Ok(());
     };
-    let Some(event) = chosen(ctx, place.guild, &event).await? else {
+    let now_unix = super::now_unix();
+    let events = ctx.data().signups.store().events_in(place.guild).await?;
+    let Some(event) = wiring::chosen_event(&events, &event, now_unix).cloned() else {
         return refuse(ctx, text::Refusal::EventNotFound).await;
     };
     if let Some(refusal) = missing_in_event_channel(ctx, &event) {
@@ -1059,22 +1006,20 @@ async fn event_edit(
             return refuse(ctx, refusal).await;
         }
     }
-    let options = EditOptions {
-        name,
-        first_day,
-        last_day,
-        start,
-        hours,
-        time_zone,
-        channel,
-    };
+    let options = EditOptions { name, channel };
     match Draft::edit(
         &event,
         &options,
         UserId::new(ctx.author().id.get()),
-        super::now_unix(),
+        now_unix,
     ) {
-        Ok(draft) => open_panel(ctx, draft).await,
+        Ok(draft) => {
+            open_panel(
+                ctx,
+                draft.with_server_zones(event_draft::server_zones(&events, now_unix)),
+            )
+            .await
+        }
         Err(refusal) => refuse(ctx, refusal).await,
     }
 }
