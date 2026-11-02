@@ -1,5 +1,7 @@
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 use std::sync::PoisonError;
 
 use barnacle_guess::UserId;
@@ -154,26 +156,108 @@ pub enum Done {
     ChannelsDeleted,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Judged {
+    Valid,
+    Invalid,
+    Ignored,
+    Failed,
+}
+
+#[derive(Debug, Default)]
+pub struct Unsettled {
+    held: Mutex<BTreeSet<(u64, u64)>>,
+}
+
+#[must_use]
+pub struct Hold<'a> {
+    unsettled: &'a Unsettled,
+    key: (u64, u64),
+    judged: Option<Judged>,
+}
+
+impl Unsettled {
+    pub fn hold(&self, guild: GuildId, message: u64) -> Hold<'_> {
+        let key = (guild.get(), message);
+        self.held().insert(key);
+        Hold {
+            unsettled: self,
+            key,
+            judged: None,
+        }
+    }
+
+    pub fn mark_ceiling(&self, guild: GuildId, message: u64) -> Option<u64> {
+        let lowest = self
+            .held()
+            .range((guild.get(), 0)..=(guild.get(), u64::MAX))
+            .next()
+            .map(|(_, held)| *held);
+        match lowest {
+            Some(held) if held <= message => held.checked_sub(1).filter(|ceiling| *ceiling > 0),
+            _ => Some(message),
+        }
+    }
+
+    fn held(&self) -> MutexGuard<'_, BTreeSet<(u64, u64)>> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Hold<'_> {
+    pub fn settle(mut self, judged: Judged) {
+        self.judged = Some(judged);
+    }
+}
+
+impl Drop for Hold<'_> {
+    fn drop(&mut self) {
+        let keep = std::thread::panicking() || self.judged == Some(Judged::Failed);
+        if !keep {
+            self.unsettled.held().remove(&self.key);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Connection(u64);
+
 #[derive(Debug, Default)]
 pub struct CaughtUp {
-    guilds: Mutex<HashSet<u64>>,
+    servers: Mutex<CaughtUpServers>,
+}
+
+#[derive(Debug, Default)]
+struct CaughtUpServers {
+    connection: u64,
+    guilds: HashSet<u64>,
 }
 
 impl CaughtUp {
-    pub fn finish(&self, guild: GuildId) {
-        self.held().insert(guild.get());
+    pub fn connect(&self) -> Connection {
+        let mut servers = self.servers();
+        servers.connection += 1;
+        servers.guilds.clear();
+        Connection(servers.connection)
     }
 
-    pub fn forget_all(&self) {
-        self.held().clear();
+    pub fn current(&self) -> Connection {
+        Connection(self.servers().connection)
+    }
+
+    pub fn finish(&self, guild: GuildId, connection: Connection) {
+        let mut servers = self.servers();
+        if servers.connection == connection.0 {
+            servers.guilds.insert(guild.get());
+        }
     }
 
     pub fn holds(&self, guild: GuildId) -> bool {
-        self.held().contains(&guild.get())
+        self.servers().guilds.contains(&guild.get())
     }
 
-    fn held(&self) -> std::sync::MutexGuard<'_, HashSet<u64>> {
-        self.guilds.lock().unwrap_or_else(PoisonError::into_inner)
+    fn servers(&self) -> MutexGuard<'_, CaughtUpServers> {
+        self.servers.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 

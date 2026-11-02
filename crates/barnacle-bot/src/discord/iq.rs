@@ -31,6 +31,7 @@ use crate::iq::CleanupRefusal;
 use crate::iq::CompleteRefusal;
 use crate::iq::Criterion;
 use crate::iq::Done;
+use crate::iq::Judged;
 use crate::iq::Standing;
 use crate::iq::StartChoice;
 use crate::iq::Status;
@@ -1536,7 +1537,8 @@ async fn resume(
         StartChoice::Setup => return Ok(iq_text::NO_COMPETITION_RUNNING.to_owned()),
     }
     data.iq.resume(competition.id, super::now_unix()).await?;
-    data.iq_caught_up.finish(competition.guild);
+    data.iq_caught_up
+        .finish(competition.guild, data.iq_caught_up.current());
     failure::record("iq.resumed", "an IQ Competition resumed", scope);
     notice(
         http,
@@ -1858,7 +1860,8 @@ async fn start_competition(
         .await;
     let competition = match saved {
         Ok(CreateOutcome::Created(competition)) => {
-            data.iq_caught_up.finish(competition.guild);
+            data.iq_caught_up
+                .finish(competition.guild, data.iq_caught_up.current());
             competition
         }
         Ok(CreateOutcome::AlreadyLive) => {
@@ -2273,6 +2276,7 @@ pub(super) async fn message_created(
     if !checkable(message) {
         return;
     }
+    let hold = data.iq_unsettled.hold(guild, message.id.get());
     let scope = message_scope(guild, message);
     let channel = ChannelId::new(message.channel_id.get());
     let competition = match data.iq.by_submissions_channel(channel).await {
@@ -2285,6 +2289,7 @@ pub(super) async fn message_created(
                 &Failure::from_error(&error),
                 &scope,
             );
+            hold.settle(Judged::Failed);
             return;
         }
     };
@@ -2294,6 +2299,7 @@ pub(super) async fn message_created(
         &competition,
         message,
         CheckPath::Live,
+        hold,
         &scope,
     )
     .await;
@@ -2321,17 +2327,25 @@ async fn check_message(
     competition: &Competition,
     message: &serenity::Message,
     path: CheckPath,
+    hold: iq::Hold<'_>,
     scope: &Scope,
-) -> Option<bool> {
-    let valid = judge_message(data, http, competition, message, scope).await;
+) -> Judged {
+    let judged = judge_message(data, http, competition, message, scope).await;
+    hold.settle(judged);
     if iq::moves_last_seen(path, data.iq_caught_up.holds(competition.guild)) {
         seen(data, competition, message, scope).await;
     }
-    valid
+    judged
 }
 
 async fn seen(data: &Data, competition: &Competition, message: &serenity::Message, scope: &Scope) {
-    if let Err(error) = data.iq.mark_seen(competition.id, message.id.get()).await {
+    let Some(ceiling) = data
+        .iq_unsettled
+        .mark_ceiling(competition.guild, message.id.get())
+    else {
+        return;
+    };
+    if let Err(error) = data.iq.mark_seen(competition.id, ceiling).await {
         failure::report(
             "iq.submission.unseen",
             "the last message checked could not be saved",
@@ -2347,7 +2361,7 @@ async fn judge_message(
     competition: &Competition,
     message: &serenity::Message,
     scope: &Scope,
-) -> Option<bool> {
+) -> Judged {
     let sent_ms = Snowflake::new(message.id.get()).unix_millis();
     let sent_unix = i64::try_from(sent_ms / MILLIS_PER_SECOND).unwrap_or(i64::MAX);
     let end = match end_unix(competition) {
@@ -2359,11 +2373,11 @@ async fn judge_message(
                 &Failure::from_error(&error),
                 scope,
             );
-            return None;
+            return Judged::Failed;
         }
     };
     if !iq::should_check(competition.status, end, sent_unix) {
-        return None;
+        return Judged::Ignored;
     }
     let attachments: Vec<iq::Attachment> = message
         .attachments
@@ -2392,11 +2406,11 @@ async fn judge_message(
                     &Failure::from_error(&error),
                     scope,
                 );
-                return None;
+                return Judged::Failed;
             }
             mark(http, message, iq::VALID_MARK, scope).await;
             failure::record("iq.submission.valid", "a submission was valid", scope);
-            Some(true)
+            Judged::Valid
         }
         Checked::Invalid(problems) => {
             mark(http, message, iq::INVALID_MARK, scope).await;
@@ -2413,7 +2427,7 @@ async fn judge_message(
                 );
             }
             failure::record("iq.submission.invalid", "a submission was invalid", scope);
-            Some(false)
+            Judged::Invalid
         }
     }
 }
@@ -2597,7 +2611,7 @@ pub(super) async fn caught_up(
     serenity_context: &serenity::Context,
     ready: &serenity::Ready,
 ) {
-    data.iq_caught_up.forget_all();
+    let connection = data.iq_caught_up.connect();
     for unavailable in &ready.guilds {
         let guild = GuildId::new(unavailable.id.get());
         let scope = Scope::default().guild(guild);
@@ -2605,7 +2619,7 @@ pub(super) async fn caught_up(
             Ok(Some(competition)) if competition.status == Status::Running => {
                 match catch_up(data, serenity_context, &competition, &scope).await {
                     Ok(true) => {
-                        data.iq_caught_up.finish(guild);
+                        data.iq_caught_up.finish(guild, connection);
                         failure::record(
                             "iq.catch_up.completed",
                             "posts made while Barnacle was offline were checked",
@@ -2621,7 +2635,7 @@ pub(super) async fn caught_up(
                     ),
                 }
             }
-            Ok(_) => data.iq_caught_up.finish(guild),
+            Ok(_) => data.iq_caught_up.finish(guild, connection),
             Err(error) => failure::report(
                 "iq.catch_up.failed",
                 "a server's IQ Competition could not be looked up after connecting",
@@ -2686,8 +2700,18 @@ async fn catch_up_one(
         seen(data, competition, message, &scope).await;
         return;
     }
-    let valid = check_message(data, http, competition, message, CheckPath::CatchUp, &scope).await;
-    if valid != Some(true) {
+    let hold = data.iq_unsettled.hold(competition.guild, message.id.get());
+    let judged = check_message(
+        data,
+        http,
+        competition,
+        message,
+        CheckPath::CatchUp,
+        hold,
+        &scope,
+    )
+    .await;
+    if judged != Judged::Valid {
         return;
     }
     if let Some(judge) = reacted_judge(http, competition, judge_role, message, &scope).await {
