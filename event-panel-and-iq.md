@@ -1,7 +1,7 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T01:30:16.250Z
-Next ids: c3 D5 R3 S1
+Updated: 2026-11-02T01:42:00.854Z
+Next ids: c3 D5 R4 S1
 
 ## Goal
 
@@ -18,7 +18,7 @@ Two drives run. Slug event-panel-and-iq is reviewing MSP event-panel on mitosis/
 
 ## Next step
 
-Watch both drives (slugs event-panel-and-iq and iq-competition); when event-panel's review adds fix commits, merge mitosis/event-panel into the IQ branch before the IQ review; at awaiting-merge for both, report the stacked pull requests.
+Watch both drives. When the iq-competition drive stops on pipeline gate-findings (mitosis 0.10.1 writes gate property reason null), set each null reason to "" in ~/.mitosis/runs/barnacle/iq-competition/state.json, set its drive/state.json state back to review with reason null, and run pipeline drive start --slug iq-competition. Merge event-panel fix commits into the IQ branch before the IQ review.
 
 Needs: D1, D2, R2.
 
@@ -32,6 +32,7 @@ Needs: D1, D2, R2.
 ## Open risks
 
 - R2 mitosis fuses Steps sharing a file into one MSP, so the IQ Competition must be a second run stacked on the event-panel MSP branch; a fix round on event-panel after the IQ run starts would need merging into the IQ branch. Bears on c2.
+- R3 pipeline 0.12.0 bugs worked around by hand: gate-findings refuses mitosis 0.10.1's null gate reasons, and pipeline suite cannot fingerprint Rust compile errors, so a failure the base shares reads as new; event-panel's U1 was dropped on per-target evidence in review/round-1/event-panel.suite-base-comparison.txt. Both belong in the final report as plugin bugs.
 
 ## Settled, do not reopen
 
