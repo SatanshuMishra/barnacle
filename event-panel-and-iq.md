@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T10:34:12.535Z
+Updated: 2026-11-02T10:41:16.672Z
 Next ids: c3 D6 R5 S1
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-The owner merged #53 into feat/event-panel-and-iq (eef145a), which holds the C1 fix that mitosis/iq-competition (6b96b2d, cut at aa274cf) lacks. MSP iq-competition is built and committed but held back gate-failed: 21 of 55 properties judged weak (R4). IQ review round 1 runs by hand (the drive is stopped) and is recorded with verdict diagnose: blockers C1 (catch-up mark race) and C2 (partial change reported unchanged) confirmed; advisories C3-C7 and S1-S3 confirmed; S4 and G1-G21 rejected (the sampled mutants never reach the lines those tests run). The two diagnosis agents run in the background, writing review/round-1/iq-competition.<kind>.diagnosis.*. Of the 24 sampled mutants the full suite kills all but iq.rs:14 ADJUSTMENT_LIMIT ±1, iq_store.rs:22 BUSY_TIMEOUT ±1 and iq_store.rs:25 SNOWFLAKE_TIME_LIMIT +1.
+The owner merged #53 into feat/event-panel-and-iq (eef145a), which holds the C1 fix that mitosis/iq-competition (6b96b2d, cut at aa274cf) lacks. MSP iq-competition is built and committed but held back gate-failed: 21 of 55 properties judged weak (R4). IQ review round 1 runs by hand (the drive is stopped) and is recorded with verdict diagnose: blockers C1 (catch-up mark race) and C2 (partial change reported unchanged) confirmed; advisories C3-C7 and S1-S3 confirmed; S4 and G1-G21 rejected (the sampled mutants never reach the lines those tests run). Both diagnoses are recorded fixable (review/round-1/iq-competition.<kind>.diagnosis.*): only catch-up and resume move the mark (CheckPath), and multi-step actions return progress (Done) with retry-safe ordering. The receipt tests are committed on mitosis/iq-competition (7079492); the fixes are in progress in its worktree. Of the 24 sampled mutants the full suite kills all but iq.rs:14 ADJUSTMENT_LIMIT ±1, iq_store.rs:22 BUSY_TIMEOUT ±1 and iq_store.rs:25 SNOWFLAKE_TIME_LIMIT +1.
 
 ## Next step
 
