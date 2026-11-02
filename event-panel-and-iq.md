@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T10:47:43.675Z
+Updated: 2026-11-02T10:48:54.411Z
 Next ids: c3 D6 R5 S1
 
 ## Goal
@@ -18,7 +18,7 @@ mitosis/iq-competition is at 29f9d49, which merges feat/event-panel-and-iq (eef1
 
 ## Next step
 
-Review 6b96b2d..29f9d49 as round 2 (code-reviewer and security-reviewer on the fix diff, with the round-1 diagnoses); drive it to green; write --gate-classes covered-elsewhere for the 21 weak properties, naming BUSY_TIMEOUT as unobservable, for the ship run; open the pull request against feat/event-panel-and-iq.
+Round 2 (6b96b2d..29f9d49) has its diff, standards (no findings) and brief values under review/round-2; its suite, code-reviewer and security-reviewer run in the background. When they reply, run candidates, validator, record and verdict, and drive to green. Then, since a proven head reuses the weak gate unchanged, regate the final head by hand with `run.zsh --resume --gate-classes ~/.mitosis/barnacle/iq-competition/gate-classes.json` (the 21 weak properties classed covered-elsewhere, BUSY_TIMEOUT named), ship it, and open the pull request against feat/event-panel-and-iq.
 
 Needs: D1, D4, R3, R4.
 
