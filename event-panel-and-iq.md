@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T01:54:42.355Z
+Updated: 2026-11-02T02:01:52.681Z
 Next ids: c3 D5 R4 S1
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-The event-panel-and-iq drive is stopped at ship (no ship boundary recorded). Corrective round 2 is recorded with verdict diagnose: C1 (MEDIUM, kind "window day zone mismatch": with_typed_dates measures the window from today in the server zone, ready() from UTC) is confirmed; C2 and C3 are rejected as not introduced. A diagnosis agent is running on C1. An uncommitted receipt test, typed_dates_measure_the_window_from_the_same_day_as_create in tests/event_draft.rs of trees/event-panel, fails at aa274cf. The planned fix makes within_window_of take now_unix and measure from UTC through within_window. MSP event-panel is at aa274cf on mitosis/event-panel. Slug iq-competition is building MSP iq-competition stacked on mitosis/event-panel at aa274cf; lanes iq-rules, iq-text and iq-store are done, iq-setup and iq-discord remain. The check-author's API readings (back() returns the draft, every IqStore call returns Result, SetupDraft accessors) bind the IQ steps.
+The event-panel-and-iq drive is stopped at ship (no ship boundary recorded). MSP event-panel is at 8894afe on mitosis/event-panel (local, unpushed): round 2's confirmed C1 (typed-dates window zone mismatch) is fixed there with receipt 6d6dba9, fix-check clean. Review round 3 (code and security reviewers) is running on the fix diff in review/round-3; its suite U1 is dropped as the base-shared IQ compile failure. Slug iq-competition is building MSP iq-competition stacked on mitosis/event-panel at aa274cf; lanes iq-rules, iq-text and iq-store are done, iq-setup and iq-discord remain. The check-author's API readings (back() returns the draft, every IqStore call returns Result, SetupDraft accessors) bind the IQ steps.
 
 ## Next step
 
