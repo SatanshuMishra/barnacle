@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T05:30:53.764Z
+Updated: 2026-11-02T10:16:37.429Z
 Next ids: c3 D6 R4 S1
 
 ## Goal
@@ -14,13 +14,13 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-The owner merged #53 into feat/event-panel-and-iq (eef145a), which now holds the C1 fix that mitosis/iq-competition, cut at aa274cf, lacks. The iq-competition drive is stopped (its build passed the drive's 14400-second run limit mid-gate). `~/.mitosis/barnacle/iq-competition/run.zsh --resume` runs by hand, outside the drive, regating MSP iq-competition's 55 acceptance tests from the start (mitosis keeps no partial gate), output in resume-gate.out and resume-gate.err there; all five lanes are built.
+The owner merged #53 into feat/event-panel-and-iq (eef145a), which holds the C1 fix that mitosis/iq-competition (6b96b2d, cut at aa274cf) lacks. MSP iq-competition is built and committed but held back gate-failed: 21 of 55 properties judged weak (R4). IQ review round 1 runs by hand (the drive is stopped): diff, obligations, standards (S1 LOW), gate findings (G1-G21 LOW) and the three reviewer briefs are written under review/round-1; the suite against the base checkout bases/iq-competition and a full-suite run over the 24 sampled mutants run in the background.
 
 ## Next step
 
-When the hand resume ends, set the IQ state.json's null gate reasons to "", then run IQ review round 1 (by drive set to review, or by hand as event-panel's rounds 2 and 3 ran); after round 1, merge origin/feat/event-panel-and-iq into mitosis/iq-competition and review that as round 2; drive it to green and open its pull request against feat/event-panel-and-iq, because its stacked base mitosis/event-panel is already merged.
+When the round-1 suite ends, dispatch code-reviewer, conformance-auditor and security-reviewer on review/round-1, then candidates, validator, record and verdict; judge G1-G21 with the mutant suite evidence and, where every survivor is killed elsewhere, write --gate-classes covered-elsewhere for the ship run. Then merge origin/feat/event-panel-and-iq into mitosis/iq-competition, review it as round 2, drive to green and open the pull request against feat/event-panel-and-iq.
 
-Needs: D1, D4, R2, R3.
+Needs: D1, D4, R2, R3, R4.
 
 ## Decisions in force
 
