@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T13:14:07.572Z
+Updated: 2026-11-02T13:14:57.389Z
 Next ids: c3 D7 R5 S1
 
 ## Goal
@@ -10,11 +10,11 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 ## Done when
 
 - [x] c1 The /event pull request is open, reviewed green and assigned to the owner evidence: https://github.com/SatanshuMishra/barnacle/pull/53 (mitosis/event-panel at 8894afe into feat/event-panel-and-iq; round 3 verdict green; 25/25 acceptance checks pass at 8894afe; assigned to SatanshuMishra; review comment posted)
-- [ ] c2 The IQ Competition pull request is open, reviewed green and assigned to the owner
+- [x] c2 The IQ Competition pull request is open, reviewed green and assigned to the owner evidence: https://github.com/SatanshuMishra/barnacle/pull/54 (mitosis/iq-competition at 0036a69 into feat/event-panel-and-iq; round 4 verdict green with advisories fixed; regate passes 55/55 at 0036a69; release-check passes; assigned to SatanshuMishra; review comment posted)
 
 ## Where things stand
 
-MSP iq-competition builds on 29f9d49, the merge of feat/event-panel-and-iq (eef145a, holding #53), and is held back gate-failed: 21 of 55 properties judged weak (R4). IQ review runs by hand, because the drive is stopped. Review is green: round 4 recorded green, and its advisories C1 and S1 (a failed hold keyed by server pinned the mark) are fixed at 0036a69 (pushed) by keying holds by channel. At 0036a69: 841 tests pass, clippy and fmt clean, fix-check passes against 0a56ad2, every selecting check prints nothing. The hand regate of 0036a69 (`run.zsh --resume --gate-classes`) is running, writing the run home's review/regate.out. Rounds 1-3 are in the run home's rounds.md.
+Both pull requests are open and assigned: #53 merged into feat/event-panel-and-iq, and #54 (IQ) awaits the owner's review and merge. Integration waits on the owner saying #54 merged.
 
 ## Next step
 
