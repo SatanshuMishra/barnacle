@@ -509,7 +509,7 @@ fn no_panel_text_says_night_or_season() {
         .iter()
         .map(Refusal::message)
         .collect();
-    assert_eq!(refusals.len(), 44);
+    assert_eq!(refusals.len(), 41);
     for text in texts.iter().chain(refusals.iter()) {
         assert!(!says_night_or_season(text), "{text}");
     }
@@ -791,31 +791,6 @@ fn typed_dates_measure_the_window_from_the_same_day_as_create() {
         .with_typed_time("17:00", "21:00")
         .unwrap();
     assert!(draft.ready(AFTERNOON_IN_EDMONTON, &[]).is_ok());
-}
-
-#[test]
-fn a_picked_day_outside_the_menu_comes_first_and_the_menu_stays_at_25() {
-    let today = day("2026-11-01");
-    let options: Vec<serde_json::Value> =
-        event_draft::day_options(today, today, Some(day("2026-10-28")))
-            .iter()
-            .map(|option| serde_json::to_value(option).unwrap())
-            .collect();
-    assert_eq!(options.len(), 25);
-    assert_eq!(options[0]["value"], "2026-10-28");
-    assert_eq!(options[0]["label"], "Wed 28 Oct");
-    assert_eq!(options[0]["description"], "4 days ago");
-    assert_eq!(options[0]["default"], true);
-    assert_eq!(options[1]["value"], "2026-11-01");
-    assert_eq!(options[24]["value"], "2026-11-24");
-    let inside = option_values(&event_draft::day_options(
-        today,
-        today,
-        Some(day("2026-11-03")),
-    ));
-    assert_eq!(inside.len(), 25);
-    assert_eq!(inside[0], "2026-11-01");
-    assert_eq!(inside[24], "2026-11-25");
 }
 
 #[test]

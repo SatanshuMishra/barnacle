@@ -1046,7 +1046,7 @@ pub(super) async fn recent_zones(ctx: Context<'_>, guild: GuildId, now_unix: i64
         Err(error) => {
             failure::report(
                 "command.failed",
-                "the server's events could not be read, so the time zone menu lists only the common zones",
+                "the server's events could not be read, so typed dates are counted from today in UTC",
                 &Failure::from_error(&error),
                 &Scope::of_command(ctx),
             );

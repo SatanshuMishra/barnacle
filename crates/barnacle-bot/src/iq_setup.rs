@@ -8,6 +8,7 @@ use poise::serenity_prelude as serenity;
 use crate::event_draft::FIRST_DAY_INPUT;
 use crate::event_draft::LAST_DAY_INPUT;
 use crate::event_draft::PanelView;
+use crate::event_draft::day_input;
 use crate::event_draft::read_day;
 use crate::event_draft::within_window;
 use crate::ids::ChannelId;
@@ -46,7 +47,6 @@ pub const RULES_LIMIT: usize = 4000;
 pub const POINTS_LIMIT: u32 = 1000;
 
 const CONTENT_LIMIT: usize = 2000;
-const DAY_INPUT_MAX: u16 = 32;
 const POINTS_INPUT_MAX: usize = 4;
 const MENU_MAX: u8 = 25;
 const QUOTE_MARK: &str = "> ";
@@ -1024,14 +1024,6 @@ pub fn dates_modal(panel: u64) -> serenity::CreateModal {
             iq_text::LAST_DAY_EXAMPLE,
         ),
     ])
-}
-
-fn day_input(label: &str, custom_id: &str, example: &str) -> serenity::CreateActionRow {
-    serenity::CreateActionRow::InputText(
-        serenity::CreateInputText::new(serenity::InputTextStyle::Short, label, custom_id)
-            .placeholder(example)
-            .max_length(DAY_INPUT_MAX),
-    )
 }
 
 fn text_input(

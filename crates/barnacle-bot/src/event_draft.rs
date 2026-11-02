@@ -55,7 +55,6 @@ pub const END_INPUT: &str = "end";
 const MILLIS_PER_SECOND: u64 = 1_000;
 const CLOCK_OUT_OF_RANGE: &str = "the clock reads a time outside the supported calendar";
 const ROLE_MENU_MAX: u8 = 5;
-const MENU_OPTIONS: usize = 25;
 const DAY_INPUT_MAX: u16 = 32;
 const TIME_INPUT_MAX: u16 = 16;
 const MINUTES_PER_HOUR: i64 = 60;
@@ -841,14 +840,12 @@ impl Draft {
         let days = serenity::CreateSelectMenu::new(
             wiring::panel_id(panel, PanelPart::Days),
             serenity::CreateSelectMenuKind::String {
-                options: offered
-                    .into_iter()
-                    .map(|day| {
-                        serenity::CreateSelectMenuOption::new(
-                            text::weekday_name(day),
-                            weekday_value(day),
-                        )
-                        .default_selection(picked.is_some_and(|picked| picked.contains(day)))
+                options: WEEKDAY_VALUES
+                    .iter()
+                    .filter(|(day, _)| offered.contains(day))
+                    .map(|&(day, value)| {
+                        serenity::CreateSelectMenuOption::new(text::weekday_name(day), value)
+                            .default_selection(picked.is_some_and(|picked| picked.contains(day)))
                     })
                     .collect(),
             },
@@ -915,58 +912,30 @@ impl Draft {
     }
 }
 
-pub fn day_options(
-    start: Date,
-    today: Date,
-    picked: Option<Date>,
-) -> Vec<serenity::CreateSelectMenuOption> {
-    let generated: Vec<Date> = start.series(1.day()).take(MENU_OPTIONS).collect();
-    let days: Vec<Date> = match picked {
-        Some(day) if !generated.contains(&day) => std::iter::once(day)
-            .chain(generated.into_iter().take(MENU_OPTIONS - 1))
-            .collect(),
-        _ => generated,
-    };
-    days.into_iter()
-        .map(|day| {
-            serenity::CreateSelectMenuOption::new(text::day_label(day), day.to_string())
-                .description(text::day_offset(days_between(today, day)))
-                .default_selection(picked == Some(day))
-        })
-        .collect()
-}
-
 pub fn dates_modal(panel: u64) -> serenity::CreateModal {
     serenity::CreateModal::new(
         wiring::panel_id(panel, PanelPart::DatesModal),
         text::DATES_MODAL_TITLE,
     )
     .components(vec![
-        text_input(
+        day_input(
             text::FIRST_DAY_INPUT_LABEL,
             FIRST_DAY_INPUT,
             text::FIRST_DAY_EXAMPLE,
-            DAY_INPUT_MAX,
         ),
-        text_input(
+        day_input(
             text::LAST_DAY_INPUT_LABEL,
             LAST_DAY_INPUT,
             text::LAST_DAY_EXAMPLE,
-            DAY_INPUT_MAX,
         ),
     ])
 }
 
-fn text_input(
-    label: &str,
-    custom_id: &str,
-    example: &str,
-    max_length: u16,
-) -> serenity::CreateActionRow {
+pub fn day_input(label: &str, custom_id: &str, example: &str) -> serenity::CreateActionRow {
     serenity::CreateActionRow::InputText(
         serenity::CreateInputText::new(serenity::InputTextStyle::Short, label, custom_id)
             .placeholder(example)
-            .max_length(max_length),
+            .max_length(DAY_INPUT_MAX),
     )
 }
 
@@ -1228,22 +1197,6 @@ fn weekdays_between(first_day: Date, last_day: Date) -> Vec<Weekday> {
         .map(|(day, _)| *day)
         .filter(|day| occurring.contains(day))
         .collect()
-}
-
-fn weekday_value(day: Weekday) -> &'static str {
-    match day {
-        Weekday::Monday => "mon",
-        Weekday::Tuesday => "tue",
-        Weekday::Wednesday => "wed",
-        Weekday::Thursday => "thu",
-        Weekday::Friday => "fri",
-        Weekday::Saturday => "sat",
-        Weekday::Sunday => "sun",
-    }
-}
-
-fn days_between(from: Date, to: Date) -> i32 {
-    from.until(to).map_or(0, |span| span.get_days())
 }
 
 fn zone_today(server_zones: &[String], now_unix: i64) -> Option<Date> {

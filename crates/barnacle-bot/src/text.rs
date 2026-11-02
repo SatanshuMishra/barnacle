@@ -33,7 +33,6 @@ use crate::ids::Ping;
 use crate::panels::PANEL_LIFETIME_MINUTES;
 use crate::schedule::Hour;
 use crate::schedule::Hours;
-use crate::schedule::MAX_HOURS;
 use crate::schedule::Session;
 use crate::schedule::Span;
 use crate::schedule::StartTime;
@@ -106,15 +105,11 @@ pub const NEXT_PINGS_LABEL: &str = "Next: pings";
 pub const BACK_LABEL: &str = "Back";
 pub const SET_DATES_LABEL: &str = "Set dates";
 pub const SET_TIME_LABEL: &str = "Set time";
-pub const ANOTHER_ZONE_LABEL: &str = "Another zone";
-pub const ANOTHER_ZONE_DESCRIPTION: &str = "Type any zone";
 pub const DATES_MODAL_TITLE: &str = "Event dates";
 pub const FIRST_DAY_INPUT_LABEL: &str = "First day";
 pub const LAST_DAY_INPUT_LABEL: &str = "Last day";
 pub const FIRST_DAY_EXAMPLE: &str = "2026-12-14";
 pub const LAST_DAY_EXAMPLE: &str = "2026-12-18";
-pub const ZONE_MODAL_TITLE: &str = "Another time zone";
-pub const ZONE_INPUT_LABEL: &str = "Time zone, for example Asia/Tokyo";
 pub const TIME_MODAL_TITLE: &str = "Session time";
 pub const START_INPUT_LABEL: &str = "Start";
 pub const END_INPUT_LABEL: &str = "End";
@@ -443,9 +438,6 @@ pub enum Refusal {
     TemplateUnknown,
     FirstDayPast,
     MissingOptions(Vec<&'static str>),
-    StartFormat,
-    HoursOutOfRange,
-    ZoneUnknown,
     WeekdaysInvalid,
     TooManyRoles,
     PanelUnknown,
@@ -492,9 +484,6 @@ impl Refusal {
             Refusal::TemplateUnknown => "template_unknown",
             Refusal::FirstDayPast => "first_day_past",
             Refusal::MissingOptions(_) => "missing_options",
-            Refusal::StartFormat => "start_format",
-            Refusal::HoursOutOfRange => "hours_out_of_range",
-            Refusal::ZoneUnknown => "zone_unknown",
             Refusal::WeekdaysInvalid => "weekdays_invalid",
             Refusal::TooManyRoles => "too_many_roles",
             Refusal::PanelUnknown => "panel_unknown",
@@ -623,17 +612,6 @@ impl Refusal {
                 "The panel still needs {}. Use Set dates, Event days and Set time, then press the button again.",
                 join_names(names)
             ),
-            Refusal::StartFormat => {
-                "Barnacle could not read that start time. Press Set time and type the start as 24-hour HH:MM, such as 19:00."
-                    .to_owned()
-            }
-            Refusal::HoursOutOfRange => {
-                format!("An event runs 1 to {MAX_HOURS} hours. Pick a length from the menu.")
-            }
-            Refusal::ZoneUnknown => {
-                "Barnacle knows a time zone by its place, such as America/Denver or Europe/Berlin, or as UTC. Pick one from the menu, or type one written that way."
-                    .to_owned()
-            }
             Refusal::WeekdaysInvalid => {
                 "Pick at least one event day, from Monday to Sunday, that falls between the first and last day."
                     .to_owned()
@@ -1131,16 +1109,6 @@ pub fn pings_summary(pings: &[Ping]) -> String {
 
 pub fn day_label(date: Date) -> String {
     date.strftime("%a %-d %b").to_string()
-}
-
-pub fn day_offset(days: i32) -> String {
-    match days {
-        0 => "Today".to_owned(),
-        1 => "Tomorrow".to_owned(),
-        -1 => "Yesterday".to_owned(),
-        later if later > 1 => format!("In {later} days"),
-        earlier => format!("{} days ago", earlier.unsigned_abs()),
-    }
 }
 
 fn weekdays_plural(weekdays: Weekdays) -> String {

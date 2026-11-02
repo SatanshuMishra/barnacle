@@ -272,23 +272,20 @@ fn variant(refusal: &Refusal) -> usize {
         Refusal::SeriesRoundsOutOfRange => 28,
         Refusal::TemplateUnknown => 29,
         Refusal::MissingOptions(_) => 30,
-        Refusal::StartFormat => 31,
-        Refusal::HoursOutOfRange => 32,
-        Refusal::ZoneUnknown => 33,
-        Refusal::WeekdaysInvalid => 34,
-        Refusal::TooManyRoles => 35,
-        Refusal::PanelUnknown => 36,
-        Refusal::PanelNotYours => 37,
-        Refusal::PanelExpired => 38,
-        Refusal::ChannelUnknown => 39,
-        Refusal::FirstDayPast => 40,
-        Refusal::ZoneNeeded => 41,
-        Refusal::LengthNotWholeHours => 42,
-        Refusal::TimeFormat => 43,
+        Refusal::WeekdaysInvalid => 31,
+        Refusal::TooManyRoles => 32,
+        Refusal::PanelUnknown => 33,
+        Refusal::PanelNotYours => 34,
+        Refusal::PanelExpired => 35,
+        Refusal::ChannelUnknown => 36,
+        Refusal::FirstDayPast => 37,
+        Refusal::ZoneNeeded => 38,
+        Refusal::LengthNotWholeHours => 39,
+        Refusal::TimeFormat => 40,
     }
 }
 
-const REFUSAL_VARIANTS: usize = 44;
+const REFUSAL_VARIANTS: usize = 41;
 
 #[test]
 fn every_refusal_code_is_unique_and_snake_case() {
@@ -1941,11 +1938,6 @@ fn the_typed_time_refusals_say_how_to_type_a_time() {
     assert_eq!(
         Refusal::TimeFormat.message(),
         "Type times as 24-hour HH:MM, such as 19:00."
-    );
-    assert!(
-        Refusal::StartFormat.message().contains("Set time"),
-        "{}",
-        Refusal::StartFormat.message()
     );
 }
 
