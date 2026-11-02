@@ -8,6 +8,7 @@ pub mod ids;
 pub mod info;
 pub mod logging;
 pub mod lookup;
+pub mod panels;
 pub mod release_notes;
 pub mod schedule;
 pub mod solves;

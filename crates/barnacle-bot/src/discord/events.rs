@@ -72,6 +72,12 @@ pub async fn handle(
             .await;
             Ok(())
         }
+        serenity::FullEvent::InteractionCreate {
+            interaction: serenity::Interaction::Modal(modal),
+        } => {
+            submitted(data, framework.serenity_context, modal).await;
+            Ok(())
+        }
         serenity::FullEvent::VoiceStateUpdate { old, new } => {
             voice_moved(data, framework.serenity_context, old.as_ref(), new).await;
             Ok(())
@@ -109,6 +115,19 @@ async fn clicked(
         announce_pressed(data, serenity_context, component, &version, guild, owners).await;
     } else if let Some((panel, part)) = wiring::panel_part(&component.data.custom_id) {
         panel::pressed(data, serenity_context, component, panel, part, guild).await;
+    }
+}
+
+async fn submitted(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    modal: &serenity::ModalInteraction,
+) {
+    let Some(guild) = modal.guild_id.map(|guild| GuildId::new(guild.get())) else {
+        return;
+    };
+    if let Some((panel, part)) = wiring::panel_part(&modal.data.custom_id) {
+        panel::submitted(data, serenity_context, modal, panel, part, guild).await;
     }
 }
 

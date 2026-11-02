@@ -21,13 +21,14 @@ use tokio::sync::Semaphore;
 use crate::attendance::Signups;
 use crate::attendance_store::Attendance;
 use crate::config::CommandScope;
-use crate::event_draft::Drafts;
+use crate::event_draft::Draft;
 use crate::failure;
 use crate::failure::Failure;
 use crate::failure::Scope;
 use crate::ids::GuildId;
 use crate::logging;
 use crate::lookup::Directory;
+use crate::panels::Drafts;
 use crate::release_notes;
 use crate::release_notes::NotesError;
 use crate::solves::Solves;
@@ -74,7 +75,7 @@ pub struct Data {
     pub rehearsal: Vec<GuildId>,
     pub voice: Arc<VoiceRooms<DiscordRooms>>,
     pub updates: Arc<Updates<DiscordHerald>>,
-    pub drafts: Arc<Drafts>,
+    pub drafts: Arc<Drafts<Draft>>,
 }
 
 fn now_unix() -> i64 {

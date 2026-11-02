@@ -281,10 +281,11 @@ fn variant(refusal: &Refusal) -> usize {
         Refusal::PanelNotYours => 37,
         Refusal::PanelExpired => 38,
         Refusal::ChannelUnknown => 39,
+        Refusal::FirstDayPast => 40,
     }
 }
 
-const REFUSAL_VARIANTS: usize = 40;
+const REFUSAL_VARIANTS: usize = 41;
 
 #[test]
 fn every_refusal_code_is_unique_and_snake_case() {
@@ -323,6 +324,7 @@ fn every_refusal_code_is_unique_and_snake_case() {
     assert_eq!(Refusal::DateFormat.code(), "date_format");
     assert_eq!(Refusal::EventNotFound.code(), "event_not_found");
     assert_eq!(Refusal::NoSessionsLeft.code(), "no_sessions_left");
+    assert_eq!(Refusal::FirstDayPast.code(), "first_day_past");
     assert_eq!(
         Refusal::NameTaken("Ranked Sprint".to_owned()).code(),
         "name_taken"
@@ -365,7 +367,11 @@ fn every_refusal_says_what_to_do_next() {
     );
     assert_eq!(
         Refusal::DateFormat.message(),
-        "Dates look like 2026-09-16. Run the command again with the dates written that way."
+        "Write each day as 2026-12-14. A day name in brackets after it is fine too."
+    );
+    assert_eq!(
+        Refusal::FirstDayPast.message(),
+        "The first day is in the past. Pick today or a later day."
     );
     assert_eq!(
         Refusal::LastDayBeforeFirst.message(),
@@ -381,7 +387,7 @@ fn every_refusal_says_what_to_do_next() {
     );
     assert_eq!(
         Refusal::NothingToChange.message(),
-        "Nothing to change. Give a new name, dates, start, hours, time zone or channel, or change the weekdays or pings in the panel."
+        "Nothing to change. Pick new days, a new time or new pings in the panel, or run the command again with a new name or channel."
     );
     assert_eq!(
         Refusal::NameFormat.message(),
