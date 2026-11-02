@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T17:50:49.948Z
+Updated: 2026-11-02T17:50:51.725Z
 Next ids: c2 D1 R1 S1
 
 ## Goal
@@ -17,7 +17,7 @@ Interphase interview, slug panel-inputs-and-bot-access: the intent (I1-I5) and r
 
 ## Next step
 
-Record the owner's answers to the intent round and round 1 in docs/specs/panel-inputs-and-bot-access.decisions.md and the record, then ask the next frontier round or hold the read-back.
+Record the owner's answers to round 2 in docs/specs/panel-inputs-and-bot-access.decisions.md and the record's rounds, then design seams, criteria and Steps and hold the read-back.
 
 ## Decisions in force
 
