@@ -1,7 +1,7 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T17:50:51.725Z
-Next ids: c2 D1 R1 S1
+Updated: 2026-11-02T18:10:28.284Z
+Next ids: c2 D4 R1 S1
 
 ## Goal
 
@@ -13,13 +13,17 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-Interphase interview, slug panel-inputs-and-bot-access: the intent (I1-I5) and round 1 are settled and recorded (all recommendations accepted, lighthouse skipped); frontier round 2 (Q16-Q22: no removal below zero, required reason, a judge-only #iq-judge-log channel and what it logs) is with the owner. /iq points today lets a total go negative (iq_store.rs adjust) and treats the reason as optional. Grounded facts: serenity 0.12.5 modals hold text inputs only; interactions carry no time zone; catch-up skips judge reactions on posts the bot already marked (discord/iq.rs catch_up_one); event length is stored in whole hours; judging_reaction has a CHECK of 4 values in migration 0009.
+Interphase Phase 9, unattended: the spec, record and items are written and pass check_record --complete, check_spec and check_items; 23 criteria (5.23 live Discord unproven), 57 locked acceptance tests in 7 new test files, 7 Steps in 3 MSPs (access-roles: organiser-access, organiser-commands; panel-inputs: member-zones, event-inputs, iq-setup-inputs; iq-judging: iq-marks-store, iq-judging-discord). The one spec review is running.
 
 ## Next step
 
-Record the owner's answers to round 2 in docs/specs/panel-inputs-and-bot-access.decisions.md and the record's rounds, then design seams, criteria and Steps and hold the read-back.
+Apply the spec review's real findings, re-render and recheck, write the glossary terms and ADRs 0003-0004, verify and delete the guard, set the record handed-off, then start pipeline Stage 2 (guarantees, hand-off decision, feature branch, run home, plan-only, build).
 
 ## Decisions in force
+
+- D1 The run is unattended from the owner's instruction: no questions or read-back; gaps become assumptions citing intent lines.
+- D2 Lighthouse is skipped; criterion 5.23 (live Discord) stays unproven for the owner's dev-bot check.
+- D3 An award the startup rescan counts gets the same judge log line as a live award, with no offline tag (owner).
 
 ## Open risks
 
