@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T01:29:50.904Z
+Updated: 2026-11-02T01:29:58.397Z
 Next ids: c3 D5 R3 S1
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-The drive for slug event-panel-and-iq is in its build state (plan 2e92988afdef): the seven locked test files are on feat/event-panel-and-iq (9ecb193), the event-wizard Lane finished ok (25 acceptance tests green, suite green apart from the uncompiled IQ test files), and mitosis is gating MSP event-panel (with-work, reverted and mutant runs per property, in gate/msp-0). The check-author's API readings (back() returns the draft, every IqStore call returns Result, SetupDraft accessors) bind the IQ steps. Its run home holds only the check-author and event-wizard items. The IQ run home is prepared except feature.json and the EVENT_PANEL_BRANCH placeholder in its run.zsh.
+Two drives run. Slug event-panel-and-iq is reviewing MSP event-panel on mitosis/event-panel (gate 25 of 25 pass at 276bf27; glossary and ADRs committed at aa274cf). Slug iq-competition is building MSP iq-competition stacked on mitosis/event-panel at aa274cf (5 serial Lanes). The check-author's API readings (back() returns the draft, every IqStore call returns Result, SetupDraft accessors) bind the IQ steps.
 
 ## Next step
 
