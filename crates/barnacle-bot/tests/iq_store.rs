@@ -530,3 +530,34 @@ async fn rolling_back_the_marks_keeps_each_standard_judging_emoji() {
         ]
     );
 }
+
+#[tokio::test]
+async fn an_addition_to_a_negative_total_is_saved() {
+    let pool = iq_pool().await;
+    let store = IqStore::with_pool(pool.clone()).await.unwrap();
+    let november = running(&store).await;
+    sqlx::query(
+        "INSERT INTO iq_adjustments (competition_id, user_id, points, reason, judge_id, made_at_ms) VALUES (?, ?, -50, 'Before the floor', ?, ?)",
+    )
+    .bind(november.id)
+    .bind(i64::try_from(PLAYER.get()).unwrap())
+    .bind(i64::try_from(JUDGE.get()).unwrap())
+    .bind(POSTED_AT_MS)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        store
+            .adjust(november.id, PLAYER, 10, "Bonus round", JUDGE, AWARDED_AT_MS)
+            .await
+            .unwrap(),
+        AdjustOutcome::Adjusted { total: -40 }
+    );
+    assert_eq!(
+        store
+            .adjust(november.id, PLAYER, -1, "Wrong screenshot", JUDGE, AWARDED_AT_MS)
+            .await
+            .unwrap(),
+        AdjustOutcome::BelowZero { total: -40 }
+    );
+}
