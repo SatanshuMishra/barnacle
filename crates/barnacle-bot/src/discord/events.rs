@@ -157,6 +157,9 @@ async fn announce_pressed(
     owners: &HashSet<serenity::UserId>,
 ) {
     let scope = Scope::of_component(component).guild(guild);
+    if !access::organiser_pressed(data, serenity_context, component, guild, &scope).await {
+        return;
+    }
     if !acknowledge(serenity_context, component, &scope).await {
         return;
     }

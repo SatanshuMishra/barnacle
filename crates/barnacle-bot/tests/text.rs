@@ -721,7 +721,7 @@ fn the_announce_preview_names_the_channel_ping_and_any_warning() {
 fn announcement_replies_name_the_version_and_what_to_do() {
     assert_eq!(
         text::UPDATES_NOT_SET_UP,
-        "This server has no updates channel yet. Someone with Manage Server can set one with /updates setup."
+        "This server has no updates channel yet. An organiser can set one with /updates setup."
     );
     assert_eq!(
         text::updates_already_sent("0.2.0"),
