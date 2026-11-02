@@ -25,6 +25,8 @@ use crate::panels::Owned;
 use crate::schedule::Schedule;
 use crate::schedule::Span;
 use crate::schedule::Zone;
+use crate::voice::Overwrite;
+use crate::voice::OverwriteTarget;
 use crate::wiring::IqPanelPart;
 use crate::wiring::iq_panel_id;
 use crate::wiring::same_name;
@@ -45,13 +47,23 @@ pub const CRITERION_NAME_LIMIT: usize = 50;
 pub const DESCRIPTION_LIMIT: usize = 300;
 pub const RULES_LIMIT: usize = 4000;
 pub const POINTS_LIMIT: u32 = 1000;
+pub const JUDGE_LOG_NAME: &str = "iq-judge-log";
 
 const CONTENT_LIMIT: usize = 2000;
 const DAY_INPUT_MAX: u16 = 32;
 const POINTS_INPUT_MAX: usize = 4;
 const MENU_MAX: u8 = 25;
 const QUOTE_MARK: &str = "> ";
-const AWARDED_CHOICES: [&str; 4] = ["\u{1F3C6}", "\u{2B50}", "\u{1F4AF}", "\u{1F451}"];
+const JUDGE_LOG_JUDGES_ALLOW: serenity::Permissions =
+    serenity::Permissions::VIEW_CHANNEL.union(serenity::Permissions::READ_MESSAGE_HISTORY);
+const JUDGE_LOG_JUDGES_DENY: serenity::Permissions = serenity::Permissions::SEND_MESSAGES
+    .union(serenity::Permissions::ADD_REACTIONS)
+    .union(serenity::Permissions::CREATE_PUBLIC_THREADS)
+    .union(serenity::Permissions::CREATE_PRIVATE_THREADS)
+    .union(serenity::Permissions::SEND_MESSAGES_IN_THREADS);
+const JUDGE_LOG_BOT_ALLOW: serenity::Permissions = serenity::Permissions::VIEW_CHANNEL
+    .union(serenity::Permissions::SEND_MESSAGES)
+    .union(serenity::Permissions::READ_MESSAGE_HISTORY);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetupStep {
@@ -79,9 +91,16 @@ pub enum SetupRefusal {
     DayNotOffered,
     LastDayNotAfterFirst,
     DatesTooFar,
-    ReactionUnknown,
+    MarkRepeated,
     FixedAfterStart,
     StepIncomplete(SetupStep),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkField {
+    Denied,
+    Awarded,
+    Confirm,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -113,6 +132,7 @@ pub struct CompetitionChannels {
     pub category: ChannelId,
     pub announcements: ChannelId,
     pub submissions: ChannelId,
+    pub judge_log: ChannelId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,7 +166,7 @@ impl SetupPlan {
             roles: self.roles.clone(),
             judges: self.judges.clone(),
             marks: self.marks.clone(),
-            judge_log: None,
+            judge_log: Some(channels.judge_log),
             created_by: self.created_by,
             created_at_ms,
         }
@@ -499,18 +519,15 @@ impl SetupDraft {
         })
     }
 
-    pub fn with_reaction(&self, value: &str) -> Result<SetupDraft, SetupRefusal> {
-        let awarded = AWARDED_CHOICES
-            .into_iter()
-            .find(|choice| *choice == value)
-            .and_then(Mark::parse)
-            .ok_or(SetupRefusal::ReactionUnknown)?;
-        let marks = JudgingMarks::new(
-            self.marks.denied.clone(),
-            awarded,
-            self.marks.confirm.clone(),
-        )
-        .map_err(|_| SetupRefusal::ReactionUnknown)?;
+    pub fn with_mark(&self, field: MarkField, mark: Mark) -> Result<SetupDraft, SetupRefusal> {
+        let held = &self.marks;
+        let (denied, awarded, confirm) = match field {
+            MarkField::Denied => (mark, held.awarded.clone(), held.confirm.clone()),
+            MarkField::Awarded => (held.denied.clone(), mark, held.confirm.clone()),
+            MarkField::Confirm => (held.denied.clone(), held.awarded.clone(), mark),
+        };
+        let marks =
+            JudgingMarks::new(denied, awarded, confirm).map_err(|_| SetupRefusal::MarkRepeated)?;
         Ok(SetupDraft {
             marks,
             ..self.clone()
@@ -734,6 +751,7 @@ impl SetupDraft {
         joined(self.top_lines().into_iter().chain([
             iq_text::WHO_ROLES_INTRO.to_owned(),
             iq_text::WHO_JUDGES_INTRO.to_owned(),
+            iq_text::WHO_MARKS_INTRO.to_owned(),
         ]))
     }
 
@@ -763,6 +781,7 @@ impl SetupDraft {
                 iq_text::category_branch(&self.name),
                 iq_text::announcements_branch(roles),
                 iq_text::SUBMISSIONS_BRANCH.to_owned(),
+                iq_text::JUDGE_LOG_BRANCH.to_owned(),
             ],
             Purpose::Edit { .. } => Vec::new(),
         };
@@ -906,23 +925,20 @@ impl SetupDraft {
         .placeholder(iq_text::JUDGES_PLACEHOLDER)
         .min_values(1)
         .max_values(MENU_MAX);
-        let reactions = AWARDED_CHOICES
+        let marks = serenity::CreateActionRow::Buttons(
+            [
+                (MarkField::Denied, &self.marks.denied),
+                (MarkField::Awarded, &self.marks.awarded),
+                (MarkField::Confirm, &self.marks.confirm),
+            ]
             .into_iter()
-            .filter_map(Mark::parse)
-            .map(|choice| {
-                serenity::CreateSelectMenuOption::new(iq_text::mark_label(&choice), choice.text())
-                    .default_selection(self.marks.awarded == choice)
-            })
-            .collect();
+            .map(|(field, mark)| mark_button(panel, field, mark))
+            .collect(),
+        );
         vec![
             serenity::CreateActionRow::SelectMenu(roles),
             serenity::CreateActionRow::SelectMenu(judges),
-            string_menu(
-                panel,
-                IqPanelPart::Reaction,
-                iq_text::REACTION_PLACEHOLDER,
-                reactions,
-            ),
+            marks,
             serenity::CreateActionRow::Buttons(vec![
                 back_button(panel),
                 next_button(
@@ -1079,6 +1095,42 @@ fn button(panel: u64, part: IqPanelPart, label: &str) -> serenity::CreateButton 
     serenity::CreateButton::new(iq_panel_id(panel, part))
         .label(label)
         .style(serenity::ButtonStyle::Secondary)
+}
+
+fn mark_part(field: MarkField) -> IqPanelPart {
+    match field {
+        MarkField::Denied => IqPanelPart::DeniedMark,
+        MarkField::Awarded => IqPanelPart::AwardedMark,
+        MarkField::Confirm => IqPanelPart::ConfirmMark,
+    }
+}
+
+fn mark_button(panel: u64, field: MarkField, mark: &Mark) -> serenity::CreateButton {
+    let plain = button(panel, mark_part(field), iq_text::mark_field_name(field));
+    match mark.reaction() {
+        Some(reaction) => plain.emoji(reaction),
+        None => plain,
+    }
+}
+
+pub fn judge_log_overwrites(everyone: RoleId, judge_role: RoleId, bot: UserId) -> Vec<Overwrite> {
+    vec![
+        Overwrite {
+            target: OverwriteTarget::Role(everyone),
+            allow: 0,
+            deny: serenity::Permissions::VIEW_CHANNEL.bits(),
+        },
+        Overwrite {
+            target: OverwriteTarget::Role(judge_role),
+            allow: JUDGE_LOG_JUDGES_ALLOW.bits(),
+            deny: JUDGE_LOG_JUDGES_DENY.bits(),
+        },
+        Overwrite {
+            target: OverwriteTarget::Member(bot),
+            allow: JUDGE_LOG_BOT_ALLOW.bits(),
+            deny: 0,
+        },
+    ]
 }
 
 fn next_button(panel: u64, label: &str, blocked: bool) -> serenity::CreateButton {

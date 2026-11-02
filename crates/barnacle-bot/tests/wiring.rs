@@ -1151,12 +1151,25 @@ fn the_iq_dates_parts_read_back_from_their_ids() {
 }
 
 #[test]
+fn the_iq_mark_parts_read_back_from_their_ids() {
+    for (id, part) in [
+        ("iq-panel:12:denied-mark", IqPanelPart::DeniedMark),
+        ("iq-panel:12:awarded-mark", IqPanelPart::AwardedMark),
+        ("iq-panel:12:confirm-mark", IqPanelPart::ConfirmMark),
+    ] {
+        assert_eq!(wiring::iq_panel_part(id), Some((12, part)), "{id}");
+        assert_eq!(wiring::iq_panel_id(12, part), id);
+    }
+}
+
+#[test]
 fn the_removed_iq_menu_parts_no_longer_read_back() {
     for id in [
         "iq-panel:12:first-day",
         "iq-panel:12:last-day",
         "iq-panel:12:zone",
         "iq-panel:12:zone-modal",
+        "iq-panel:12:reaction",
     ] {
         assert_eq!(wiring::iq_panel_part(id), None, "{id}");
     }

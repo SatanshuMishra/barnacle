@@ -325,7 +325,9 @@ pub enum IqPanelPart {
     Rules,
     Roles,
     Judges,
-    Reaction,
+    DeniedMark,
+    AwardedMark,
+    ConfirmMark,
     Next,
     Back,
     Start,
@@ -343,7 +345,7 @@ pub enum IqPanelPart {
 }
 
 impl IqPanelPart {
-    const ALL: [IqPanelPart; 25] = [
+    const ALL: [IqPanelPart; 27] = [
         IqPanelPart::Template,
         IqPanelPart::SetDates,
         IqPanelPart::Rename,
@@ -354,7 +356,9 @@ impl IqPanelPart {
         IqPanelPart::Rules,
         IqPanelPart::Roles,
         IqPanelPart::Judges,
-        IqPanelPart::Reaction,
+        IqPanelPart::DeniedMark,
+        IqPanelPart::AwardedMark,
+        IqPanelPart::ConfirmMark,
         IqPanelPart::Next,
         IqPanelPart::Back,
         IqPanelPart::Start,
@@ -383,7 +387,9 @@ impl IqPanelPart {
             IqPanelPart::Rules => "rules",
             IqPanelPart::Roles => "roles",
             IqPanelPart::Judges => "judges",
-            IqPanelPart::Reaction => "reaction",
+            IqPanelPart::DeniedMark => "denied-mark",
+            IqPanelPart::AwardedMark => "awarded-mark",
+            IqPanelPart::ConfirmMark => "confirm-mark",
             IqPanelPart::Next => "next",
             IqPanelPart::Back => "back",
             IqPanelPart::Start => "start",

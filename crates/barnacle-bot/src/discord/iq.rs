@@ -42,6 +42,7 @@ use crate::iq::Status;
 use crate::iq_setup;
 use crate::iq_setup::CompetitionChannels;
 use crate::iq_setup::ConfigChange;
+use crate::iq_setup::MarkField;
 use crate::iq_setup::Purpose;
 use crate::iq_setup::SetupChecks;
 use crate::iq_setup::SetupDraft;
@@ -60,6 +61,8 @@ use crate::schedule::Zone;
 use crate::schedule::ZoneProblem;
 use crate::text::Refusal;
 use crate::text::escape;
+use crate::voice::Overwrite;
+use crate::voice::OverwriteTarget;
 use crate::wiring::IqPanelPart;
 use crate::wiring::iq_panel_id;
 use crate::wiring::same_name;
@@ -74,8 +77,8 @@ const DELETE_CHANNELS_LABEL: &str = "Delete channels";
 const SAVE_JUDGES_LABEL: &str = "Save judges";
 const NOTHING_CREATED: &str = "Cancelled. Nothing was created.";
 const ZERO_POINTS: &str = "Give or take at least 1 point. 0 changes nothing.";
-const LOG_FAILED: &str =
-    "The points were saved, but the note in the submissions channel was not posted";
+const UNREAD_CRITERION: &str = "a criterion that could not be read";
+const MESSAGE_LINK: &str = "https://discord.com/channels";
 const ANNOUNCED_LINES: usize = 5;
 const MENU_MAX: u8 = 25;
 const PAGE_SIZE: u8 = 100;
@@ -83,6 +86,8 @@ const CATCH_UP_PAGES: usize = 500;
 const SHOWN_END_OFFSET: i64 = 60;
 const MILLIS_PER_SECOND: u64 = 1_000;
 const DISCORD_WAIT: Duration = Duration::from_secs(30);
+const MARK_WAIT: Duration = Duration::from_secs(120);
+const RESCAN_LIMIT: u32 = 500;
 const SETUP_ACCESS: serenity::Permissions =
     serenity::Permissions::MANAGE_CHANNELS.union(serenity::Permissions::MANAGE_ROLES);
 const QUIET_FOR_PLAYERS: serenity::Permissions = serenity::Permissions::SEND_MESSAGES
@@ -143,6 +148,7 @@ enum IqError {
     UnknownZone(String),
     ZeroId,
     Clock,
+    NoJudgeRole,
 }
 
 impl std::fmt::Display for IqError {
@@ -159,6 +165,7 @@ impl std::fmt::Display for IqError {
             ),
             IqError::ZeroId => formatter.write_str("a stored Discord ID is 0"),
             IqError::Clock => formatter.write_str("the clock reads before 1970"),
+            IqError::NoJudgeRole => formatter.write_str("the IQ-Judge role could not be found"),
         }
     }
 }
@@ -169,7 +176,9 @@ impl std::error::Error for IqError {
             IqError::Discord(error) => Some(error.as_ref()),
             IqError::TimedOut(error) => Some(error),
             IqError::Store(error) => Some(error.as_ref()),
-            IqError::UnknownZone(_) | IqError::ZeroId | IqError::Clock => None,
+            IqError::UnknownZone(_) | IqError::ZeroId | IqError::Clock | IqError::NoJudgeRole => {
+                None
+            }
         }
     }
 }
@@ -526,36 +535,22 @@ pub(super) async fn iq_points(
         }
         Err(error) => return Err(error.into()),
     };
-    let reason = Some(reason);
     let scope = Scope::of_command(ctx);
     failure::record(
         "iq.points.adjusted",
         "a judge changed a member's points",
         &scope,
     );
-    let logged = post(
-        &ctx.serenity_context().http,
-        competition.submissions,
-        &iq_text::points_log(judge, target, points, reason),
-        serenity::CreateAllowedMentions::new(),
+    commands::private(ctx, iq_text::points_done(target, total)).await?;
+    log_judging(
+        data,
+        ctx.serenity_context(),
+        &competition,
+        &iq_text::judge_log_points(judge, target, points, reason, total),
+        &scope,
     )
     .await;
-    let content = match logged {
-        Ok(_) => {
-            iq_text::points_confirmation(target, points, total, reason, competition.submissions)
-        }
-        Err(error) => {
-            let failure = Failure::from_error(&error);
-            failure::report(
-                "iq.points.log_failed",
-                "a points change could not be logged in the submissions channel",
-                &failure,
-                &scope,
-            );
-            failure::failed(LOG_FAILED, &failure)
-        }
-    };
-    commands::private(ctx, content).await
+    Ok(())
 }
 
 #[poise::command(slash_command, rename = "leaderboard", guild_only)]
@@ -1041,12 +1036,50 @@ pub(super) async fn pressed(
                 .map_err(Turned::from);
             open_modal(serenity_context, component, opened, &scope).await;
         }
+        IqPanelPart::DeniedMark => {
+            pick_mark(
+                data,
+                serenity_context,
+                component,
+                panel,
+                MarkField::Denied,
+                user,
+                guild,
+                &scope,
+            )
+            .await;
+        }
+        IqPanelPart::AwardedMark => {
+            pick_mark(
+                data,
+                serenity_context,
+                component,
+                panel,
+                MarkField::Awarded,
+                user,
+                guild,
+                &scope,
+            )
+            .await;
+        }
+        IqPanelPart::ConfirmMark => {
+            pick_mark(
+                data,
+                serenity_context,
+                component,
+                panel,
+                MarkField::Confirm,
+                user,
+                guild,
+                &scope,
+            )
+            .await;
+        }
         IqPanelPart::Template
         | IqPanelPart::Criterion
         | IqPanelPart::Remove
         | IqPanelPart::Roles
         | IqPanelPart::Judges
-        | IqPanelPart::Reaction
         | IqPanelPart::Next
         | IqPanelPart::Back => {
             match changed(drafts, panel, part, &component.data.kind, user, now_ms) {
@@ -1222,7 +1255,9 @@ pub(super) async fn submitted(
                 | IqPanelPart::Rules
                 | IqPanelPart::Roles
                 | IqPanelPart::Judges
-                | IqPanelPart::Reaction
+                | IqPanelPart::DeniedMark
+                | IqPanelPart::AwardedMark
+                | IqPanelPart::ConfirmMark
                 | IqPanelPart::Next
                 | IqPanelPart::Back
                 | IqPanelPart::Start
@@ -1288,9 +1323,6 @@ fn changed(
                 .parse::<usize>()
                 .map_err(|_| SetupRefusal::CriterionUnknown)?;
             draft.with_picked_criterion(index)?
-        }
-        (IqPanelPart::Reaction, serenity::ComponentInteractionDataKind::StringSelect { .. }) => {
-            draft.with_reaction(single)?
         }
         (IqPanelPart::Roles, serenity::ComponentInteractionDataKind::RoleSelect { values }) => {
             draft.with_roles(values.iter().map(|role| RoleId::new(role.get())).collect())?
@@ -1406,7 +1438,7 @@ async fn finish(
         SetupReady::Start(plan) => start_competition(data, serenity_context, plan, scope)
             .await
             .map_err(Unfinished::untouched),
-        SetupReady::Edit(change) => save_changes(data, serenity_context, change, scope).await,
+        SetupReady::Edit(change) => save_changes(data, serenity_context, change, user, scope).await,
     };
     match answer {
         Ok(content) => {
@@ -1460,7 +1492,9 @@ async fn confirmed(
         IqPanelPart::ConfirmComplete => complete(data, http, guild, scope).await,
         IqPanelPart::ConfirmCleanup => clean_up(data, serenity_context, guild, scope).await,
         IqPanelPart::JudgesSave => match data.iq_drafts.take(panel, user, now_ms) {
-            Ok(draft) => save_judges(data, serenity_context, guild, draft.judges(), scope).await,
+            Ok(draft) => {
+                save_judges(data, serenity_context, guild, user, draft.judges(), scope).await
+            }
             Err(refusal) => Ok(turned_text(&Turned::Panel(refusal), scope)),
         },
         IqPanelPart::Template
@@ -1473,7 +1507,9 @@ async fn confirmed(
         | IqPanelPart::Rules
         | IqPanelPart::Roles
         | IqPanelPart::Judges
-        | IqPanelPart::Reaction
+        | IqPanelPart::DeniedMark
+        | IqPanelPart::AwardedMark
+        | IqPanelPart::ConfirmMark
         | IqPanelPart::Next
         | IqPanelPart::Back
         | IqPanelPart::Start
@@ -1666,11 +1702,12 @@ async fn clean_up(
         }
         _ => progress,
     };
-    for channel in [
+    let channels = competition.judge_log.into_iter().chain([
         competition.submissions,
         competition.announcements,
         competition.category,
-    ] {
+    ]);
+    for channel in channels {
         remove_channel(
             http,
             discord_channel(channel).map_err(|error| progress.stopped(error))?,
@@ -1718,6 +1755,7 @@ async fn save_judges(
     data: &Data,
     serenity_context: &serenity::Context,
     guild: GuildId,
+    organiser: UserId,
     judges: &[UserId],
     scope: &Scope,
 ) -> Result<String, Unfinished> {
@@ -1753,6 +1791,15 @@ async fn save_judges(
         "the IQ-Judge role was handed out and taken away",
         scope,
     );
+    log_judge_changes(
+        data,
+        serenity_context,
+        &competition,
+        organiser,
+        judges,
+        scope,
+    )
+    .await;
     Ok(iq_text::judges_saved(judges))
 }
 
@@ -1946,10 +1993,23 @@ async fn build(
     .await?
     .id;
     made.channels.push(submissions);
+    let judge_log = bounded(
+        guild.create_channel(
+            http.as_ref(),
+            serenity::CreateChannel::new(iq_setup::JUDGE_LOG_NAME)
+                .kind(serenity::ChannelType::Text)
+                .category(category)
+                .permissions(judge_log_permissions(seats)?),
+        ),
+    )
+    .await?
+    .id;
+    made.channels.push(judge_log);
     let channels = CompetitionChannels {
         category: ChannelId::new(category.get()),
         announcements: ChannelId::new(announcements.get()),
         submissions: ChannelId::new(submissions.get()),
+        judge_log: ChannelId::new(judge_log.get()),
     };
     let text = iq_text::start_announcement(
         &plan.name,
@@ -2034,6 +2094,7 @@ async fn save_changes(
     data: &Data,
     serenity_context: &serenity::Context,
     change: &ConfigChange,
+    organiser: UserId,
     scope: &Scope,
 ) -> Result<String, Unfinished> {
     let http = &serenity_context.http;
@@ -2133,6 +2194,17 @@ async fn save_changes(
     let (added, altered, removed) = criteria_changes(&before.criteria, &change.criteria);
     let note = iq_text::edit_note(&added, &altered, &removed, before.rules != change.rules);
     notice(http, before.announcements, &note, scope).await;
+    if judges_changed {
+        log_judge_changes(
+            data,
+            serenity_context,
+            &before,
+            organiser,
+            &change.judges,
+            scope,
+        )
+        .await;
+    }
     failure::record(
         "iq.edited",
         "an IQ Competition's settings were changed",
@@ -2382,7 +2454,14 @@ async fn judge_message(
             Judged::Valid
         }
         Checked::Invalid(problems) => {
-            mark(http, message, &competition.marks.denied, scope).await;
+            mark(
+                http,
+                message.channel_id,
+                message.id,
+                &competition.marks.denied,
+                scope,
+            )
+            .await;
             let reply = serenity::CreateMessage::new()
                 .content(iq_text::submission_reply(&problems))
                 .reference_message(message)
@@ -2401,7 +2480,13 @@ async fn judge_message(
     }
 }
 
-async fn mark(http: &serenity::Http, message: &serenity::Message, mark: &Mark, scope: &Scope) {
+async fn mark(
+    http: &serenity::Http,
+    channel: serenity::ChannelId,
+    message: serenity::MessageId,
+    mark: &Mark,
+    scope: &Scope,
+) {
     let Some(reaction) = mark.reaction() else {
         failure::report(
             "iq.submission.mark_failed",
@@ -2411,12 +2496,7 @@ async fn mark(http: &serenity::Http, message: &serenity::Message, mark: &Mark, s
         );
         return;
     };
-    let reacted = bounded(
-        message
-            .channel_id
-            .create_reaction(http, message.id, reaction),
-    )
-    .await;
+    let reacted = bounded(channel.create_reaction(http, message, reaction)).await;
     if let Err(error) = reacted {
         failure::report(
             "iq.submission.mark_failed",
@@ -2488,7 +2568,16 @@ pub(super) async fn reacted(
         );
         return;
     }
-    award(data, reaction.message_id.get(), judge, &scope).await;
+    award(
+        data,
+        serenity_context,
+        &competition,
+        reaction.message_id.get(),
+        None,
+        judge,
+        &scope,
+    )
+    .await;
 }
 
 async fn current_judge_role(
@@ -2537,7 +2626,15 @@ async fn holds_judge_role(
     }
 }
 
-async fn award(data: &Data, message: u64, judge: UserId, scope: &Scope) {
+async fn award(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    competition: &Competition,
+    message: u64,
+    fetched: Option<&serenity::Message>,
+    judge: UserId,
+    scope: &Scope,
+) {
     let Some(now_ms) = super::now_ms().and_then(|now_ms| i64::try_from(now_ms).ok()) else {
         failure::report(
             "iq.award.failed",
@@ -2548,11 +2645,23 @@ async fn award(data: &Data, message: u64, judge: UserId, scope: &Scope) {
         return;
     };
     match data.iq.award(message, judge, now_ms).await {
-        Ok(AwardOutcome::Awarded { .. }) => failure::record(
-            "iq.award.given",
-            "a judge's reaction awarded a submission's points",
-            scope,
-        ),
+        Ok(AwardOutcome::Awarded { user, points }) => {
+            failure::record(
+                "iq.award.given",
+                "a judge's reaction awarded a submission's points",
+                scope,
+            );
+            awarded(
+                data,
+                serenity_context,
+                competition,
+                message,
+                fetched,
+                (judge, user, points),
+                scope,
+            )
+            .await;
+        }
         Ok(AwardOutcome::AlreadyAwarded) => failure::refused(
             "iq.award.refused",
             "a judging reaction came on a submission already awarded",
@@ -2580,6 +2689,392 @@ async fn award(data: &Data, message: u64, judge: UserId, scope: &Scope) {
     }
 }
 
+async fn awarded(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    competition: &Competition,
+    message: u64,
+    fetched: Option<&serenity::Message>,
+    (judge, player, points): (UserId, UserId, u32),
+    scope: &Scope,
+) {
+    let http = &serenity_context.http;
+    let target = discord_channel(competition.submissions).and_then(|channel| {
+        nonzero(message).map(|message| (channel, serenity::MessageId::from(message)))
+    });
+    let (channel, message_id) = match target {
+        Ok(target) => target,
+        Err(error) => {
+            failure::report(
+                "iq.submission.mark_failed",
+                "an awarded submission could not be marked",
+                &Failure::from_error(&error),
+                scope,
+            );
+            return;
+        }
+    };
+    mark(http, channel, message_id, &competition.marks.confirm, scope).await;
+    let criterion = match fetched {
+        Some(found) => criterion_of(competition, found),
+        None => match bounded(channel.message(http, message_id)).await {
+            Ok(found) => criterion_of(competition, &found),
+            Err(error) => {
+                failure::report(
+                    "iq.award.unread",
+                    "an awarded submission could not be read, so its criterion is not named",
+                    &Failure::from_error(&error),
+                    scope,
+                );
+                UNREAD_CRITERION.to_owned()
+            }
+        },
+    };
+    let link = format!(
+        "{MESSAGE_LINK}/{}/{}/{message}",
+        competition.guild.get(),
+        competition.submissions.get()
+    );
+    let line = iq_text::judge_log_award(judge, player, &criterion, i64::from(points), &link);
+    log_judging(data, serenity_context, competition, &line, scope).await;
+}
+
+fn criterion_of(competition: &Competition, message: &serenity::Message) -> String {
+    let attachments: Vec<iq::Attachment> = message
+        .attachments
+        .iter()
+        .map(|attachment| iq::Attachment {
+            content_type: attachment.content_type.clone(),
+        })
+        .collect();
+    match iq::check_submission(&message.content, &attachments, &competition.criteria) {
+        Checked::Valid { criterion, .. } => criterion,
+        Checked::Invalid(_) => {
+            let typed: String = message
+                .content
+                .trim()
+                .chars()
+                .take(iq_setup::CRITERION_NAME_LIMIT)
+                .collect();
+            match typed.is_empty() {
+                true => UNREAD_CRITERION.to_owned(),
+                false => typed,
+            }
+        }
+    }
+}
+
+async fn log_judging(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    competition: &Competition,
+    line: &str,
+    scope: &Scope,
+) {
+    let posted = match judge_log_of(data, serenity_context, competition, scope).await {
+        Ok(channel) => post(
+            &serenity_context.http,
+            channel,
+            line,
+            serenity::CreateAllowedMentions::new(),
+        )
+        .await
+        .map(|_| ()),
+        Err(error) => Err(error),
+    };
+    match posted {
+        Ok(()) => failure::record(
+            "iq.judge_log.posted",
+            "a line was posted in the judge log",
+            scope,
+        ),
+        Err(error) => {
+            failure::report(
+                "iq.judge_log.failed",
+                "a judge log line could not be posted, so it goes to the bot's log",
+                &Failure::from_error(&error),
+                scope,
+            );
+            tracing::warn!(
+                "barnacle.judge_log.line" = line,
+                "a judge log line that could not be posted"
+            );
+        }
+    }
+}
+
+async fn judge_log_of(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    competition: &Competition,
+    scope: &Scope,
+) -> Result<ChannelId, IqError> {
+    let stored = match data.iq.competition(competition.id).await {
+        Ok(Some(current)) => current.judge_log,
+        Ok(None) | Err(_) => competition.judge_log,
+    };
+    if let Some(channel) = stored {
+        return Ok(channel);
+    }
+    let judge = current_judge_role(data, &serenity_context.cache, competition.guild, scope)
+        .await
+        .ok_or(IqError::NoJudgeRole)?;
+    let guild = discord_guild(competition.guild)?;
+    let seats = Seats {
+        guild,
+        judge,
+        bot: serenity_context.cache.current_user().id,
+    };
+    let created = bounded(
+        guild.create_channel(
+            serenity_context.http.as_ref(),
+            serenity::CreateChannel::new(iq_setup::JUDGE_LOG_NAME)
+                .kind(serenity::ChannelType::Text)
+                .category(discord_channel(competition.category)?)
+                .permissions(judge_log_permissions(seats)?),
+        ),
+    )
+    .await?
+    .id;
+    let channel = ChannelId::new(created.get());
+    if let Err(error) = data.iq.set_judge_log(competition.id, channel).await {
+        failure::report(
+            "iq.judge_log.unsaved",
+            "the judge log channel was created but its ID was not saved",
+            &Failure::from_error(&error),
+            scope,
+        );
+    }
+    failure::record(
+        "iq.judge_log.created",
+        "a judge log channel was created for a running competition",
+        scope,
+    );
+    Ok(channel)
+}
+
+fn judge_log_permissions(seats: Seats) -> Result<Vec<serenity::PermissionOverwrite>, IqError> {
+    iq_setup::judge_log_overwrites(
+        RoleId::new(seats.guild.everyone_role().get()),
+        RoleId::new(seats.judge.get()),
+        UserId::new(seats.bot.get()),
+    )
+    .into_iter()
+    .map(permission_overwrite)
+    .collect()
+}
+
+fn permission_overwrite(overwrite: Overwrite) -> Result<serenity::PermissionOverwrite, IqError> {
+    let kind = match overwrite.target {
+        OverwriteTarget::Role(role) => serenity::PermissionOverwriteType::Role(discord_role(role)?),
+        OverwriteTarget::Member(member) => {
+            serenity::PermissionOverwriteType::Member(discord_user(member)?)
+        }
+    };
+    Ok(serenity::PermissionOverwrite {
+        allow: serenity::Permissions::from_bits_truncate(overwrite.allow),
+        deny: serenity::Permissions::from_bits_truncate(overwrite.deny),
+        kind,
+    })
+}
+
+async fn log_judge_changes(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    competition: &Competition,
+    organiser: UserId,
+    after: &[UserId],
+    scope: &Scope,
+) {
+    let before = &competition.judges;
+    let added: Vec<UserId> = after
+        .iter()
+        .filter(|judge| !before.contains(judge))
+        .copied()
+        .collect();
+    let removed: Vec<UserId> = before
+        .iter()
+        .filter(|judge| !after.contains(judge))
+        .copied()
+        .collect();
+    if added.is_empty() && removed.is_empty() {
+        return;
+    }
+    let line = iq_text::judge_log_judges(organiser, &added, &removed);
+    log_judging(data, serenity_context, competition, &line, scope).await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn pick_mark(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    component: &serenity::ComponentInteraction,
+    panel: u64,
+    field: MarkField,
+    user: UserId,
+    guild: GuildId,
+    scope: &Scope,
+) {
+    let drafts = &data.iq_drafts;
+    let Some(asked_ms) = super::now_ms() else {
+        let content = failed_text(
+            "a mark button could not be used because the clock reads before 1970",
+            &IqError::Clock,
+            scope,
+        );
+        tell(
+            serenity_context,
+            component,
+            Answer::Response,
+            &content,
+            scope,
+        )
+        .await;
+        return;
+    };
+    if let Err(refusal) = drafts.with(panel, user, asked_ms) {
+        refuse_press(serenity_context, component, &Turned::Panel(refusal), scope).await;
+        return;
+    }
+    if !acknowledge(serenity_context, component, scope).await {
+        return;
+    }
+    let prompt = serenity::CreateMessage::new()
+        .content(iq_text::mark_prompt(user, field))
+        .allowed_mentions(serenity::CreateAllowedMentions::new().users([component.user.id]));
+    let sent = match bounded(
+        component
+            .channel_id
+            .send_message(&serenity_context.http, prompt),
+    )
+    .await
+    {
+        Ok(sent) => sent,
+        Err(error) => {
+            let content = failed_text("a mark prompt could not be posted", &error, scope);
+            tell(
+                serenity_context,
+                component,
+                Answer::Followup,
+                &content,
+                scope,
+            )
+            .await;
+            return;
+        }
+    };
+    let picked = serenity::ReactionCollector::new(serenity_context)
+        .message_id(sent.id)
+        .author_id(component.user.id)
+        .timeout(MARK_WAIT)
+        .await;
+    remove_prompt(&serenity_context.http, &sent, scope).await;
+    let Some(mark) = picked.and_then(|reaction| Mark::from_reaction(&reaction.emoji)) else {
+        failure::refused(
+            "interaction.refused",
+            "a mark prompt got no emoji in time",
+            "mark_not_picked",
+            scope,
+        );
+        tell(
+            serenity_context,
+            component,
+            Answer::Followup,
+            iq_text::NO_EMOJI_PICKED,
+            scope,
+        )
+        .await;
+        return;
+    };
+    let Some(now_ms) = super::now_ms() else {
+        let content = failed_text(
+            "a picked mark could not be saved because the clock reads before 1970",
+            &IqError::Clock,
+            scope,
+        );
+        tell(
+            serenity_context,
+            component,
+            Answer::Followup,
+            &content,
+            scope,
+        )
+        .await;
+        return;
+    };
+    let changed = drafts
+        .with(panel, user, now_ms)
+        .map_err(|refusal| turned_text(&Turned::Panel(refusal), scope))
+        .and_then(|draft| match draft.with_mark(field, mark.clone()) {
+            Ok(next) => Ok(next),
+            Err(SetupRefusal::MarkRepeated) => {
+                let generic = turned_text(&Turned::Setup(SetupRefusal::MarkRepeated), scope);
+                Err(mark_holder(draft.marks(), &mark, field)
+                    .map_or(generic, iq_text::mark_repeated))
+            }
+            Err(refusal) => Err(turned_text(&Turned::Setup(refusal), scope)),
+        });
+    let next = match changed {
+        Ok(next) => next,
+        Err(content) => {
+            tell(
+                serenity_context,
+                component,
+                Answer::Followup,
+                &content,
+                scope,
+            )
+            .await;
+            return;
+        }
+    };
+    drafts.replace(panel, next.clone());
+    let checks = setup_checks(serenity_context, data, guild, scope).await;
+    let view = next.panel(panel, super::now_unix(), &checks);
+    let edited = component
+        .edit_response(
+            serenity_context,
+            serenity::EditInteractionResponse::new()
+                .content(view.content)
+                .components(view.components)
+                .allowed_mentions(serenity::CreateAllowedMentions::new()),
+        )
+        .await;
+    match edited {
+        Ok(_) => failure::record("iq.mark.picked", "an IQ Competition mark was picked", scope),
+        Err(error) => failure::report(
+            "interaction.failed",
+            "an IQ Competition panel could not be redrawn after a mark was picked",
+            &Failure::from_error(&error),
+            scope,
+        ),
+    }
+}
+
+fn mark_holder(marks: &JudgingMarks, mark: &Mark, field: MarkField) -> Option<MarkField> {
+    [
+        (MarkField::Denied, &marks.denied),
+        (MarkField::Awarded, &marks.awarded),
+        (MarkField::Confirm, &marks.confirm),
+    ]
+    .into_iter()
+    .find(|(held_field, held)| *held_field != field && *held == mark)
+    .map(|(held_field, _)| held_field)
+}
+
+async fn remove_prompt(http: &serenity::Http, prompt: &serenity::Message, scope: &Scope) {
+    match bounded(prompt.channel_id.delete_message(http, prompt.id)).await {
+        Ok(()) => {}
+        Err(error) if is_kind(&error, Kind::UnknownMessage) => {}
+        Err(error) => failure::report(
+            "iq.mark.prompt_kept",
+            "a mark prompt could not be deleted",
+            &Failure::from_error(&error),
+            scope,
+        ),
+    }
+}
+
 pub(super) async fn caught_up(
     data: &Data,
     serenity_context: &serenity::Context,
@@ -2591,7 +3086,9 @@ pub(super) async fn caught_up(
         let scope = Scope::default().guild(guild);
         match data.iq.live(guild).await {
             Ok(Some(competition)) if competition.status == Status::Running => {
-                match catch_up(data, serenity_context, &competition, &scope).await {
+                let caught = catch_up(data, serenity_context, &competition, &scope).await;
+                rescan(data, serenity_context, &competition, &scope).await;
+                match caught {
                     Ok(true) => {
                         data.iq_caught_up.finish(guild, connection);
                         failure::record(
@@ -2646,7 +3143,7 @@ async fn catch_up(
         .await?;
         page.sort_by_key(|message| message.id);
         for message in &page {
-            catch_up_one(data, http, competition, judge_role, message).await;
+            catch_up_one(data, serenity_context, competition, judge_role, message).await;
         }
         match page.last() {
             Some(last) if page.len() == usize::from(PAGE_SIZE) => after = last.id.get(),
@@ -2664,11 +3161,12 @@ async fn catch_up(
 
 async fn catch_up_one(
     data: &Data,
-    http: &serenity::Http,
+    serenity_context: &serenity::Context,
     competition: &Competition,
     judge_role: Option<serenity::RoleId>,
     message: &serenity::Message,
 ) {
+    let http: &serenity::Http = &serenity_context.http;
     let scope = message_scope(competition.guild, message);
     if !checkable(message) || already_marked(message, &competition.marks) {
         seen(data, competition, message, &scope).await;
@@ -2691,7 +3189,125 @@ async fn catch_up_one(
         return;
     }
     if let Some(judge) = reacted_judge(http, competition, judge_role, message, &scope).await {
-        award(data, message.id.get(), judge, &scope.clone().user(judge)).await;
+        award(
+            data,
+            serenity_context,
+            competition,
+            message.id.get(),
+            Some(message),
+            judge,
+            &scope.clone().user(judge),
+        )
+        .await;
+    }
+}
+
+async fn rescan(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    competition: &Competition,
+    scope: &Scope,
+) {
+    let unawarded = match data.iq.unawarded(competition.id, RESCAN_LIMIT).await {
+        Ok(unawarded) => unawarded,
+        Err(error) => {
+            failure::report(
+                "iq.rescan.failed",
+                "the unawarded submissions could not be listed, so offline judging was not counted",
+                &Failure::from_error(&error),
+                scope,
+            );
+            return;
+        }
+    };
+    let channel = match discord_channel(competition.submissions) {
+        Ok(channel) => channel,
+        Err(error) => {
+            failure::report(
+                "iq.rescan.failed",
+                "the submissions channel's stored ID is 0, so offline judging was not counted",
+                &Failure::from_error(&error),
+                scope,
+            );
+            return;
+        }
+    };
+    let judge_role =
+        current_judge_role(data, &serenity_context.cache, competition.guild, scope).await;
+    for message in &unawarded {
+        rescan_one(
+            data,
+            serenity_context,
+            competition,
+            judge_role,
+            channel,
+            *message,
+            &scope.clone().message(Snowflake::new(*message)),
+        )
+        .await;
+    }
+    if u32::try_from(unawarded.len()).is_ok_and(|listed| listed == RESCAN_LIMIT) {
+        failure::refused(
+            "iq.rescan.stopped",
+            "the offline judging check stopped at 500 unawarded submissions; more may remain",
+            "rescan_limit",
+            scope,
+        );
+    }
+}
+
+async fn rescan_one(
+    data: &Data,
+    serenity_context: &serenity::Context,
+    competition: &Competition,
+    judge_role: Option<serenity::RoleId>,
+    channel: serenity::ChannelId,
+    message: u64,
+    scope: &Scope,
+) {
+    let http = &serenity_context.http;
+    let Some(message_id) = NonZeroU64::new(message).map(serenity::MessageId::from) else {
+        return;
+    };
+    let found = match bounded(channel.message(http, message_id)).await {
+        Ok(found) => found,
+        Err(error) if is_kind(&error, Kind::UnknownMessage) => {
+            match data.iq.forget(competition.id, message).await {
+                Ok(()) => failure::record(
+                    "iq.rescan.forgotten",
+                    "a deleted submission left the offline judging check",
+                    scope,
+                ),
+                Err(error) => failure::report(
+                    "iq.rescan.failed",
+                    "a deleted submission could not be dropped from the offline judging check",
+                    &Failure::from_error(&error),
+                    scope,
+                ),
+            }
+            return;
+        }
+        Err(error) => {
+            failure::report(
+                "iq.rescan.skipped",
+                "a submission could not be read, so its offline judging was skipped",
+                &Failure::from_error(&error),
+                scope,
+            );
+            return;
+        }
+    };
+    if let Some(judge) = reacted_judge(http, competition, judge_role, &found, scope).await {
+        award(
+            data,
+            serenity_context,
+            competition,
+            message,
+            Some(&found),
+            judge,
+            &scope.clone().user(judge),
+        )
+        .await;
     }
 }
 
@@ -2910,7 +3526,7 @@ fn setup_code(refusal: &SetupRefusal) -> &'static str {
         SetupRefusal::DayNotOffered => "day_not_offered",
         SetupRefusal::LastDayNotAfterFirst => "last_day_not_after_first",
         SetupRefusal::DatesTooFar => "dates_too_far",
-        SetupRefusal::ReactionUnknown => "reaction_unknown",
+        SetupRefusal::MarkRepeated => "mark_repeated",
         SetupRefusal::FixedAfterStart => "fixed_after_start",
         SetupRefusal::StepIncomplete(SetupStep::Basics) => "basics_incomplete",
         SetupRefusal::StepIncomplete(SetupStep::Criteria) => "criteria_incomplete",

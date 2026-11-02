@@ -11,6 +11,7 @@ use crate::iq::JudgingMarks;
 use crate::iq::Mark;
 use crate::iq::Problem;
 use crate::iq::Standing;
+use crate::iq_setup::MarkField;
 use crate::iq_setup::SetupRefusal;
 use crate::iq_setup::SetupStep;
 use crate::text::day_label;
@@ -32,6 +33,7 @@ pub const RESUMED: &str =
 pub const COMPLETED: &str = "Posted. Run /iq cleanup when you are ready to remove the channels.";
 pub const CANCELLED: &str = "Cancelled. Nothing changed.";
 pub const NO_POINTS_YET: &str = "No points yet.";
+pub const NO_EMOJI_PICKED: &str = "No emoji picked. Press the button to try again.";
 
 pub fn unfinished(done: &[Done]) -> String {
     let steps: Vec<&str> = done.iter().map(|step| done_line(*step)).collect();
@@ -332,22 +334,6 @@ pub fn edit_note(
     }
 }
 
-pub fn points_log(judge: UserId, member: UserId, points: i64, reason: Option<&str>) -> String {
-    let action = match points < 0 {
-        true => format!(
-            "took {} from {}",
-            points_text(points.saturating_abs()),
-            user(member)
-        ),
-        false => format!("gave {} to {}", points_text(points), user(member)),
-    };
-    let base = format!("{} {action}.", user(judge));
-    match given_reason(reason) {
-        Some(reason) => format!("{base} Reason: {reason}"),
-        None => base,
-    }
-}
-
 pub fn below_zero(member: UserId, total: i64) -> String {
     format!(
         "{} has {total} points, so at most {total} can be removed.",
@@ -355,35 +341,73 @@ pub fn below_zero(member: UserId, total: i64) -> String {
     )
 }
 
-pub fn points_confirmation(
-    member: UserId,
+pub fn points_done(member: UserId, total: i64) -> String {
+    format!("Done. {} now has {}.", user(member), points_text(total))
+}
+
+pub fn judge_log_award(
+    judge: UserId,
+    player: UserId,
+    criterion: &str,
     points: i64,
+    link: &str,
+) -> String {
+    format!(
+        "{} awarded {} {} for {}: {link}",
+        user(judge),
+        user(player),
+        points_text(points),
+        escape(criterion)
+    )
+}
+
+pub fn judge_log_points(
+    judge: UserId,
+    player: UserId,
+    points: i64,
+    reason: &str,
     total: i64,
-    reason: Option<&str>,
-    submissions: ChannelId,
 ) -> String {
     let action = match points < 0 {
         true => format!(
-            "Took **{}** from {}, who now has {total}.",
+            "took {} from {}",
             points_text(points.saturating_abs()),
-            user(member)
+            user(player)
         ),
-        false => format!(
-            "Gave **{}** to {}, who now has {total}.",
-            points_text(points),
-            user(member)
-        ),
+        false => format!("gave {} {}", user(player), points_text(points)),
     };
-    let reason_line = given_reason(reason).map(|reason| format!("Reason: {reason}"));
-    [action]
+    format!(
+        "{} {action}: {}. New total: {total}.",
+        user(judge),
+        plain_text(reason)
+    )
+}
+
+pub fn judge_log_judges(organiser: UserId, added: &[UserId], removed: &[UserId]) -> String {
+    let named = |verb: &str, members: &[UserId]| {
+        (!members.is_empty()).then(|| {
+            format!(
+                "{verb} {}",
+                members
+                    .iter()
+                    .map(|member| user(*member))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+    };
+    let parts: Vec<String> = [named("added", added), named("removed", removed)]
         .into_iter()
-        .chain(reason_line)
-        .chain([format!(
-            "Logged in {} so players can see the change.",
-            channel(submissions)
-        )])
-        .collect::<Vec<_>>()
-        .join("\n")
+        .flatten()
+        .collect();
+    match parts.is_empty() {
+        true => format!("{} changed the judges.", user(organiser)),
+        false => format!(
+            "{} changed the judges: {}.",
+            user(organiser),
+            parts.join("; ")
+        ),
+    }
 }
 
 pub fn judges_prompt(competition: &str) -> String {
@@ -482,7 +506,7 @@ pub fn complete_question(
 
 pub fn cleanup_question(competition: &str) -> String {
     format!(
-        "Delete the **{competition}** category and both of its channels? Their messages can't be recovered.\nKept: the final scores (archived), the criteria and rules (saved as a template). The next /iq start begins at zero."
+        "Delete the **{competition}** category and all of its channels? Their messages can't be recovered.\nKept: the final scores (archived), the criteria and rules (saved as a template). The next /iq start begins at zero."
     )
 }
 
@@ -509,10 +533,6 @@ pub fn name_of(member: UserId, names: &[(UserId, String)]) -> &str {
         .find(|(user, _)| *user == member)
         .map(|(_, name)| name.as_str())
         .unwrap_or(UNKNOWN_MEMBER)
-}
-
-fn given_reason(reason: Option<&str>) -> Option<&str> {
-    reason.map(str::trim).filter(|reason| !reason.is_empty())
 }
 
 fn shown_end(end_unix: i64) -> i64 {
@@ -558,7 +578,6 @@ pub const BLANK_DESCRIPTION: &str = "No criteria, rules or roles filled in";
 pub const CRITERION_PLACEHOLDER: &str = "Pick a criterion to edit or remove";
 pub const ROLES_PLACEHOLDER: &str = "Roles that can take part (pick any)";
 pub const JUDGES_PLACEHOLDER: &str = "Members who judge (pick any)";
-pub const REACTION_PLACEHOLDER: &str = "Judging reaction";
 pub const SET_DATES_LABEL: &str = crate::text::SET_DATES_LABEL;
 pub const RENAME_LABEL: &str = "Rename";
 pub const NEXT_CRITERIA_LABEL: &str = "Next: criteria";
@@ -577,7 +596,7 @@ pub const BASICS_PROMPT: &str =
     "Press Set dates to type the first and last day. A template is optional.";
 pub const NO_TEMPLATES: &str =
     "No past competitions yet, so there are no templates. The last 10 are kept once you have some.";
-pub const TEMPLATES_OFFERED: &str = "Templates are the last 10 competitions. Picking one copies its criteria, rules, roles, judges and reaction.";
+pub const TEMPLATES_OFFERED: &str = "Templates are the last 10 competitions. Picking one copies its criteria, rules, roles, judges and marks.";
 pub const CRITERIA_INTRO: &str =
     "Each criterion is something a player posts screenshots for. The name is what they type.";
 pub const NO_CRITERIA: &str = "No criteria yet. Add at least one.";
@@ -587,6 +606,8 @@ pub const NO_RULES: &str = "No rules written yet.";
 pub const WHO_ROLES_INTRO: &str = "Only members with a picked role can see the competition's channels, and the start announcement pings those roles.";
 pub const WHO_JUDGES_INTRO: &str =
     "Judges get the @IQ-Judge role. Only their reaction awards points.";
+pub const WHO_MARKS_INTRO: &str = "Press a mark button and react to my prompt with any emoji to change it. Denied goes on posts to fix, judges react with Awarded to give points, and Confirm awarded shows the points counted.";
+pub const JUDGE_LOG_BRANCH: &str = "> #iq-judge-log \u{b7} judges only, a record of judge actions";
 pub const STARTING_CREATES: &str = "Starting creates:";
 pub const SUBMISSIONS_BRANCH: &str = "> #iq-submissions \u{b7} players post here";
 pub const ROLE_BELOW_JUDGE: &str = "I can't hand out @IQ-Judge: my role sits below it. Drag my role above @IQ-Judge in Server Settings, then press Start again.";
@@ -656,7 +677,7 @@ pub fn ends_line(zone: &str) -> String {
 
 pub fn template_copied(template: &str) -> String {
     format!(
-        "Criteria, rules, roles, judges and reaction copied from {}. Change any of them in the next steps.",
+        "Criteria, rules, roles, judges and marks copied from {}. Change any of them in the next steps.",
         escape(template)
     )
 }
@@ -710,6 +731,29 @@ pub fn rules_not_shown(characters: usize) -> String {
 
 pub fn mark_label(mark: &Mark) -> String {
     mark.text()
+}
+
+pub fn mark_field_name(field: MarkField) -> &'static str {
+    match field {
+        MarkField::Denied => "Denied",
+        MarkField::Awarded => "Awarded",
+        MarkField::Confirm => "Confirm awarded",
+    }
+}
+
+pub fn mark_prompt(owner: UserId, field: MarkField) -> String {
+    format!(
+        "{} react to this message with the emoji for {}.",
+        user(owner),
+        mark_field_name(field)
+    )
+}
+
+pub fn mark_repeated(field: MarkField) -> String {
+    format!(
+        "That emoji is already the {} mark. Pick a different one.",
+        mark_field_name(field)
+    )
 }
 
 pub fn review_runs(first_day: Date, last_day: Date, zone: &str, criteria: usize) -> String {
@@ -787,7 +831,9 @@ pub fn setup_refusal(refusal: &SetupRefusal) -> String {
             "The last day must come after the first day.".to_owned()
         }
         SetupRefusal::DatesTooFar => "The last day must be within 12 months of today.".to_owned(),
-        SetupRefusal::ReactionUnknown => "Pick a judging reaction from the menu.".to_owned(),
+        SetupRefusal::MarkRepeated => {
+            "That emoji is already another mark. Pick a different one.".to_owned()
+        }
         SetupRefusal::FixedAfterStart => {
             "A started competition keeps its template, name, dates and time zone.".to_owned()
         }
