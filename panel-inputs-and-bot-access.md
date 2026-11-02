@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T21:55:43.304Z
+Updated: 2026-11-02T22:01:16.922Z
 Next ids: c2 D8 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat/panel-inputs-and-bot-access) with its fixes at d1dce61 on mitosis/access-roles; fix-check is clean against review/access-roles.record.json (criteria 5.1-5.4 only, since fix-check refuses 5.23, which has no test rows). panel-inputs is gated (30 of 30 pass, reconcile clean, gated commit d2a626a) and at 1db7c8f on mitosis/panel-inputs, holding the merged access-roles fixes and time_zone added to the three tests that pinned the old option lists; its review round 1 (base d1dce61, criteria 5.5-5.14, 26 files) has its scoped suite passing (893 passed, 0 failed; the full run fails only on iq-judging's locked files, as the base does) and its three reviewers running, with one standards candidate K1 (the 0011 down migration's DROP TABLE). iq-judging is planned clean (lanes iq-marks-store and iq-judging-discord) and building from mitosis/panel-inputs.
+access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat/panel-inputs-and-bot-access) with its fixes at d1dce61 on mitosis/access-roles; fix-check is clean against review/access-roles.record.json (criteria 5.1-5.4 only, since fix-check refuses 5.23, which has no test rows). panel-inputs is gated (30 of 30 pass, reconcile clean, gated commit d2a626a) and at 1db7c8f on mitosis/panel-inputs, holding the merged access-roles fixes and time_zone added to the three tests that pinned the old option lists; its review round 1 (base d1dce61, criteria 5.5-5.14, 26 files) has its scoped suite passing (893 passed, 0 failed; the full run fails only on iq-judging's locked files, as the base does) and its six candidates with the validator: C1 MEDIUM with_typed_dates measures today in the server zone, not the draft's zone; C2 LOW dead refusals and zone texts left after the menus went; C3-C5 LOW duplicated weekday mapping, typed-date input and zone_store column checks; T1 the 0011 down migration's DROP TABLE. Conformance and security found nothing. iq-judging is planned clean (lanes iq-marks-store and iq-judging-discord) and building from mitosis/panel-inputs.
 
 ## Next step
 
