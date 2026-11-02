@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T22:09:38.517Z
+Updated: 2026-11-02T22:09:56.175Z
 Next ids: c2 D8 R1 S1
 
 ## Goal
@@ -44,4 +44,5 @@ Needs: D5, D7.
 - Review helpers: /private/tmp/claude-501/-Users-satanshumishra-Documents-DevLabs-barnacle/54bd6046-bf94-46f7-a742-87b3d50c95da/scratchpad/render_briefs.py renders a round's briefs; ~/.mitosis/runs/barnacle/panel-inputs-and-bot-access/base is the base worktree for pipeline suite
 - Security readings for the final report also include /barnacle's server-side required_permissions ADMINISTRATOR (lane 1 assumption).
 - Owner feedback items a-h and the access-role request are in the session transcript of 2026-11-02; the live-probe log is /private/tmp/claude-501/-Users-satanshumishra-Documents-DevLabs-barnacle/54bd6046-bf94-46f7-a742-87b3d50c95da/scratchpad/live-probe/bot.log
+- Run watcher: /private/tmp/claude-501/-Users-satanshumishra-Documents-DevLabs-barnacle/54bd6046-bf94-46f7-a742-87b3d50c95da/scratchpad/watch_runs.py prints each lane and MSP state change of the three runs; run it under Monitor and re-arm it every 30 minutes
 - Review state per run home: review/round-<n>/ holds each round's findings, verdicts and verdict; rounds.md holds one line per round; review/<msp>.record.json is the record cut to that MSP's criteria for pipeline fix-check
