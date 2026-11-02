@@ -258,18 +258,6 @@ fn says_night_or_season(text: &str) -> bool {
     lower.contains("night") || lower.contains("season")
 }
 
-fn option_values(options: &[serenity::CreateSelectMenuOption]) -> Vec<String> {
-    options
-        .iter()
-        .map(|option| {
-            serde_json::to_value(option).unwrap()["value"]
-                .as_str()
-                .unwrap()
-                .to_owned()
-        })
-        .collect()
-}
-
 #[test]
 fn a_draft_refuses_a_typed_time_that_is_not_hh_mm() {
     let draft = templated("Ranked Sprint");
