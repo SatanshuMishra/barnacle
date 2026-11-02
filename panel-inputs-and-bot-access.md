@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T23:05:36.070Z
+Updated: 2026-11-02T23:05:39.235Z
 Next ids: c2 D8 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat/panel-inputs-and-bot-access) with its fixes at d1dce61 on mitosis/access-roles; fix-check is clean against review/access-roles.record.json (criteria 5.1-5.4 only, since fix-check refuses 5.23, which has no test rows). panel-inputs (base d1dce61, criteria 5.5-5.14) is reviewed green in round 1 and its advisories C2-C4 are fixed at ad151bc on mitosis/panel-inputs, scoped tests and clippy pass, fix-check clean against review/panel-inputs.record.json. The validator rejected C1 (with_typed_dates counts today in the server's newest-event zone, not the draft's) only because main behaves the same; it goes in the final report as a pre-existing defect. iq-judging is building from mitosis/panel-inputs at 1db7c8f: both lanes are ok and its gate passed the with-work and reverted runs for all 22 properties and is in mutation; ad151bc must be merged into mitosis/iq-judging once it exists.
+access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat/panel-inputs-and-bot-access) with its fixes at d1dce61 on mitosis/access-roles; fix-check is clean against review/access-roles.record.json (criteria 5.1-5.4 only, since fix-check refuses 5.23, which has no test rows). panel-inputs (base d1dce61, criteria 5.5-5.14) is reviewed green in round 1 and its advisories C2-C4 are fixed at ad151bc on mitosis/panel-inputs, scoped tests and clippy pass, fix-check clean against review/panel-inputs.record.json. The validator rejected C1 (with_typed_dates counts today in the server's newest-event zone, not the draft's) only because main behaves the same; it goes in the final report as a pre-existing defect. iq-judging is building from mitosis/panel-inputs at 1db7c8f: both lanes are ok and its gate has run all 22 properties with and without the work and is in mutation; ad151bc must be merged into mitosis/iq-judging once it exists.
 
 ## Next step
 
