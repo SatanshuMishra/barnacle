@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T23:57:42.545Z
+Updated: 2026-11-02T23:58:16.483Z
 Next ids: c2 D8 R1 S1
 
 ## Goal
@@ -13,11 +13,11 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat/panel-inputs-and-bot-access) with its fixes at d1dce61 on mitosis/access-roles; fix-check is clean against review/access-roles.record.json (criteria 5.1-5.4 only, since fix-check refuses 5.23, which has no test rows). panel-inputs (base d1dce61, criteria 5.5-5.14) is reviewed green in round 1 and its advisories C2-C4 are fixed at ad151bc on mitosis/panel-inputs, scoped tests and clippy pass, fix-check clean against review/panel-inputs.record.json. The validator rejected C1 (with_typed_dates counts today in the server's newest-event zone, not the draft's) only because main behaves the same; it goes in the final report as a pre-existing defect. iq-judging is building from mitosis/panel-inputs at 1db7c8f: built and gated (22 of 22 pass; reconcile lists discord/commands.rs and tests/iq.rs as declared but unwritten, both harmless: commands.rs only lists the iq subcommands and tests/iq.rs never used the removed reaction), at c1bc979 on mitosis/iq-judging with mitosis/panel-inputs merged; its review round 1 (base ad151bc, criteria 5.15-5.23, 17 files) has its full suite passing (922 passed, 0 failed) and verdict diagnose. Blockers C1 (floor refuses additions), C2 (edited message rechecked at catch-up) and C3 (award line criterion from edited post) are fixed with receipts through 17942ad, and advisories C4-C6, C8, C9, S2 and S3 at a1bc768 (judge-log creation behind a lock with the store error propagated, one shared channel builder, one mark arm, mark_label gone, the points log line before the reply); clippy all-targets and the full bot tests pass and fix-check is clean. Round 2 (fix diff c1bc979..a1bc768, 9 files) has its briefs rendered at review/round-2/ and its suite running.
+access-roles is reviewed green at d1dce61 on mitosis/access-roles (base 425f25a on feat/panel-inputs-and-bot-access), and panel-inputs green at a69fbc7 on mitosis/panel-inputs (base d1dce61); their fix-checks run against records cut to their own criteria, since fix-check refuses 5.23, which has no test rows. The panel-inputs C1 rejection (with_typed_dates counts today in the server's newest-event zone, not the draft's) goes in the final report as a defect main already has. iq-judging (base ad151bc, criteria 5.15-5.23) is at a1bc768 on mitosis/iq-judging with every round 1 blocker and advisory fixed and fix-check clean; its mitosis reconcile lists discord/commands.rs and tests/iq.rs as declared but unwritten, both harmless. Its review round 2 (fix diff c1bc979..a1bc768) has its suite passing (927 passed, 0 failed) and code-reviewer and security-reviewer running.
 
 ## Next step
 
-When the iq-judging round 2 suite finishes, run code-reviewer and security-reviewer on the fix diff, then validator, record and verdict; on green, record the ship boundary and ship all three MSPs as stacked pull requests.
+When the iq-judging round 2 reviewers finish, run the validator, record and verdict; on green, record the ship boundary and ship all three MSPs as stacked pull requests.
 
 Needs: D5, D7.
 
