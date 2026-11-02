@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T10:17:31.978Z
+Updated: 2026-11-02T10:26:19.997Z
 Next ids: c3 D6 R5 S1
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-The owner merged #53 into feat/event-panel-and-iq (eef145a), which holds the C1 fix that mitosis/iq-competition (6b96b2d, cut at aa274cf) lacks. MSP iq-competition is built and committed but held back gate-failed: 21 of 55 properties judged weak (R4). IQ review round 1 runs by hand (the drive is stopped): diff, obligations, standards (S1 LOW), gate findings (G1-G21 LOW) are written under review/round-1, and the round suite passes with no findings; code-reviewer, conformance-auditor and security-reviewer run in the background, as does a full-suite run over the 24 sampled mutants.
+The owner merged #53 into feat/event-panel-and-iq (eef145a), which holds the C1 fix that mitosis/iq-competition (6b96b2d, cut at aa274cf) lacks. MSP iq-competition is built and committed but held back gate-failed: 21 of 55 properties judged weak (R4). IQ review round 1 runs by hand (the drive is stopped): diff, obligations, standards (S1 LOW), the round suite passes with no findings; round 1's 32 candidates (code-reviewer C1-C7 with C1 and C2 MEDIUM, security-reviewer S1-S3 LOW, standards S4, gate G1-G21 carrying the mutant evidence, conformance-auditor none) sit in review/round-1/iq-competition.candidates.md, and the validator judges them in the background. Of the 24 sampled mutants the full suite kills all but iq.rs:14 ADJUSTMENT_LIMIT ±1, iq_store.rs:22 BUSY_TIMEOUT ±1 and iq_store.rs:25 SNOWFLAKE_TIME_LIMIT +1.
 
 ## Next step
 
