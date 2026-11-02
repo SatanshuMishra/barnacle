@@ -510,7 +510,9 @@ impl Draft {
         if last_day < first_day {
             return Err(Refusal::LastDayBeforeFirst);
         }
-        if !within_window_of(first_day, last_day, today) {
+        let typed = Span::new(first_day, last_day, Schedule::clan_battles())
+            .ok_or(Refusal::LastDayBeforeFirst)?;
+        if !within_window(&typed, now_unix) {
             return Err(Refusal::DatesTooFar);
         }
         Ok(Draft {
@@ -1364,10 +1366,6 @@ fn zone_today(server_zones: &[String], now_unix: i64) -> Option<Date> {
                 .session_at(*day)
                 .is_some_and(|session| session.start_unix() <= now_unix)
         })
-}
-
-fn within_window_of(first_day: Date, last_day: Date, today: Date) -> bool {
-    Span::new(first_day, last_day, Schedule::clan_battles()).is_some_and(|span| span.near(today))
 }
 
 fn within_window(span: &Span, now_unix: i64) -> bool {

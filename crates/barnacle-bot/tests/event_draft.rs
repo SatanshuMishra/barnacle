@@ -50,6 +50,7 @@ const BEFORE_THE_SESSIONS: i64 = 1_791_900_000;
 const OPENED_AT_MS: u64 = 1_791_900_000_000;
 const AFTER_THE_ONE_START: i64 = 1_792_030_000;
 const EVENING_IN_EDMONTON: i64 = 1_793_584_800;
+const AFTERNOON_IN_EDMONTON: i64 = 1_793_569_140;
 
 fn day(text: &str) -> Date {
     parse_day(text).unwrap()
@@ -859,6 +860,31 @@ fn the_day_menus_count_today_in_the_servers_zone() {
             .with_typed_dates("2026-11-01", "2026-11-03", EVENING_IN_EDMONTON)
             .is_ok()
     );
+}
+
+#[test]
+fn typed_dates_measure_the_window_from_the_same_day_as_create() {
+    let tokyo = create("Ranked Sprint", None)
+        .unwrap()
+        .with_server_zones(strings(&["Asia/Tokyo"]));
+    assert_eq!(
+        tokyo.with_typed_dates("2027-04-26", "2027-05-02", AFTERNOON_IN_EDMONTON),
+        Err(Refusal::DatesTooFar)
+    );
+    let draft = tokyo
+        .with_typed_dates("2027-04-26", "2027-05-01", AFTERNOON_IN_EDMONTON)
+        .unwrap()
+        .with_weekdays(&strings(&["mon"]))
+        .unwrap()
+        .with_hour("17")
+        .unwrap()
+        .with_minute("00")
+        .unwrap()
+        .with_hours("4")
+        .unwrap()
+        .with_zone("Asia/Tokyo")
+        .unwrap();
+    assert!(draft.ready(AFTERNOON_IN_EDMONTON, &[]).is_ok());
 }
 
 #[test]
