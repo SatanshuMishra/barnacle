@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T19:45:59.181Z
+Updated: 2026-11-02T19:46:01.136Z
 Next ids: c2 D7 R1 S1
 
 ## Goal
@@ -17,9 +17,9 @@ Stage 2, building run 1 of 3 (access-roles) on FEATURE branch feat/panel-inputs-
 
 ## Next step
 
-When the access-roles build finishes, read build.out's last JSON line in ~/.mitosis/barnacle/panel-inputs-and-bot-access, write lane Assumption notes to review/access-roles.assumptions.txt, run pipeline commit-records into its worktree, then plan and build ~/.mitosis/barnacle/panel-inputs (from mitosis/access-roles) while access-roles goes through review round 1.
+While ~/.mitosis/barnacle/panel-inputs/run.zsh builds, run access-roles review round 1 in its worktree ~/.mitosis/runs/barnacle/panel-inputs-and-bot-access/trees/access-roles (base feat/panel-inputs-and-bot-access): review-diff, obligations, suite, standard-checks, then code-reviewer, conformance-auditor and security-reviewer through pipeline agent.
 
-Needs: D4, D5.
+Needs: D5, D6.
 
 ## Decisions in force
 
