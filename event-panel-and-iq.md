@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T11:05:33.292Z
+Updated: 2026-11-02T11:07:00.852Z
 Next ids: c3 D6 R5 S1
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-mitosis/iq-competition is at d181466 (pushed), which fixes every round-2 finding on top of 29f9d49, the merge of feat/event-panel-and-iq (eef145a, holding #53). MSP iq-competition is held back gate-failed: 21 of 55 properties judged weak (R4). IQ review runs by hand, because the drive is stopped. At d181466: 838 tests pass, clippy and fmt clean, pipeline fix-check passes against 29f9d49, and every selecting check prints nothing. Rounds 1 and 2 are in the run home's rounds.md.
+mitosis/iq-competition is at 5c5c38c (pushed), which fixes every round-2 finding and marks a server caught up when a competition starts or resumes there, on top of 29f9d49, the merge of feat/event-panel-and-iq (eef145a, holding #53). MSP iq-competition is held back gate-failed: 21 of 55 properties judged weak (R4). IQ review runs by hand, because the drive is stopped. At d181466: 838 tests pass, clippy and fmt clean, pipeline fix-check passes against 29f9d49, and every selecting check prints nothing. Rounds 1 and 2 are in the run home's rounds.md.
 
 ## Next step
 
