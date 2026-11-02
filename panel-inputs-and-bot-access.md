@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T21:53:53.842Z
+Updated: 2026-11-02T21:54:34.407Z
 Next ids: c2 D8 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat/panel-inputs-and-bot-access); its two confirmed advisories (C1 /announce Send organiser re-check, C2 a test rolling back 0010) and the UPDATES_NOT_SET_UP rewording are fixed on mitosis/access-roles at d1dce61, covering tests and clippy pass, fix-check clean against review/access-roles.record.json (criteria 5.1-5.4 only, since fix-check refuses 5.23, which has no test rows). The fixes are not yet in mitosis/panel-inputs, which the panel-inputs build is still producing from d461aab: all three lanes are ok and committed on mitosis/panel-inputs at d2a626a; its gate passed the with-work and reverted runs for all 30 properties and is in mutation, and the branch stays untouched until the gate ends; review must add time_zone to tests/discord.rs:483 and tests/event_commands.rs:20, which pin the old /event option lists outside every write-set (worker-rules.txt in the panel-inputs and iq-judging homes tells Workers to report such tests in notes rather than fail). iq-judging waits for mitosis/panel-inputs.
+access-roles is reviewed green in round 1 (base 425f25a, the lock commit on feat/panel-inputs-and-bot-access) with its fixes at d1dce61 on mitosis/access-roles; fix-check is clean against review/access-roles.record.json (criteria 5.1-5.4 only, since fix-check refuses 5.23, which has no test rows). panel-inputs is gated (30 of 30 pass, reconcile clean, gated commit d2a626a) and at 1db7c8f on mitosis/panel-inputs, holding the merged access-roles fixes and time_zone added to the three tests that pinned the old option lists; its review round 1 (base d1dce61, criteria 5.5-5.14, 26 files) is running its suite, with one standards candidate K1 (the 0011 down migration's DROP TABLE). iq-judging is planned clean (lanes iq-marks-store and iq-judging-discord) and building from mitosis/panel-inputs.
 
 ## Next step
 
@@ -28,7 +28,6 @@ Needs: D5, D7.
 - D3 An award the startup rescan counts gets the same judge log line as a live award, with no offline tag (owner).
 - D4 Interphase hand-off: build the spec as three stacked MSPs: Build now: cut the FEATURE branch, set up the run home, run --plan-only, then build the three MSPs in order access-roles, panel-inputs, iq-judging.
 - D5 Build the three MSPs as three stacked mitosis runs: Three stacked runs in order. The first run's check-author writes all eight locked test files; later runs build from the previous MSP branch, and a fix to an earlier MSP is merged into each MSP stacked on it.
-- D6 Hand-off of panel-inputs: build the second stacked run from mitosis/access-roles: Build panel-inputs now from mitosis/access-roles; start access-roles review round 1 alongside it.
 - D7 Hand-off of iq-judging: build the third stacked run from mitosis/panel-inputs: Build iq-judging now from mitosis/panel-inputs; run panel-inputs review round 1 alongside it.
 
 ## Open risks
