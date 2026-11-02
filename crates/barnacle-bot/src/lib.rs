@@ -1,3 +1,5 @@
+pub mod access;
+pub mod access_store;
 pub mod attendance;
 pub mod attendance_store;
 pub mod config;

@@ -20,6 +20,8 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 
+use crate::access_store::AccessStore;
+use crate::access_store::AccessStoreError;
 use crate::attendance_store::Attendance;
 use crate::attendance_store::AttendanceError;
 use crate::config::Config;
@@ -141,6 +143,14 @@ pub enum StartupError {
         #[source]
         source: IqStoreError,
     },
+    #[error(
+        "the organiser roles table is missing from {path}; back the file up, then add it with `sqlite3 {path} < migrations/0010_organiser_roles.sql`"
+    )]
+    Access {
+        path: PathBuf,
+        #[source]
+        source: AccessStoreError,
+    },
 }
 
 fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
@@ -161,6 +171,7 @@ pub struct Stores {
     pub voice: VoiceStore,
     pub updates: UpdatesStore,
     pub iq: IqStore,
+    pub access: AccessStore,
 }
 
 pub struct Loaded {
@@ -284,9 +295,15 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
             source,
         })?;
     let attendance = attendance?;
-    let iq = IqStore::with_pool(pool)
+    let iq = IqStore::with_pool(pool.clone())
         .await
         .map_err(|source| StartupError::Iq {
+            path: path.to_owned(),
+            source,
+        })?;
+    let access = AccessStore::with_pool(pool)
+        .await
+        .map_err(|source| StartupError::Access {
             path: path.to_owned(),
             source,
         })?;
@@ -296,6 +313,7 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
         voice,
         updates,
         iq,
+        access,
     })
 }
 
