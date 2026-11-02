@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T02:06:33.167Z
+Updated: 2026-11-02T02:07:23.801Z
 Next ids: c3 D6 R4 S1
 
 ## Goal
@@ -9,7 +9,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Done when
 
-- [ ] c1 The /event pull request is open, reviewed green and assigned to the owner
+- [x] c1 The /event pull request is open, reviewed green and assigned to the owner evidence: https://github.com/SatanshuMishra/barnacle/pull/53 (mitosis/event-panel at 8894afe into feat/event-panel-and-iq; round 3 verdict green; 25/25 acceptance checks pass at 8894afe; assigned to SatanshuMishra; review comment posted)
 - [ ] c2 The IQ Competition pull request is open, reviewed green and assigned to the owner
 
 ## Where things stand
