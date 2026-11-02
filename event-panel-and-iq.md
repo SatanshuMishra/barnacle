@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T02:07:23.801Z
+Updated: 2026-11-02T02:07:30.687Z
 Next ids: c3 D6 R4 S1
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-The event-panel-and-iq drive is stopped at ship (no ship boundary recorded). MSP event-panel is at 8894afe on mitosis/event-panel (local, unpushed): round 2's confirmed C1 (typed-dates window zone mismatch) is fixed there with receipt 6d6dba9, fix-check clean. Review round 3: code and security reviewers found nothing, the suite's U1 is dropped as the base-shared IQ compile failure, release-check passes, and a validator is judging carried obligation P1 (C1) before pipeline record. Slug iq-competition is building MSP iq-competition stacked on mitosis/event-panel at aa274cf; lanes iq-rules, iq-text and iq-store are done, iq-setup and iq-discord remain. The check-author's API readings (back() returns the draft, every IqStore call returns Result, SetupDraft accessors) bind the IQ steps.
+mitosis/event-panel is pushed at 8894afe; it holds the C1 fix (6d6dba9, 8894afe) that mitosis/iq-competition, cut at aa274cf, lacks. Slug iq-competition is building MSP iq-competition; lanes iq-rules, iq-text, iq-store and iq-setup are done, iq-discord remains. The check-author's API readings (back() returns the draft, every IqStore call returns Result, SetupDraft accessors) bind the IQ steps.
 
 ## Next step
 
