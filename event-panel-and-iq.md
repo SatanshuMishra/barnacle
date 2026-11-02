@@ -1,7 +1,7 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T10:16:37.429Z
-Next ids: c3 D6 R4 S1
+Updated: 2026-11-02T10:16:46.270Z
+Next ids: c3 D6 R5 S1
 
 ## Goal
 
@@ -33,6 +33,7 @@ Needs: D1, D4, R2, R3, R4.
 
 - R2 mitosis fuses Steps sharing a file into one MSP, so the IQ Competition must be a second run stacked on the event-panel MSP branch; a fix round on event-panel after the IQ run starts would need merging into the IQ branch. Bears on c2.
 - R3 pipeline 0.12.0 bugs worked around by hand: gate-findings refuses mitosis 0.10.1's null gate reasons, and pipeline suite cannot fingerprint Rust compile errors, so a failure the base shares reads as new (event-panel's U1 was dropped on per-target evidence in review/round-1/event-panel.suite-base-comparison.txt); and a drive restarted after a review-step halt loses the reviewers' findings; the drive's 14400-second run limit is shorter than mitosis's mutant gate on 55 Rust tests, and mitosis keeps no partial gate, so a killed gate restarts from zero; pipeline fix-check refuses a record with an unproven criterion that has no acceptance line. All belong in the final report as plugin bugs.
+- R4 mitosis 0.10.1 samples Rust mutants untraced, taking the first 12 added lines in file order (top-of-file constants, an SQLite busy timeout, test-file generics), so 21 IQ properties read weak without a mutant in the code they exercise; the held-back MSP ships only with --gate-classes, and BUSY_TIMEOUT ±1 is a mutant no test can observe. Bears on c2; also a plugin bug for the final report.
 
 ## Settled, do not reopen
 
