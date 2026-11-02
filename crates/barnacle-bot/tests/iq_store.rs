@@ -582,3 +582,16 @@ async fn a_recorded_post_reads_as_recorded_until_forgotten() {
     store.forget(november.id, 900).await.unwrap();
     assert!(!store.recorded(november.id, 900).await.unwrap());
 }
+
+#[tokio::test]
+async fn an_awarded_post_keeps_the_criterion_it_was_recorded_with() {
+    let store = store().await;
+    let november = running(&store).await;
+    kraken_posted(&store, november.id, 900, PLAYER).await;
+    store.award(900, JUDGE, AWARDED_AT_MS).await.unwrap();
+    assert_eq!(
+        store.criterion(900).await.unwrap(),
+        Some("Drunken Kraken".to_owned())
+    );
+    assert_eq!(store.criterion(902).await.unwrap(), None);
+}
