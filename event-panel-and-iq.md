@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T10:47:22.942Z
+Updated: 2026-11-02T10:47:43.675Z
 Next ids: c3 D6 R5 S1
 
 ## Goal
@@ -14,13 +14,13 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-The owner merged #53 into feat/event-panel-and-iq (eef145a), which holds the C1 fix that mitosis/iq-competition (6b96b2d, cut at aa274cf) lacks. MSP iq-competition is built and committed but held back gate-failed: 21 of 55 properties judged weak (R4). IQ review runs by hand (the drive is stopped); round 1 (verdict diagnose) is fixed on mitosis/iq-competition at ef403f2: 832 tests pass, clippy and fmt clean, pipeline fix-check passes, and both diagnoses' selecting checks print nothing. S4 and G1-G21 were rejected. The new limit tests kill every sampled mutant except iq_store.rs:22 BUSY_TIMEOUT ±1, which no test can observe.
+mitosis/iq-competition is at 29f9d49, which merges feat/event-panel-and-iq (eef145a, holding #53) into the round-1 fixes. MSP iq-competition is built and committed but held back gate-failed: 21 of 55 properties judged weak (R4). IQ review runs by hand, because the drive is stopped; round 1 (verdict diagnose) is fixed at ef403f2: 832 tests pass, clippy and fmt clean, pipeline fix-check passes, and both diagnoses' selecting checks print nothing. S4 and G1-G21 were rejected. The new limit tests kill every sampled mutant except iq_store.rs:22 BUSY_TIMEOUT ±1, which no test can observe.
 
 ## Next step
 
-Merge origin/feat/event-panel-and-iq into mitosis/iq-competition and review ef403f2 plus the merge as round 2 (code-reviewer and security-reviewer on the fix diff, with the round-1 diagnoses); drive it to green; write --gate-classes covered-elsewhere for the 21 weak properties, naming BUSY_TIMEOUT as unobservable, for the ship run; open the pull request against feat/event-panel-and-iq.
+Review 6b96b2d..29f9d49 as round 2 (code-reviewer and security-reviewer on the fix diff, with the round-1 diagnoses); drive it to green; write --gate-classes covered-elsewhere for the 21 weak properties, naming BUSY_TIMEOUT as unobservable, for the ship run; open the pull request against feat/event-panel-and-iq.
 
-Needs: D1, D4, R2, R3, R4.
+Needs: D1, D4, R3, R4.
 
 ## Decisions in force
 
@@ -31,7 +31,6 @@ Needs: D1, D4, R2, R3, R4.
 
 ## Open risks
 
-- R2 mitosis fuses Steps sharing a file into one MSP, so the IQ Competition must be a second run stacked on the event-panel MSP branch; a fix round on event-panel after the IQ run starts would need merging into the IQ branch. Bears on c2.
 - R3 pipeline 0.12.0 bugs worked around by hand: gate-findings refuses mitosis 0.10.1's null gate reasons, and pipeline suite cannot fingerprint Rust compile errors, so a failure the base shares reads as new (event-panel's U1 was dropped on per-target evidence in review/round-1/event-panel.suite-base-comparison.txt); and a drive restarted after a review-step halt loses the reviewers' findings; the drive's 14400-second run limit is shorter than mitosis's mutant gate on 55 Rust tests, and mitosis keeps no partial gate, so a killed gate restarts from zero; pipeline fix-check refuses a record with an unproven criterion that has no acceptance line. All belong in the final report as plugin bugs.
 - R4 mitosis 0.10.1 samples Rust mutants untraced, taking the first 12 added lines in file order (top-of-file constants, an SQLite busy timeout, test-file generics), so 21 IQ properties read weak without a mutant in the code they exercise; the held-back MSP ships only with --gate-classes, and BUSY_TIMEOUT ±1 is a mutant no test can observe. Bears on c2; also a plugin bug for the final report.
 
