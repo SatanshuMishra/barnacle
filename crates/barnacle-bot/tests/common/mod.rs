@@ -242,9 +242,6 @@ pub fn every_refusal() -> Vec<Refusal> {
         Refusal::TemplateUnknown,
         Refusal::FirstDayPast,
         Refusal::MissingOptions(vec!["name", "first_day"]),
-        Refusal::StartFormat,
-        Refusal::HoursOutOfRange,
-        Refusal::ZoneUnknown,
         Refusal::WeekdaysInvalid,
         Refusal::TooManyRoles,
         Refusal::PanelUnknown,
@@ -289,9 +286,6 @@ pub fn every_refusal() -> Vec<Refusal> {
             | Refusal::TemplateUnknown
             | Refusal::FirstDayPast
             | Refusal::MissingOptions(_)
-            | Refusal::StartFormat
-            | Refusal::HoursOutOfRange
-            | Refusal::ZoneUnknown
             | Refusal::WeekdaysInvalid
             | Refusal::TooManyRoles
             | Refusal::PanelUnknown
