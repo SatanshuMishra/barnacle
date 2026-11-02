@@ -6,6 +6,7 @@ pub mod event_draft;
 pub mod failure;
 pub mod ids;
 pub mod info;
+pub mod iq;
 pub mod logging;
 pub mod lookup;
 pub mod panels;
