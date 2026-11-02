@@ -2276,9 +2276,9 @@ pub(super) async fn message_created(
     if !checkable(message) {
         return;
     }
-    let hold = data.iq_unsettled.hold(guild, message.id.get());
-    let scope = message_scope(guild, message);
     let channel = ChannelId::new(message.channel_id.get());
+    let hold = data.iq_unsettled.hold(channel, message.id.get());
+    let scope = message_scope(guild, message);
     let competition = match data.iq.by_submissions_channel(channel).await {
         Ok(Some(competition)) if competition.guild == guild => competition,
         Ok(_) => return,
@@ -2341,7 +2341,7 @@ async fn check_message(
 async fn seen(data: &Data, competition: &Competition, message: &serenity::Message, scope: &Scope) {
     let Some(ceiling) = data
         .iq_unsettled
-        .mark_ceiling(competition.guild, message.id.get())
+        .mark_ceiling(competition.submissions, message.id.get())
     else {
         return;
     };
@@ -2700,7 +2700,9 @@ async fn catch_up_one(
         seen(data, competition, message, &scope).await;
         return;
     }
-    let hold = data.iq_unsettled.hold(competition.guild, message.id.get());
+    let hold = data
+        .iq_unsettled
+        .hold(competition.submissions, message.id.get());
     let judged = check_message(
         data,
         http,

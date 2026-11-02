@@ -8,6 +8,7 @@ use barnacle_guess::UserId;
 use jiff::civil::Date;
 
 use crate::failure::Kind;
+use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::schedule::Zone;
 use crate::wiring::same_name;
@@ -177,8 +178,8 @@ pub struct Hold<'a> {
 }
 
 impl Unsettled {
-    pub fn hold(&self, guild: GuildId, message: u64) -> Hold<'_> {
-        let key = (guild.get(), message);
+    pub fn hold(&self, channel: ChannelId, message: u64) -> Hold<'_> {
+        let key = (channel.get(), message);
         self.held().insert(key);
         Hold {
             unsettled: self,
@@ -187,10 +188,10 @@ impl Unsettled {
         }
     }
 
-    pub fn mark_ceiling(&self, guild: GuildId, message: u64) -> Option<u64> {
+    pub fn mark_ceiling(&self, channel: ChannelId, message: u64) -> Option<u64> {
         let lowest = self
             .held()
-            .range((guild.get(), 0)..=(guild.get(), u64::MAX))
+            .range((channel.get(), 0)..=(channel.get(), u64::MAX))
             .next()
             .map(|(_, held)| *held);
         match lowest {

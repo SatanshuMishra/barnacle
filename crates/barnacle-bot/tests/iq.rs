@@ -423,7 +423,11 @@ fn the_last_seen_mark_stays_below_every_check_that_failed_or_is_still_running() 
 fn a_failed_check_in_another_channel_leaves_the_submissions_mark_free() {
     let unsettled = Unsettled::default();
     let submissions = ChannelId::new(42);
-    unsettled.hold(ChannelId::new(7), 2000).settle(Judged::Failed);
-    unsettled.hold(ChannelId::new(41), 2500).settle(Judged::Failed);
+    unsettled
+        .hold(ChannelId::new(7), 2000)
+        .settle(Judged::Failed);
+    unsettled
+        .hold(ChannelId::new(41), 2500)
+        .settle(Judged::Failed);
     assert_eq!(unsettled.mark_ceiling(submissions, 9000), Some(9000));
 }
