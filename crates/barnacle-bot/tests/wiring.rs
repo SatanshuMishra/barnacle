@@ -27,6 +27,7 @@ use barnacle_bot::wiring::AccessPanelPart;
 use barnacle_bot::wiring::ChannelAccess;
 use barnacle_bot::wiring::ChannelProblem;
 use barnacle_bot::wiring::EventChoice;
+use barnacle_bot::wiring::IqPanelPart;
 use barnacle_bot::wiring::LeaderboardRequest;
 use barnacle_bot::wiring::PanelPart;
 use barnacle_bot::wiring::PingAllowance;
@@ -1135,6 +1136,29 @@ fn the_removed_menu_parts_no_longer_read_back() {
         "barnacle-event:12:zone-modal",
     ] {
         assert_eq!(wiring::panel_part(id), None, "{id}");
+    }
+}
+
+#[test]
+fn the_iq_dates_parts_read_back_from_their_ids() {
+    for (id, part) in [
+        ("iq-panel:12:set-dates", IqPanelPart::SetDates),
+        ("iq-panel:12:dates-modal", IqPanelPart::DatesModal),
+    ] {
+        assert_eq!(wiring::iq_panel_part(id), Some((12, part)), "{id}");
+        assert_eq!(wiring::iq_panel_id(12, part), id);
+    }
+}
+
+#[test]
+fn the_removed_iq_menu_parts_no_longer_read_back() {
+    for id in [
+        "iq-panel:12:first-day",
+        "iq-panel:12:last-day",
+        "iq-panel:12:zone",
+        "iq-panel:12:zone-modal",
+    ] {
+        assert_eq!(wiring::iq_panel_part(id), None, "{id}");
     }
 }
 

@@ -47,10 +47,8 @@ pub use crate::panels::PANEL_LIFETIME_MS;
 pub type Drafts = panels::Drafts<Draft>;
 
 pub const ROLE_LIMIT: usize = ROLE_MENU_MAX as usize;
-pub const ANOTHER_ZONE: &str = "other";
 pub const FIRST_DAY_INPUT: &str = "first";
 pub const LAST_DAY_INPUT: &str = "last";
-pub const ZONE_INPUT: &str = "zone";
 pub const START_INPUT: &str = "start";
 pub const END_INPUT: &str = "end";
 
@@ -58,24 +56,12 @@ const MILLIS_PER_SECOND: u64 = 1_000;
 const CLOCK_OUT_OF_RANGE: &str = "the clock reads a time outside the supported calendar";
 const ROLE_MENU_MAX: u8 = 5;
 const MENU_OPTIONS: usize = 25;
-const ZONE_MENU_ZONES: usize = MENU_OPTIONS - 1;
 const DAY_INPUT_MAX: u16 = 32;
 const TIME_INPUT_MAX: u16 = 16;
 const MINUTES_PER_HOUR: i64 = 60;
 const MINUTES_PER_DAY: i64 = 24 * MINUTES_PER_HOUR;
 const DAYS_PER_WEEK: usize = 7;
 const CLAN_BATTLES: &str = "Clan Battles";
-const COMMON_ZONES: [&str; 9] = [
-    "America/Vancouver",
-    "America/Edmonton",
-    "America/Denver",
-    "America/Chicago",
-    "America/Toronto",
-    "America/New_York",
-    "Europe/London",
-    "Europe/Berlin",
-    "UTC",
-];
 const WEEKDAY_VALUES: [(Weekday, &str); 7] = [
     (Weekday::Monday, "mon"),
     (Weekday::Tuesday, "tue"),
@@ -950,37 +936,6 @@ pub fn day_options(
         .collect()
 }
 
-pub fn zone_options(
-    server_zones: &[String],
-    picked: Option<&str>,
-) -> Vec<serenity::CreateSelectMenuOption> {
-    let listed = once_each(
-        server_zones
-            .iter()
-            .filter_map(|name| Zone::find(name))
-            .map(|zone| zone.name().to_owned())
-            .chain(COMMON_ZONES.iter().map(|name| (*name).to_owned())),
-    );
-    let zones: Vec<String> = match picked {
-        Some(zone) if !listed.iter().any(|name| name == zone) => {
-            std::iter::once(zone.to_owned()).chain(listed).collect()
-        }
-        _ => listed,
-    };
-    zones
-        .into_iter()
-        .take(ZONE_MENU_ZONES)
-        .map(|name| {
-            let chosen = picked == Some(name.as_str());
-            serenity::CreateSelectMenuOption::new(name.clone(), name).default_selection(chosen)
-        })
-        .chain(std::iter::once(
-            serenity::CreateSelectMenuOption::new(text::ANOTHER_ZONE_LABEL, ANOTHER_ZONE)
-                .description(text::ANOTHER_ZONE_DESCRIPTION),
-        ))
-        .collect()
-}
-
 pub fn dates_modal(panel: u64) -> serenity::CreateModal {
     serenity::CreateModal::new(
         wiring::panel_id(panel, PanelPart::DatesModal),
@@ -1313,11 +1268,11 @@ fn zone_today(server_zones: &[String], now_unix: i64) -> Option<Date> {
         })
 }
 
-fn within_window(span: &Span, now_unix: i64) -> bool {
+pub(crate) fn within_window(span: &Span, now_unix: i64) -> bool {
     schedule::today(now_unix).is_some_and(|today| span.near(today))
 }
 
-fn read_day(text: &str) -> Result<Date, Refusal> {
+pub(crate) fn read_day(text: &str) -> Result<Date, Refusal> {
     schedule::parse_day(without_weekday(text.trim())).ok_or(Refusal::DateFormat)
 }
 

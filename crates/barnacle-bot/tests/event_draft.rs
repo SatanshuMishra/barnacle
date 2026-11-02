@@ -357,64 +357,6 @@ fn a_command_refuses_an_abbreviated_time_zone() {
 }
 
 #[test]
-fn the_zone_menu_lists_a_picked_zone_first_and_stays_within_25() {
-    let server: Vec<String> = [
-        "Asia/Tokyo",
-        "Asia/Seoul",
-        "Asia/Shanghai",
-        "Asia/Kolkata",
-        "Asia/Dubai",
-        "Asia/Bangkok",
-        "Asia/Jakarta",
-        "Asia/Manila",
-        "Asia/Karachi",
-        "Australia/Sydney",
-        "Australia/Perth",
-        "Europe/Paris",
-        "Europe/Madrid",
-        "Europe/Athens",
-        "Africa/Cairo",
-        "America/Lima",
-        "America/Bogota",
-        "America/Havana",
-        "Nowhere/Gone",
-    ]
-    .map(str::to_owned)
-    .to_vec();
-    let values = option_values(&event_draft::zone_options(
-        &server,
-        Some("Pacific/Auckland"),
-    ));
-    assert_eq!(values.len(), 25);
-    assert_eq!(values[0], "Pacific/Auckland");
-    assert_eq!(values[1], "Asia/Tokyo");
-    assert_eq!(values[18], "America/Havana");
-    assert_eq!(values[19], "America/Vancouver");
-    assert_eq!(values[23], "America/Toronto");
-    assert_eq!(values[24], "other");
-    assert!(!values.contains(&"Nowhere/Gone".to_owned()));
-}
-
-#[test]
-fn the_zone_menu_marks_a_listed_picked_zone_in_place() {
-    let options: Vec<serde_json::Value> = event_draft::zone_options(&[], Some("UTC"))
-        .iter()
-        .map(|option| serde_json::to_value(option).unwrap())
-        .collect();
-    assert_eq!(options.len(), 10);
-    assert_eq!(options[8]["value"], "UTC");
-    assert_eq!(options[8]["default"], true);
-    assert_eq!(options[9]["description"], "Type any zone");
-    assert_eq!(
-        options
-            .iter()
-            .filter(|option| option["default"] == true)
-            .count(),
-        1
-    );
-}
-
-#[test]
 fn only_running_events_lend_their_zones() {
     let finished = event(
         4,

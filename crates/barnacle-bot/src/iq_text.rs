@@ -542,16 +542,14 @@ fn channel(id: ChannelId) -> String {
 }
 
 pub const SETUP_STEPS: usize = 5;
-pub const TEMPLATE_PLACEHOLDER: &str = "Start from";
+pub const TEMPLATE_PLACEHOLDER: &str = "Start blank or pick a template";
 pub const BLANK_LABEL: &str = "Start blank";
 pub const BLANK_DESCRIPTION: &str = "No criteria, rules or roles filled in";
-pub const FIRST_DAY_PLACEHOLDER: &str = "First day";
-pub const LAST_DAY_PLACEHOLDER: &str = "Last day";
-pub const ZONE_PLACEHOLDER: &str = "Time zone for the end";
 pub const CRITERION_PLACEHOLDER: &str = "Pick a criterion to edit or remove";
 pub const ROLES_PLACEHOLDER: &str = "Roles that can take part (pick any)";
 pub const JUDGES_PLACEHOLDER: &str = "Members who judge (pick any)";
 pub const REACTION_PLACEHOLDER: &str = "Judging reaction";
+pub const SET_DATES_LABEL: &str = crate::text::SET_DATES_LABEL;
 pub const RENAME_LABEL: &str = "Rename";
 pub const NEXT_CRITERIA_LABEL: &str = "Next: criteria";
 pub const NEXT_RULES_LABEL: &str = "Next: rules";
@@ -565,7 +563,8 @@ pub const START_LABEL: &str = "Start competition";
 pub const SAVE_CHANGES_LABEL: &str = "Save changes";
 pub const BACK_LABEL: &str = "Back";
 pub const CANCEL_LABEL: &str = "Cancel";
-pub const BASICS_PROMPT: &str = "Pick where to start from and the dates it runs.";
+pub const BASICS_PROMPT: &str =
+    "Press Set dates to type the first and last day. A template is optional.";
 pub const NO_TEMPLATES: &str =
     "No past competitions yet, so there are no templates. The last 10 are kept once you have some.";
 pub const TEMPLATES_OFFERED: &str = "Templates are the last 10 competitions. Picking one copies its criteria, rules, roles, judges and reaction.";
@@ -592,8 +591,11 @@ pub const CRITERION_DESCRIPTION_LABEL: &str = "What earns it";
 pub const CRITERION_POINTS_LABEL: &str = "Points, a whole number";
 pub const RULES_MODAL_TITLE: &str = "Rules";
 pub const RULES_INPUT_LABEL: &str = "Rules, up to 4000 characters";
-pub const ZONE_MODAL_TITLE: &str = crate::text::ZONE_MODAL_TITLE;
-pub const ZONE_INPUT_LABEL: &str = crate::text::ZONE_INPUT_LABEL;
+pub const DATES_MODAL_TITLE: &str = "Competition dates";
+pub const FIRST_DAY_INPUT_LABEL: &str = crate::text::FIRST_DAY_INPUT_LABEL;
+pub const LAST_DAY_INPUT_LABEL: &str = crate::text::LAST_DAY_INPUT_LABEL;
+pub const FIRST_DAY_EXAMPLE: &str = "2026-11-02";
+pub const LAST_DAY_EXAMPLE: &str = "2026-11-30";
 
 pub fn setup_heading(name: &str, editing: bool) -> String {
     match editing {
@@ -634,12 +636,12 @@ pub fn competition_name(first_day: Date) -> String {
     format!("{} IQ", first_day.strftime("%B"))
 }
 
-pub fn basics_line(first_day: Date, last_day: Date, zone: &str) -> String {
-    format!(
-        "Runs {} to {}, ending at 23:59 {zone}.",
-        day_label(first_day),
-        day_label(last_day)
-    )
+pub fn basics_line(first_day: Date, last_day: Date) -> String {
+    format!("Runs {} to {}.", day_label(first_day), day_label(last_day))
+}
+
+pub fn ends_line(zone: &str) -> String {
+    format!("Ends 23:59 on the last day, {zone} time.")
 }
 
 pub fn template_copied(template: &str) -> String {
@@ -767,13 +769,12 @@ pub fn setup_refusal(refusal: &SetupRefusal) -> String {
         SetupRefusal::TemplateUnknown => {
             "That template is no longer offered. Pick one from the menu.".to_owned()
         }
-        SetupRefusal::DayNotOffered => "Pick a day from the menu.".to_owned(),
+        SetupRefusal::DateFormat => "Type dates as YYYY-MM-DD, such as 2026-11-02.".to_owned(),
+        SetupRefusal::DayNotOffered => "The first day can't be before today.".to_owned(),
         SetupRefusal::LastDayNotAfterFirst => {
             "The last day must come after the first day.".to_owned()
         }
-        SetupRefusal::ZoneUnknown => {
-            "I don't know that time zone. Use a name like America/Edmonton.".to_owned()
-        }
+        SetupRefusal::DatesTooFar => "The last day must be within 12 months of today.".to_owned(),
         SetupRefusal::ReactionUnknown => "Pick a judging reaction from the menu.".to_owned(),
         SetupRefusal::FixedAfterStart => {
             "A started competition keeps its template, name, dates and time zone.".to_owned()
@@ -784,7 +785,7 @@ pub fn setup_refusal(refusal: &SetupRefusal) -> String {
 
 fn step_need(step: SetupStep) -> &'static str {
     match step {
-        SetupStep::Basics => "Pick where to start from, the first day and the last day first.",
+        SetupStep::Basics => "Set the first and last day first.",
         SetupStep::Criteria => "Add at least one criterion first.",
         SetupStep::Rules => "Write the rules first.",
         SetupStep::Who => "Pick at least one role and one judge first.",

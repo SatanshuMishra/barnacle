@@ -316,9 +316,7 @@ pub fn panel_part(custom_id: &str) -> Option<(u64, PanelPart)> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IqPanelPart {
     Template,
-    FirstDay,
-    LastDay,
-    Zone,
+    SetDates,
     Rename,
     Criterion,
     Add,
@@ -341,15 +339,13 @@ pub enum IqPanelPart {
     RenameModal,
     CriterionModal,
     RulesModal,
-    ZoneModal,
+    DatesModal,
 }
 
 impl IqPanelPart {
-    const ALL: [IqPanelPart; 27] = [
+    const ALL: [IqPanelPart; 25] = [
         IqPanelPart::Template,
-        IqPanelPart::FirstDay,
-        IqPanelPart::LastDay,
-        IqPanelPart::Zone,
+        IqPanelPart::SetDates,
         IqPanelPart::Rename,
         IqPanelPart::Criterion,
         IqPanelPart::Add,
@@ -372,15 +368,13 @@ impl IqPanelPart {
         IqPanelPart::RenameModal,
         IqPanelPart::CriterionModal,
         IqPanelPart::RulesModal,
-        IqPanelPart::ZoneModal,
+        IqPanelPart::DatesModal,
     ];
 
     fn text(self) -> &'static str {
         match self {
             IqPanelPart::Template => "template",
-            IqPanelPart::FirstDay => "first-day",
-            IqPanelPart::LastDay => "last-day",
-            IqPanelPart::Zone => "zone",
+            IqPanelPart::SetDates => "set-dates",
             IqPanelPart::Rename => "rename",
             IqPanelPart::Criterion => "criterion",
             IqPanelPart::Add => "add",
@@ -403,7 +397,7 @@ impl IqPanelPart {
             IqPanelPart::RenameModal => "rename-modal",
             IqPanelPart::CriterionModal => "criterion-modal",
             IqPanelPart::RulesModal => "rules-modal",
-            IqPanelPart::ZoneModal => "zone-modal",
+            IqPanelPart::DatesModal => "dates-modal",
         }
     }
 }

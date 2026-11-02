@@ -54,6 +54,7 @@ use crate::iq_store::IqStoreError;
 use crate::iq_text;
 use crate::schedule;
 use crate::schedule::Zone;
+use crate::schedule::ZoneProblem;
 use crate::text::Refusal;
 use crate::text::escape;
 use crate::wiring::IqPanelPart;
@@ -240,7 +241,13 @@ pub(super) async fn iq(_ctx: Context<'_>) -> Result<(), Error> {
 }
 
 #[poise::command(slash_command, rename = "start", guild_only, check = "organiser_check")]
-pub(super) async fn iq_start(ctx: Context<'_>) -> Result<(), Error> {
+pub(super) async fn iq_start(
+    ctx: Context<'_>,
+    #[description = "The time zone the competition ends in, remembered for next time"]
+    #[autocomplete = "commands::suggest_zones"]
+    #[max_length = 64]
+    time_zone: Option<String>,
+) -> Result<(), Error> {
     let Some(guild) = guild_of(ctx) else {
         return Ok(());
     };
@@ -280,7 +287,7 @@ pub(super) async fn iq_start(ctx: Context<'_>) -> Result<(), Error> {
             | StartChoice::AlreadyRunning
             | StartChoice::NeedsCleanup,
             _,
-        ) => open_setup(ctx, guild).await,
+        ) => open_setup(ctx, guild, time_zone.as_deref()).await,
     }
 }
 
@@ -633,14 +640,29 @@ async fn confirm(
     Ok(())
 }
 
-async fn open_setup(ctx: Context<'_>, guild: GuildId) -> Result<(), Error> {
+async fn open_setup(ctx: Context<'_>, guild: GuildId, typed: Option<&str>) -> Result<(), Error> {
+    let member = author(ctx);
+    let given = commands::given_zone(typed);
+    let remembered = ctx.data().zones.remembered(member).await?;
+    let zone = match schedule::zone_for(given, remembered.as_deref()) {
+        Ok(zone) => zone,
+        Err(ZoneProblem::Missing) => {
+            let needed = Refusal::ZoneNeeded;
+            return refuse(ctx, needed.code(), needed.message()).await;
+        }
+        Err(ZoneProblem::Unknown(typed)) => {
+            return commands::refuse_unknown_zone(ctx, &typed).await;
+        }
+    };
+    if given.is_some() {
+        commands::remember_zone(ctx, member, Some(&zone)).await;
+    }
     let now_unix = super::now_unix();
     let templates = ctx.data().iq.templates(guild).await?;
-    let zones = commands::recent_zones(ctx, guild, now_unix).await;
-    let Some(today) = local_today(now_unix) else {
+    let Some(today) = local_today(now_unix, &zone) else {
         return commands::fail(ctx, Failure::from_error(&IqError::Clock)).await;
     };
-    let draft = SetupDraft::new(guild, author(ctx), templates, zones, today);
+    let draft = SetupDraft::new(guild, member, templates, zone, today);
     open_draft(ctx, guild, draft).await
 }
 
@@ -657,8 +679,7 @@ async fn open_draft(ctx: Context<'_>, guild: GuildId, draft: SetupDraft) -> Resu
     Ok(())
 }
 
-fn local_today(now_unix: i64) -> Option<Date> {
-    let zone = Zone::find(iq_setup::DEFAULT_ZONE)?;
+fn local_today(now_unix: i64, zone: &Zone) -> Option<Date> {
     let utc_today = schedule::today(now_unix)?;
     [-1_i64, 0, 1]
         .into_iter()
@@ -1006,17 +1027,14 @@ pub(super) async fn pressed(
                 .map_err(Turned::from);
             open_modal(serenity_context, component, opened, &scope).await;
         }
-        IqPanelPart::Zone if picked(&component.data.kind) == Some(event_draft::ANOTHER_ZONE) => {
+        IqPanelPart::SetDates => {
             let opened = drafts
                 .with(panel, user, now_ms)
-                .map(|_| iq_setup::zone_modal(panel))
+                .map(|_| iq_setup::dates_modal(panel))
                 .map_err(Turned::from);
             open_modal(serenity_context, component, opened, &scope).await;
         }
         IqPanelPart::Template
-        | IqPanelPart::FirstDay
-        | IqPanelPart::LastDay
-        | IqPanelPart::Zone
         | IqPanelPart::Criterion
         | IqPanelPart::Remove
         | IqPanelPart::Roles
@@ -1127,7 +1145,7 @@ pub(super) async fn pressed(
         IqPanelPart::RenameModal
         | IqPanelPart::CriterionModal
         | IqPanelPart::RulesModal
-        | IqPanelPart::ZoneModal => {
+        | IqPanelPart::DatesModal => {
             refuse_press(
                 serenity_context,
                 component,
@@ -1183,11 +1201,12 @@ pub(super) async fn submitted(
                     draft.picked(),
                 ),
                 IqPanelPart::RulesModal => draft.with_rules(&typed(iq_setup::RULES_INPUT)),
-                IqPanelPart::ZoneModal => draft.with_zone(&typed(event_draft::ZONE_INPUT)),
+                IqPanelPart::DatesModal => draft.with_typed_dates(
+                    &typed(event_draft::FIRST_DAY_INPUT),
+                    &typed(event_draft::LAST_DAY_INPUT),
+                ),
                 IqPanelPart::Template
-                | IqPanelPart::FirstDay
-                | IqPanelPart::LastDay
-                | IqPanelPart::Zone
+                | IqPanelPart::SetDates
                 | IqPanelPart::Rename
                 | IqPanelPart::Criterion
                 | IqPanelPart::Add
@@ -1256,15 +1275,6 @@ fn changed(
     let next = match (part, kind) {
         (IqPanelPart::Template, serenity::ComponentInteractionDataKind::StringSelect { .. }) => {
             draft.with_template(single)?
-        }
-        (IqPanelPart::FirstDay, serenity::ComponentInteractionDataKind::StringSelect { .. }) => {
-            draft.with_first_day(single)?
-        }
-        (IqPanelPart::LastDay, serenity::ComponentInteractionDataKind::StringSelect { .. }) => {
-            draft.with_last_day(single)?
-        }
-        (IqPanelPart::Zone, serenity::ComponentInteractionDataKind::StringSelect { .. }) => {
-            draft.with_zone(single)?
         }
         (IqPanelPart::Criterion, serenity::ComponentInteractionDataKind::StringSelect { .. }) => {
             let index = single
@@ -1447,9 +1457,7 @@ async fn confirmed(
             Err(refusal) => Ok(turned_text(&Turned::Panel(refusal), scope)),
         },
         IqPanelPart::Template
-        | IqPanelPart::FirstDay
-        | IqPanelPart::LastDay
-        | IqPanelPart::Zone
+        | IqPanelPart::SetDates
         | IqPanelPart::Rename
         | IqPanelPart::Criterion
         | IqPanelPart::Add
@@ -1467,7 +1475,7 @@ async fn confirmed(
         | IqPanelPart::RenameModal
         | IqPanelPart::CriterionModal
         | IqPanelPart::RulesModal
-        | IqPanelPart::ZoneModal => Ok(turned_text(&Turned::Panel(Refusal::PanelUnknown), scope)),
+        | IqPanelPart::DatesModal => Ok(turned_text(&Turned::Panel(Refusal::PanelUnknown), scope)),
     };
     let content = match answer {
         Ok(content) => content,
@@ -2887,9 +2895,10 @@ fn setup_code(refusal: &SetupRefusal) -> &'static str {
         SetupRefusal::TooManyRoles => "too_many_roles",
         SetupRefusal::TooManyJudges => "too_many_judges",
         SetupRefusal::TemplateUnknown => "template_unknown",
+        SetupRefusal::DateFormat => "date_format",
         SetupRefusal::DayNotOffered => "day_not_offered",
         SetupRefusal::LastDayNotAfterFirst => "last_day_not_after_first",
-        SetupRefusal::ZoneUnknown => "zone_unknown",
+        SetupRefusal::DatesTooFar => "dates_too_far",
         SetupRefusal::ReactionUnknown => "reaction_unknown",
         SetupRefusal::FixedAfterStart => "fixed_after_start",
         SetupRefusal::StepIncomplete(SetupStep::Basics) => "basics_incomplete",

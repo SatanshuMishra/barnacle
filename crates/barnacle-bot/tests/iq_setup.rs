@@ -10,6 +10,7 @@ use barnacle_bot::iq_setup::SetupDraft;
 use barnacle_bot::iq_setup::SetupRefusal;
 use barnacle_bot::iq_setup::SetupStep;
 use barnacle_bot::iq_store::Competition;
+use barnacle_bot::schedule::Zone;
 use barnacle_bot::wiring::IqPanelPart;
 use barnacle_bot::wiring::iq_panel_id;
 use barnacle_guess::UserId;
@@ -77,7 +78,13 @@ fn october() -> Competition {
 }
 
 fn opened(templates: Vec<Competition>) -> SetupDraft {
-    SetupDraft::new(GUILD, ADMIN, templates, vec![], today())
+    SetupDraft::new(
+        GUILD,
+        ADMIN,
+        templates,
+        Zone::find("America/Edmonton").unwrap(),
+        today(),
+    )
 }
 
 fn components(view: &PanelView) -> Vec<serde_json::Value> {
@@ -129,9 +136,7 @@ fn basics_done(draft: SetupDraft) -> SetupDraft {
     draft
         .with_template(&blank)
         .unwrap()
-        .with_first_day("2026-11-02")
-        .unwrap()
-        .with_last_day("2026-11-26")
+        .with_typed_dates("2026-11-02", "2026-11-26")
         .unwrap()
 }
 
@@ -330,4 +335,29 @@ fn the_first_competition_has_no_templates_to_offer() {
     assert_eq!(labels, [START_BLANK]);
     let view = draft.panel(PANEL, NOW, &passing());
     assert!(view.content.contains(NO_TEMPLATES), "{}", view.content);
+}
+
+#[test]
+fn the_dates_form_asks_for_the_first_and_last_day() {
+    let modal = serde_json::to_value(barnacle_bot::iq_setup::dates_modal(PANEL)).unwrap();
+    assert_eq!(modal["custom_id"], "iq-panel:7:dates-modal", "{modal}");
+    let inputs: Vec<(String, String)> = modal["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|row| row["components"].as_array().cloned().unwrap_or_default())
+        .map(|input| {
+            (
+                input["custom_id"].as_str().unwrap_or_default().to_owned(),
+                input["label"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        inputs,
+        [
+            ("first".to_owned(), "First day".to_owned()),
+            ("last".to_owned(), "Last day".to_owned()),
+        ]
+    );
 }

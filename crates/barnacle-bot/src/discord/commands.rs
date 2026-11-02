@@ -1012,11 +1012,11 @@ pub(super) async fn suggest_zones(
     )
 }
 
-fn given_zone(typed: Option<&str>) -> Option<&str> {
+pub(super) fn given_zone(typed: Option<&str>) -> Option<&str> {
     typed.map(str::trim).filter(|text| !text.is_empty())
 }
 
-async fn refuse_unknown_zone(ctx: Context<'_>, typed: &str) -> Result<(), Error> {
+pub(super) async fn refuse_unknown_zone(ctx: Context<'_>, typed: &str) -> Result<(), Error> {
     failure::refused(
         "command.refused",
         "a command was refused",
@@ -1026,7 +1026,7 @@ async fn refuse_unknown_zone(ctx: Context<'_>, typed: &str) -> Result<(), Error>
     private(ctx, text::zone_unknown(typed)).await
 }
 
-async fn remember_zone(ctx: Context<'_>, author: UserId, zone: Option<&Zone>) {
+pub(super) async fn remember_zone(ctx: Context<'_>, author: UserId, zone: Option<&Zone>) {
     let Some(zone) = zone else {
         return;
     };
