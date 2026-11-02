@@ -1,7 +1,7 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T01:26:47.384Z
-Next ids: c3 D4 R3 S1
+Updated: 2026-11-02T01:29:49.601Z
+Next ids: c3 D5 R3 S1
 
 ## Goal
 
@@ -27,6 +27,7 @@ Needs: D1, D2, D3.
 - D1 The run is unattended from the owner's instruction: no questions; gaps become assumptions citing intent lines.
 - D2 Lighthouse is skipped; criterion 5.23 (live Discord) stays unproven.
 - D3 Interphase hand-off: build the reviewed spec: Build the handed-off spec now: cut the feature branch, commit the receipts config, plan, and start the unattended drive.
+- D4 IQ run hand-off: start the stacked IQ build now: Start the IQ build now; merge any event-panel fix commits into the IQ branch before its review and ship.
 
 ## Open risks
 
