@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T11:07:30.445Z
+Updated: 2026-11-02T11:10:37.229Z
 Next ids: c3 D6 R5 S1
 
 ## Goal
@@ -14,11 +14,11 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-mitosis/iq-competition is at 5c5c38c (pushed), which fixes every round-2 finding and marks a server caught up when a competition starts or resumes there, on top of 29f9d49, the merge of feat/event-panel-and-iq (eef145a, holding #53). MSP iq-competition is held back gate-failed: 21 of 55 properties judged weak (R4). IQ review runs by hand, because the drive is stopped. At 5c5c38c the round-3 suite passes (838 tests), clippy and fmt are clean and standard-checks finds nothing; pipeline fix-check passes against 29f9d49 and every selecting check prints nothing. Round-3 code-reviewer and security-reviewer are running on 29f9d49..5c5c38c; their briefs and replies go in the run home's review/round-3/.
+mitosis/iq-competition is at 5c5c38c (pushed), which fixes every round-2 finding and marks a server caught up when a competition starts or resumes there, on top of 29f9d49, the merge of feat/event-panel-and-iq (eef145a, holding #53). MSP iq-competition is held back gate-failed: 21 of 55 properties judged weak (R4). IQ review runs by hand, because the drive is stopped. At 5c5c38c the round-3 suite passes (838 tests), clippy and fmt are clean and standard-checks finds nothing; pipeline fix-check passes against 29f9d49 and every selecting check prints nothing. Round 3 reviews 29f9d49..5c5c38c: security-reviewer has replied with no blocker and two LOW findings (S1 a failed save still moves the mark once caught up; S2 overlapping Ready handlers can re-mark a server caught up); code-reviewer is still running. Briefs and replies are in the run home's review/round-3/.
 
 ## Next step
 
-Read the round-3 reviewers' replies, then run validator, record and verdict, and drive to green. Then, since a proven head reuses the weak gate unchanged, regate the final head by hand with `run.zsh --resume --gate-classes ~/.mitosis/barnacle/iq-competition/gate-classes.json` (the 21 weak properties classed covered-elsewhere, BUSY_TIMEOUT named), ship it, and open the pull request against feat/event-panel-and-iq.
+Read the code-reviewer's round-3 reply, then run validator, record and verdict, and drive to green. Then, since a proven head reuses the weak gate unchanged, regate the final head by hand with `run.zsh --resume --gate-classes ~/.mitosis/barnacle/iq-competition/gate-classes.json` (the 21 weak properties classed covered-elsewhere, BUSY_TIMEOUT named), ship it, and open the pull request against feat/event-panel-and-iq.
 
 Needs: D1, D4, R3, R4.
 
