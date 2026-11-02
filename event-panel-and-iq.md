@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T02:42:47.555Z
+Updated: 2026-11-02T02:42:50.198Z
 Next ids: c3 D6 R4 S1
 
 ## Goal
@@ -18,7 +18,7 @@ The owner merged #53 into feat/event-panel-and-iq (eef145a), which now holds the
 
 ## Next step
 
-When the iq-competition build ends, merge mitosis/event-panel into mitosis/iq-competition before its review; set the IQ state.json's null gate reasons to "" as soon as its drive enters review; then drive the IQ review to green and ship it as a pull request based on mitosis/event-panel.
+Set the IQ state.json's null gate reasons to "" as soon as its drive enters review; after its round 1, merge origin/feat/event-panel-and-iq into mitosis/iq-competition and review that as round 2; drive it to green and open its pull request against feat/event-panel-and-iq, because its stacked base mitosis/event-panel is already merged.
 
 Needs: D1, D4, R2, R3.
 
