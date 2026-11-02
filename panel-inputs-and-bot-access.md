@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T19:04:01.462Z
+Updated: 2026-11-02T19:04:03.564Z
 Next ids: c2 D6 R1 S1
 
 ## Goal
@@ -39,5 +39,5 @@ Needs: D4, D5.
 - Build state: ~/.mitosis/runs/barnacle/<slug>/state.json, with lane logs under lanes/ and work in progress under clones/
 - Record builder scripts (rerunning build_record.py wipes the probes): /private/tmp/claude-501/-Users-satanshumishra-Documents-DevLabs-barnacle/54bd6046-bf94-46f7-a742-87b3d50c95da/scratchpad/{build_record.py,add_tasks.py}
 - Security readings for the final report, not the PR: /announce keeps owner-only plus the organiser check; panel final buttons re-check access.
-- Run home: ~/.mitosis/barnacle/panel-inputs-and-bot-access (earlier runs' scripts to copy are in ~/.mitosis/barnacle/archive/)
+- Run homes: ~/.mitosis/barnacle/{panel-inputs-and-bot-access,panel-inputs,iq-judging}, each with CHARTER.md, items.json, run.zsh, dispatch.zsh, worker-rules.txt and feature.json; items.all.json in the first holds all seven Steps
 - Owner feedback items a-h and the access-role request are in the session transcript of 2026-11-02; the live-probe log is /private/tmp/claude-501/-Users-satanshumishra-Documents-DevLabs-barnacle/54bd6046-bf94-46f7-a742-87b3d50c95da/scratchpad/live-probe/bot.log
