@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: parked
-Updated: 2026-11-02T13:15:18.437Z
+Updated: 2026-11-02T16:23:26.847Z
 Next ids: c3 D7 R5 S2
 
 ## Goal
@@ -14,7 +14,7 @@ Ship two pull requests in barnacle: /event create moves dates, weekdays, time an
 
 ## Where things stand
 
-Both pull requests are open and assigned: #53 merged into feat/event-panel-and-iq, and #54 (IQ) awaits the owner's review and merge. Integration waits on the owner saying #54 merged.
+Integration is running: #53 and #54 are merged into feat/event-panel-and-iq (head b3655be), and the FEATURE checks, suite and integration plan run next.
 
 ## Next step
 
