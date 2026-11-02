@@ -231,6 +231,91 @@ pub fn zone_names() -> Vec<String> {
     names.into_iter().collect()
 }
 
+pub const COMMON_ZONES: [&str; 9] = [
+    "America/Vancouver",
+    "America/Edmonton",
+    "America/Denver",
+    "America/Chicago",
+    "America/Toronto",
+    "America/New_York",
+    "Europe/London",
+    "Europe/Berlin",
+    "UTC",
+];
+
+const SUGGESTION_LIMIT: usize = 25;
+
+struct Searchable {
+    name: String,
+    folded: String,
+}
+
+static SEARCHABLE_ZONES: LazyLock<Vec<Searchable>> = LazyLock::new(|| {
+    zone_names()
+        .into_iter()
+        .map(|name| Searchable {
+            folded: fold_for_search(&name),
+            name,
+        })
+        .collect()
+});
+
+fn fold_for_search(text: &str) -> String {
+    text.to_lowercase().replace('_', " ")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum MatchKind {
+    Exact,
+    Prefix,
+    Inside,
+}
+
+fn match_kind(folded_name: &str, folded_text: &str) -> Option<MatchKind> {
+    if folded_name == folded_text {
+        Some(MatchKind::Exact)
+    } else if folded_name.starts_with(folded_text) {
+        Some(MatchKind::Prefix)
+    } else if folded_name.contains(folded_text) {
+        Some(MatchKind::Inside)
+    } else {
+        None
+    }
+}
+
+pub fn zone_suggestions(partial: &str) -> Vec<String> {
+    let text = partial.trim();
+    if text.is_empty() {
+        return COMMON_ZONES.iter().map(|name| (*name).to_owned()).collect();
+    }
+    let folded_text = fold_for_search(text);
+    let mut ranked: Vec<(MatchKind, &str)> = SEARCHABLE_ZONES
+        .iter()
+        .filter_map(|zone| {
+            match_kind(&zone.folded, &folded_text).map(|kind| (kind, zone.name.as_str()))
+        })
+        .collect();
+    ranked.sort_unstable();
+    ranked
+        .into_iter()
+        .take(SUGGESTION_LIMIT)
+        .map(|(_, name)| name.to_owned())
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ZoneProblem {
+    Missing,
+    Unknown(String),
+}
+
+pub fn zone_for(given: Option<&str>, remembered: Option<&str>) -> Result<Zone, ZoneProblem> {
+    match given.map(str::trim).filter(|text| !text.is_empty()) {
+        Some(text) => Zone::find(text).ok_or_else(|| ZoneProblem::Unknown(text.to_owned())),
+        None => remembered.and_then(Zone::find).ok_or(ZoneProblem::Missing),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Schedule {
     weekdays: Weekdays,

@@ -21,6 +21,7 @@ const BOT_UPDATES: &str = include_str!("../../../migrations/0007_bot_updates.sql
 const IQ_COMPETITION: &str = include_str!("../../../migrations/0009_iq_competition.sql");
 const IQ_COMPETITION_DOWN: &str = include_str!("../../../migrations/0009_iq_competition.down.sql");
 const ORGANISER_ROLES: &str = include_str!("../../../migrations/0010_organiser_roles.sql");
+const MEMBER_ZONES: &str = include_str!("../../../migrations/0011_member_zones.sql");
 
 struct Layout {
     _dir: tempfile::TempDir,
@@ -501,6 +502,7 @@ async fn a_database_rolled_back_from_0009_is_told_to_apply_it_again() {
             common::CB_EVENTS,
             IQ_COMPETITION,
             ORGANISER_ROLES,
+            MEMBER_ZONES,
             IQ_COMPETITION_DOWN,
         ])
         .collect();
@@ -541,7 +543,7 @@ async fn a_database_before_0010_is_told_to_apply_it() {
 }
 
 #[tokio::test]
-async fn a_database_at_0010_opens() {
+async fn a_database_before_0011_is_told_to_apply_it() {
     let layout = layout(
         &yamato_catalog(),
         &["PJSB018", "PJSB019"],
@@ -552,6 +554,37 @@ async fn a_database_at_0010_opens() {
         .chain([common::CB_EVENTS, IQ_COMPETITION, ORGANISER_ROLES])
         .collect();
     migrated(&layout, &through_0010, "").await;
+    let error = startup::open_stores(&layout.config.database)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, StartupError::Zones { .. }));
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "the member zones table is missing from {path}; back the file up, then add it with `sqlite3 {path} < migrations/0011_member_zones.sql`",
+            path = layout.config.database.display()
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_database_at_0011_opens() {
+    let layout = layout(
+        &yamato_catalog(),
+        &["PJSB018", "PJSB019"],
+        &curation_text(""),
+    );
+    let through_0011: Vec<&str> = THROUGH_0007
+        .into_iter()
+        .chain([
+            common::CB_EVENTS,
+            IQ_COMPETITION,
+            ORGANISER_ROLES,
+            MEMBER_ZONES,
+        ])
+        .collect();
+    migrated(&layout, &through_0011, "").await;
     assert!(startup::open_stores(&layout.config.database).await.is_ok());
 }
 
