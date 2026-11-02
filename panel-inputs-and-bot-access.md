@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T22:24:34.240Z
+Updated: 2026-11-02T22:24:39.966Z
 Next ids: c2 D8 R1 S1
 
 ## Goal
