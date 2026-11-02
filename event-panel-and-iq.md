@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T01:29:58.397Z
+Updated: 2026-11-02T01:30:16.250Z
 Next ids: c3 D5 R3 S1
 
 ## Goal
@@ -41,3 +41,4 @@ Needs: D1, D2, R2.
 - Prototype sources: /private/tmp/claude-501/-Users-satanshumishra-Documents-DevLabs-barnacle/54bd6046-bf94-46f7-a742-87b3d50c95da/scratchpad/proto/project/
 - Spec, decisions, record, items: docs/specs/event-panel-and-iq.{md,decisions.md,record.json,items.json}
 - Run homes: ~/.mitosis/barnacle/event-panel-and-iq (the /event run) and ~/.mitosis/barnacle/iq-competition (the stacked IQ run)
+- Build state: ~/.mitosis/runs/barnacle/<slug>/state.json; review rounds under each run home's review/
