@@ -28,12 +28,10 @@ use crate::panels;
 use crate::panels::Owned;
 use crate::schedule;
 use crate::schedule::Hours;
-use crate::schedule::MAX_HOURS;
 use crate::schedule::Schedule;
 use crate::schedule::Span;
 use crate::schedule::StartTime;
 use crate::schedule::Weekdays;
-use crate::schedule::ZONE_NAME_LIMIT;
 use crate::schedule::Zone;
 use crate::text;
 use crate::text::Refusal;
@@ -53,18 +51,19 @@ pub const ANOTHER_ZONE: &str = "other";
 pub const FIRST_DAY_INPUT: &str = "first";
 pub const LAST_DAY_INPUT: &str = "last";
 pub const ZONE_INPUT: &str = "zone";
+pub const START_INPUT: &str = "start";
+pub const END_INPUT: &str = "end";
 
 const MILLIS_PER_SECOND: u64 = 1_000;
 const CLOCK_OUT_OF_RANGE: &str = "the clock reads a time outside the supported calendar";
 const ROLE_MENU_MAX: u8 = 5;
-const WEEKDAY_MENU_MAX: u8 = 7;
 const MENU_OPTIONS: usize = 25;
 const ZONE_MENU_ZONES: usize = MENU_OPTIONS - 1;
 const DAY_INPUT_MAX: u16 = 32;
-const ZONE_INPUT_MAX: u16 = ZONE_NAME_LIMIT as u16;
-const HOURS_OF_DAY: std::ops::Range<i8> = 0..24;
-const QUARTER_MINUTES: [i8; 4] = [0, 15, 30, 45];
-const CLOCK_DIGITS: usize = 2;
+const TIME_INPUT_MAX: u16 = 16;
+const MINUTES_PER_HOUR: i64 = 60;
+const MINUTES_PER_DAY: i64 = 24 * MINUTES_PER_HOUR;
+const DAYS_PER_WEEK: usize = 7;
 const CLAN_BATTLES: &str = "Clan Battles";
 const COMMON_ZONES: [&str; 9] = [
     "America/Vancouver",
@@ -123,12 +122,14 @@ impl Template {
 pub struct CreateOptions {
     pub name: String,
     pub template: Option<String>,
+    pub zone: Option<Zone>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EditOptions {
     pub name: Option<String>,
     pub channel: Option<ChannelId>,
+    pub zone: Option<Zone>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,11 +197,9 @@ pub struct Draft {
     first_day: Option<Date>,
     last_day: Option<Date>,
     weekdays: Option<Weekdays>,
-    hour: Option<i8>,
-    minute: Option<i8>,
+    start: Option<StartTime>,
     hours: Option<Hours>,
     zone: Option<Zone>,
-    own_minute: Option<i8>,
     server_zones: Vec<String>,
     everyone: bool,
     roles: Vec<RoleId>,
@@ -303,6 +302,10 @@ impl Draft {
             .map(|text| Template::named(text).ok_or(Refusal::TemplateUnknown))
             .transpose()?
             .map(Template::schedule);
+        let zone = match &template {
+            Some(base) => base.zone().clone(),
+            None => options.zone.clone().ok_or(Refusal::ZoneNeeded)?,
+        };
         Ok(Draft {
             purpose: Purpose::Create,
             owner,
@@ -313,11 +316,9 @@ impl Draft {
             first_day: None,
             last_day: None,
             weekdays: template.as_ref().map(Schedule::weekdays),
-            hour: template.as_ref().map(|base| base.start().hour()),
-            minute: template.as_ref().map(|base| base.start().minute()),
+            start: template.as_ref().map(Schedule::start),
             hours: template.as_ref().map(Schedule::hours),
-            zone: template.as_ref().map(|base| base.zone().clone()),
-            own_minute: None,
+            zone: Some(zone),
             server_zones: Vec::new(),
             everyone: false,
             roles: Vec::new(),
@@ -338,6 +339,7 @@ impl Draft {
             .map(|text| wiring::event_name(text).ok_or(Refusal::NameFormat))
             .transpose()?;
         let everyone = everyone_role(event.guild);
+        let zone = options.zone.clone().unwrap_or_else(|| held.zone().clone());
         Ok(Draft {
             purpose: Purpose::Edit {
                 event: event.id,
@@ -349,6 +351,7 @@ impl Draft {
             changed: Changed {
                 name: name.is_some(),
                 channel: options.channel.is_some(),
+                zone: zone != *held.zone(),
                 ..Changed::default()
             },
             name: name.unwrap_or_else(|| event.name.clone()),
@@ -356,11 +359,9 @@ impl Draft {
             first_day: Some(event.span.first_day()),
             last_day: Some(event.span.last_day()),
             weekdays: Some(held.weekdays()),
-            hour: Some(held.start().hour()),
-            minute: Some(held.start().minute()),
+            start: Some(held.start()),
             hours: Some(held.hours()),
-            zone: Some(held.zone().clone()),
-            own_minute: Some(held.start().minute()),
+            zone: Some(zone),
             server_zones: Vec::new(),
             everyone: event.ping_roles.contains(&everyone),
             roles: event
@@ -416,7 +417,7 @@ impl Draft {
     }
 
     pub fn start(&self) -> Option<StartTime> {
-        StartTime::new(self.hour?, self.minute?)
+        self.start
     }
 
     pub fn hours(&self) -> Option<Hours> {
@@ -465,36 +466,6 @@ impl Draft {
         }
     }
 
-    pub fn with_first_day(&self, value: &str) -> Result<Draft, Refusal> {
-        let first_day = read_day(value)?;
-        let last_day = self.last_day.filter(|last| *last >= first_day);
-        Ok(Draft {
-            first_day: Some(first_day),
-            last_day,
-            changed: Changed {
-                first_day: self.changed.first_day || self.first_day != Some(first_day),
-                last_day: self.changed.last_day || self.last_day != last_day,
-                ..self.changed
-            },
-            ..self.clone()
-        })
-    }
-
-    pub fn with_last_day(&self, value: &str) -> Result<Draft, Refusal> {
-        let last_day = read_day(value)?;
-        if self.first_day.is_some_and(|first| last_day < first) {
-            return Err(Refusal::LastDayBeforeFirst);
-        }
-        Ok(Draft {
-            last_day: Some(last_day),
-            changed: Changed {
-                last_day: self.changed.last_day || self.last_day != Some(last_day),
-                ..self.changed
-            },
-            ..self.clone()
-        })
-    }
-
     pub fn with_typed_dates(
         &self,
         first: &str,
@@ -515,12 +486,24 @@ impl Draft {
         if !within_window(&typed, now_unix) {
             return Err(Refusal::DatesTooFar);
         }
+        let offered = weekdays_between(first_day, last_day);
+        let weekdays = self.weekdays.and_then(|picked| {
+            Weekdays::new(
+                &offered
+                    .iter()
+                    .copied()
+                    .filter(|day| picked.contains(*day))
+                    .collect::<Vec<Weekday>>(),
+            )
+        });
         Ok(Draft {
             first_day: Some(first_day),
             last_day: Some(last_day),
+            weekdays,
             changed: Changed {
                 first_day: self.changed.first_day || self.first_day != Some(first_day),
                 last_day: self.changed.last_day || self.last_day != Some(last_day),
+                weekdays: self.changed.weekdays || self.weekdays != weekdays,
                 ..self.changed
             },
             ..self.clone()
@@ -549,41 +532,22 @@ impl Draft {
         })
     }
 
-    pub fn with_hour(&self, value: &str) -> Result<Draft, Refusal> {
-        let hour = read_clock(value)
-            .filter(|hour| HOURS_OF_DAY.contains(hour))
-            .ok_or(Refusal::StartFormat)?;
+    pub fn with_typed_time(&self, start: &str, end: &str) -> Result<Draft, Refusal> {
+        let start = StartTime::parse(start).ok_or(Refusal::TimeFormat)?;
+        let end = StartTime::parse(end).ok_or(Refusal::TimeFormat)?;
+        let length = match (end.minutes() - start.minutes()).rem_euclid(MINUTES_PER_DAY) {
+            0 => MINUTES_PER_DAY,
+            minutes => minutes,
+        };
+        let hours = (length % MINUTES_PER_HOUR == 0)
+            .then(|| Hours::new(length / MINUTES_PER_HOUR))
+            .flatten()
+            .ok_or(Refusal::LengthNotWholeHours)?;
         Ok(Draft {
-            hour: Some(hour),
-            changed: Changed {
-                start: self.changed.start || self.hour != Some(hour),
-                ..self.changed
-            },
-            ..self.clone()
-        })
-    }
-
-    pub fn with_minute(&self, value: &str) -> Result<Draft, Refusal> {
-        let minute = read_clock(value)
-            .filter(|minute| self.minute_choices().contains(minute))
-            .ok_or(Refusal::StartFormat)?;
-        Ok(Draft {
-            minute: Some(minute),
-            changed: Changed {
-                start: self.changed.start || self.minute != Some(minute),
-                ..self.changed
-            },
-            ..self.clone()
-        })
-    }
-
-    pub fn with_hours(&self, value: &str) -> Result<Draft, Refusal> {
-        let hours = read_count(value)
-            .and_then(|count| Hours::new(i64::from(count)))
-            .ok_or(Refusal::HoursOutOfRange)?;
-        Ok(Draft {
+            start: Some(start),
             hours: Some(hours),
             changed: Changed {
+                start: self.changed.start || self.start != Some(start),
                 hours: self.changed.hours || self.hours != Some(hours),
                 ..self.changed
             },
@@ -591,16 +555,21 @@ impl Draft {
         })
     }
 
-    pub fn with_zone(&self, name: &str) -> Result<Draft, Refusal> {
-        let zone = Zone::find(name).ok_or(Refusal::ZoneUnknown)?;
-        Ok(Draft {
-            changed: Changed {
-                zone: self.changed.zone || self.zone.as_ref() != Some(&zone),
-                ..self.changed
-            },
-            zone: Some(zone),
-            ..self.clone()
-        })
+    pub fn time_modal(&self, panel: u64) -> serenity::CreateModal {
+        let end = self.start.zip(self.hours).and_then(|(start, hours)| {
+            StartTime::from_minutes(
+                (start.minutes() + i64::from(hours.get()) * MINUTES_PER_HOUR)
+                    .rem_euclid(MINUTES_PER_DAY),
+            )
+        });
+        serenity::CreateModal::new(
+            wiring::panel_id(panel, PanelPart::TimeModal),
+            text::TIME_MODAL_TITLE,
+        )
+        .components(vec![
+            time_input(text::START_INPUT_LABEL, START_INPUT, self.start),
+            time_input(text::END_INPUT_LABEL, END_INPUT, end),
+        ])
     }
 
     pub fn with_roles(&self, roles: &[RoleId]) -> Result<Draft, Refusal> {
@@ -675,7 +644,7 @@ impl Draft {
 
     pub fn panel(&self, panel: u64, now_unix: i64) -> PanelView {
         let components = match self.step {
-            Step::Days => self.days_rows(panel, now_unix),
+            Step::Days => self.days_rows(panel),
             Step::Time => self.time_rows(panel),
             Step::Pings => self.pings_rows(panel, now_unix),
         };
@@ -789,22 +758,17 @@ impl Draft {
                 }
             }
             (first_day, last_day, weekdays) => Err(missing(&[
-                ("the first day", first_day.is_none()),
-                ("the last day", last_day.is_none()),
-                ("the days of the week", weekdays.is_none()),
+                ("the dates", first_day.is_none() || last_day.is_none()),
+                ("the event days", weekdays.is_none()),
             ])),
         }
     }
 
     fn picked_time(&self) -> Result<(StartTime, Hours, Zone), Refusal> {
-        match (self.hour, self.minute, self.hours, &self.zone) {
-            (Some(hour), Some(minute), Some(hours), Some(zone)) => StartTime::new(hour, minute)
-                .map(|start| (start, hours, zone.clone()))
-                .ok_or(Refusal::StartFormat),
-            (hour, minute, hours, zone) => Err(missing(&[
-                ("the start hour", hour.is_none()),
-                ("the start minute", minute.is_none()),
-                ("the length", hours.is_none()),
+        match (self.start, self.hours, &self.zone) {
+            (Some(start), Some(hours), Some(zone)) => Ok((start, hours, zone.clone())),
+            (start, hours, zone) => Err(missing(&[
+                ("the session time", start.is_none() || hours.is_none()),
                 ("the time zone", zone.is_none()),
             ])),
         }
@@ -834,6 +798,7 @@ impl Draft {
         [
             Some(text::panel_heading(&self.name, self.channel)),
             Some(text::step_line(self.step.number(), self.step.name())),
+            self.zone.as_ref().map(|zone| text::zone_line(zone.name())),
             Some(text::days_line(
                 self.first_day,
                 self.last_day,
@@ -866,103 +831,60 @@ impl Draft {
         }
     }
 
-    fn days_rows(&self, panel: u64, now_unix: i64) -> Vec<serenity::CreateActionRow> {
-        let today = zone_today(&self.server_zones, now_unix)
-            .or(self.first_day)
-            .unwrap_or(Date::ZERO);
-        let first_days = string_menu(
-            panel,
-            PanelPart::FirstDay,
-            text::FIRST_DAY_PLACEHOLDER,
-            day_options(today, today, self.first_day),
-        );
-        let last_days = string_menu(
-            panel,
-            PanelPart::LastDay,
-            text::LAST_DAY_PLACEHOLDER,
-            day_options(self.first_day.unwrap_or(today), today, self.last_day),
-        );
-        let weekdays = self.weekdays;
+    fn days_rows(&self, panel: u64) -> Vec<serenity::CreateActionRow> {
+        let buttons = serenity::CreateActionRow::Buttons(vec![
+            serenity::CreateButton::new(wiring::panel_id(panel, PanelPart::TypeDates))
+                .label(text::SET_DATES_LABEL)
+                .style(serenity::ButtonStyle::Secondary),
+            serenity::CreateButton::new(wiring::panel_id(panel, PanelPart::Next))
+                .label(text::NEXT_TIME_LABEL)
+                .style(serenity::ButtonStyle::Primary)
+                .disabled(self.picked_days().is_err()),
+            cancel_button(panel),
+        ]);
+        let Some(offered) = self
+            .first_day
+            .zip(self.last_day)
+            .map(|(first, last)| weekdays_between(first, last))
+            .filter(|offered| !offered.is_empty())
+        else {
+            return vec![buttons];
+        };
+        let picked = self.weekdays;
+        let most = u8::try_from(offered.len()).unwrap_or(u8::MAX);
         let days = serenity::CreateSelectMenu::new(
             wiring::panel_id(panel, PanelPart::Days),
             serenity::CreateSelectMenuKind::String {
-                options: WEEKDAY_VALUES
-                    .iter()
-                    .map(|(day, value)| {
-                        serenity::CreateSelectMenuOption::new(text::weekday_name(*day), *value)
-                            .default_selection(weekdays.is_some_and(|picked| picked.contains(*day)))
+                options: offered
+                    .into_iter()
+                    .map(|day| {
+                        serenity::CreateSelectMenuOption::new(
+                            text::weekday_name(day),
+                            weekday_value(day),
+                        )
+                        .default_selection(picked.is_some_and(|picked| picked.contains(day)))
                     })
                     .collect(),
             },
         )
-        .placeholder(text::WEEKDAYS_PLACEHOLDER)
+        .placeholder(text::EVENT_DAYS_PLACEHOLDER)
         .min_values(1)
-        .max_values(WEEKDAY_MENU_MAX);
-        vec![
-            first_days,
-            last_days,
-            serenity::CreateActionRow::SelectMenu(days),
-            serenity::CreateActionRow::Buttons(vec![
-                serenity::CreateButton::new(wiring::panel_id(panel, PanelPart::Next))
-                    .label(text::NEXT_TIME_LABEL)
-                    .style(serenity::ButtonStyle::Primary)
-                    .disabled(self.picked_days().is_err()),
-                serenity::CreateButton::new(wiring::panel_id(panel, PanelPart::TypeDates))
-                    .label(text::TYPE_DATES_LABEL)
-                    .style(serenity::ButtonStyle::Secondary),
-                cancel_button(panel),
-            ]),
-        ]
+        .max_values(most);
+        vec![serenity::CreateActionRow::SelectMenu(days), buttons]
     }
 
     fn time_rows(&self, panel: u64) -> Vec<serenity::CreateActionRow> {
-        let hours = HOURS_OF_DAY
-            .map(|hour| {
-                serenity::CreateSelectMenuOption::new(text::hour_label(hour), clock_value(hour))
-                    .description(text::hour_description(hour))
-                    .default_selection(self.hour == Some(hour))
-            })
-            .collect();
-        let minutes = self
-            .minute_choices()
-            .into_iter()
-            .map(|minute| {
-                serenity::CreateSelectMenuOption::new(
-                    text::minute_label(minute),
-                    clock_value(minute),
-                )
-                .default_selection(self.minute == Some(minute))
-            })
-            .collect();
-        let lengths = (1..=MAX_HOURS)
-            .filter_map(|count| Hours::new(i64::from(count)))
-            .map(|length| {
-                serenity::CreateSelectMenuOption::new(
-                    text::length_label(length),
-                    length.get().to_string(),
-                )
-                .default_selection(self.hours == Some(length))
-            })
-            .collect();
-        vec![
-            string_menu(panel, PanelPart::Hour, text::HOUR_PLACEHOLDER, hours),
-            string_menu(panel, PanelPart::Minute, text::MINUTE_PLACEHOLDER, minutes),
-            string_menu(panel, PanelPart::Length, text::LENGTH_PLACEHOLDER, lengths),
-            string_menu(
-                panel,
-                PanelPart::Zone,
-                text::ZONE_PLACEHOLDER,
-                zone_options(&self.server_zones, self.zone.as_ref().map(Zone::name)),
-            ),
-            serenity::CreateActionRow::Buttons(vec![
-                back_button(panel),
-                serenity::CreateButton::new(wiring::panel_id(panel, PanelPart::Next))
-                    .label(text::NEXT_PINGS_LABEL)
-                    .style(serenity::ButtonStyle::Primary)
-                    .disabled(self.picked_time().is_err()),
-                cancel_button(panel),
-            ]),
-        ]
+        vec![serenity::CreateActionRow::Buttons(vec![
+            back_button(panel),
+            serenity::CreateButton::new(wiring::panel_id(panel, PanelPart::SetTime))
+                .label(text::SET_TIME_LABEL)
+                .style(serenity::ButtonStyle::Secondary),
+            serenity::CreateButton::new(wiring::panel_id(panel, PanelPart::Next))
+                .label(text::NEXT_PINGS_LABEL)
+                .style(serenity::ButtonStyle::Primary)
+                .disabled(self.picked_time().is_err()),
+            cancel_button(panel),
+        ])]
     }
 
     fn pings_rows(&self, panel: u64, now_unix: i64) -> Vec<serenity::CreateActionRow> {
@@ -1004,13 +926,6 @@ impl Draft {
                 cancel_button(panel),
             ]),
         ]
-    }
-
-    fn minute_choices(&self) -> Vec<i8> {
-        let mut minutes: Vec<i8> = QUARTER_MINUTES.into_iter().chain(self.own_minute).collect();
-        minutes.sort_unstable();
-        minutes.dedup();
-        minutes
     }
 }
 
@@ -1087,21 +1002,6 @@ pub fn dates_modal(panel: u64) -> serenity::CreateModal {
     ])
 }
 
-pub fn zone_modal(panel: u64) -> serenity::CreateModal {
-    serenity::CreateModal::new(
-        wiring::panel_id(panel, PanelPart::ZoneModal),
-        text::ZONE_MODAL_TITLE,
-    )
-    .components(vec![serenity::CreateActionRow::InputText(
-        serenity::CreateInputText::new(
-            serenity::InputTextStyle::Short,
-            text::ZONE_INPUT_LABEL,
-            ZONE_INPUT,
-        )
-        .max_length(ZONE_INPUT_MAX),
-    )])
-}
-
 fn text_input(
     label: &str,
     custom_id: &str,
@@ -1115,19 +1015,14 @@ fn text_input(
     )
 }
 
-fn string_menu(
-    panel: u64,
-    part: PanelPart,
-    placeholder: &str,
-    options: Vec<serenity::CreateSelectMenuOption>,
-) -> serenity::CreateActionRow {
-    serenity::CreateActionRow::SelectMenu(
-        serenity::CreateSelectMenu::new(
-            wiring::panel_id(panel, part),
-            serenity::CreateSelectMenuKind::String { options },
-        )
-        .placeholder(placeholder),
-    )
+fn time_input(label: &str, custom_id: &str, value: Option<StartTime>) -> serenity::CreateActionRow {
+    let input = serenity::CreateInputText::new(serenity::InputTextStyle::Short, label, custom_id)
+        .placeholder(text::TIME_EXAMPLE)
+        .max_length(TIME_INPUT_MAX);
+    serenity::CreateActionRow::InputText(match value {
+        Some(time) => input.value(time.to_string()),
+        None => input,
+    })
 }
 
 fn back_button(panel: u64) -> serenity::CreateButton {
@@ -1192,6 +1087,30 @@ pub fn dates_typed(
     redrawn(drafts, panel, user, now_ms, |draft| {
         draft.with_typed_dates(first, last, unix_of(now_ms))
     })
+}
+
+pub fn time_typed(
+    drafts: &Drafts,
+    panel: u64,
+    user: UserId,
+    start: &str,
+    end: &str,
+    now_ms: u64,
+) -> Result<PanelView, Refusal> {
+    redrawn(drafts, panel, user, now_ms, |draft| {
+        draft.with_typed_time(start, end)
+    })
+}
+
+pub fn time_modal_opened(
+    drafts: &Drafts,
+    panel: u64,
+    user: UserId,
+    now_ms: u64,
+) -> Result<serenity::CreateModal, Refusal> {
+    drafts
+        .with(panel, user, now_ms)
+        .map(|draft| draft.time_modal(panel))
 }
 
 pub fn modal_opened(
@@ -1342,6 +1261,32 @@ fn weekday_count(first_day: Date, last_day: Date, weekdays: Weekdays) -> usize {
         .count()
 }
 
+fn weekdays_between(first_day: Date, last_day: Date) -> Vec<Weekday> {
+    let occurring: Vec<Weekday> = first_day
+        .series(1.day())
+        .take_while(|day| *day <= last_day)
+        .take(DAYS_PER_WEEK)
+        .map(|day| day.weekday())
+        .collect();
+    WEEKDAY_VALUES
+        .iter()
+        .map(|(day, _)| *day)
+        .filter(|day| occurring.contains(day))
+        .collect()
+}
+
+fn weekday_value(day: Weekday) -> &'static str {
+    match day {
+        Weekday::Monday => "mon",
+        Weekday::Tuesday => "tue",
+        Weekday::Wednesday => "wed",
+        Weekday::Thursday => "thu",
+        Weekday::Friday => "fri",
+        Weekday::Saturday => "sat",
+        Weekday::Sunday => "sun",
+    }
+}
+
 fn days_between(from: Date, to: Date) -> i32 {
     from.until(to).map_or(0, |span| span.get_days())
 }
@@ -1370,28 +1315,6 @@ fn zone_today(server_zones: &[String], now_unix: i64) -> Option<Date> {
 
 fn within_window(span: &Span, now_unix: i64) -> bool {
     schedule::today(now_unix).is_some_and(|today| span.near(today))
-}
-
-fn clock_value(value: i8) -> String {
-    format!("{value:02}")
-}
-
-fn read_clock(text: &str) -> Option<i8> {
-    let text = text.trim();
-    (text.len() == CLOCK_DIGITS)
-        .then(|| read_count(text))
-        .flatten()
-}
-
-fn read_count(text: &str) -> Option<i8> {
-    let text = text.trim();
-    if text.is_empty()
-        || text.len() > CLOCK_DIGITS
-        || !text.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return None;
-    }
-    text.parse().ok()
 }
 
 fn read_day(text: &str) -> Result<Date, Refusal> {

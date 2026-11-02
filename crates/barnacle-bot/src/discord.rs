@@ -43,6 +43,7 @@ use crate::updates::Updates;
 use crate::updates_store::UpdatesStore;
 use crate::voice::VoiceRooms;
 use crate::voice_store::VoiceStore;
+use crate::zone_store::ZoneStore;
 
 pub use access::AccessDraft;
 pub use access::access_rows;
@@ -90,6 +91,7 @@ pub struct Data {
     pub iq_unsettled: Arc<crate::iq::Unsettled>,
     pub access: AccessStore,
     pub access_drafts: Arc<Drafts<AccessDraft>>,
+    pub zones: ZoneStore,
 }
 
 fn now_unix() -> i64 {
@@ -141,6 +143,7 @@ pub async fn run(
     updates: UpdatesStore,
     iq: IqStore,
     access: AccessStore,
+    zones: ZoneStore,
 ) -> Result<(), Box<RunError>> {
     let version = env!("CARGO_PKG_VERSION");
     let releases = release_notes::all().map_err(RunError::Notes)?;
@@ -290,6 +293,7 @@ pub async fn run(
                     iq_unsettled: Arc::new(crate::iq::Unsettled::default()),
                     access,
                     access_drafts: Arc::new(Drafts::default()),
+                    zones,
                 };
                 tracing::info!(
                     "event.name" = "service.started",

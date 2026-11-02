@@ -251,6 +251,9 @@ pub fn every_refusal() -> Vec<Refusal> {
         Refusal::PanelNotYours,
         Refusal::PanelExpired,
         Refusal::ChannelUnknown,
+        Refusal::ZoneNeeded,
+        Refusal::LengthNotWholeHours,
+        Refusal::TimeFormat,
     ];
     for refusal in &refusals {
         match refusal {
@@ -294,7 +297,10 @@ pub fn every_refusal() -> Vec<Refusal> {
             | Refusal::PanelUnknown
             | Refusal::PanelNotYours
             | Refusal::PanelExpired
-            | Refusal::ChannelUnknown => {}
+            | Refusal::ChannelUnknown
+            | Refusal::ZoneNeeded
+            | Refusal::LengthNotWholeHours
+            | Refusal::TimeFormat => {}
         }
     }
     refusals

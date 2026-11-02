@@ -259,37 +259,27 @@ pub enum PanelPart {
     Everyone,
     Save,
     Cancel,
-    FirstDay,
-    LastDay,
     TypeDates,
-    Hour,
-    Minute,
-    Length,
-    Zone,
+    SetTime,
     Next,
     Back,
     DatesModal,
-    ZoneModal,
+    TimeModal,
 }
 
 impl PanelPart {
-    const ALL: [PanelPart; 16] = [
+    const ALL: [PanelPart; 11] = [
         PanelPart::Days,
         PanelPart::Roles,
         PanelPart::Everyone,
         PanelPart::Save,
         PanelPart::Cancel,
-        PanelPart::FirstDay,
-        PanelPart::LastDay,
         PanelPart::TypeDates,
-        PanelPart::Hour,
-        PanelPart::Minute,
-        PanelPart::Length,
-        PanelPart::Zone,
+        PanelPart::SetTime,
         PanelPart::Next,
         PanelPart::Back,
         PanelPart::DatesModal,
-        PanelPart::ZoneModal,
+        PanelPart::TimeModal,
     ];
 
     fn text(self) -> &'static str {
@@ -299,17 +289,12 @@ impl PanelPart {
             PanelPart::Everyone => "everyone",
             PanelPart::Save => "save",
             PanelPart::Cancel => "cancel",
-            PanelPart::FirstDay => "first-day",
-            PanelPart::LastDay => "last-day",
             PanelPart::TypeDates => "type-dates",
-            PanelPart::Hour => "hour",
-            PanelPart::Minute => "minute",
-            PanelPart::Length => "length",
-            PanelPart::Zone => "zone",
+            PanelPart::SetTime => "set-time",
             PanelPart::Next => "next",
             PanelPart::Back => "back",
             PanelPart::DatesModal => "dates-modal",
-            PanelPart::ZoneModal => "zone-modal",
+            PanelPart::TimeModal => "time-modal",
         }
     }
 }

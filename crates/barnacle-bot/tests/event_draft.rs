@@ -28,7 +28,9 @@ use barnacle_bot::schedule::Span;
 use barnacle_bot::schedule::StartTime;
 use barnacle_bot::schedule::Weekdays;
 use barnacle_bot::schedule::Zone;
+use barnacle_bot::schedule::ZoneProblem;
 use barnacle_bot::schedule::parse_day;
+use barnacle_bot::schedule::zone_for;
 use barnacle_bot::text;
 use barnacle_bot::text::Refusal;
 use barnacle_bot::wiring::PanelPart;
@@ -61,10 +63,15 @@ fn strings(values: &[&str]) -> Vec<String> {
 }
 
 fn create(name: &str, template: Option<&str>) -> Result<Draft, Refusal> {
+    create_in(name, template, "America/Denver")
+}
+
+fn create_in(name: &str, template: Option<&str>, zone: &str) -> Result<Draft, Refusal> {
     Draft::create(
         &CreateOptions {
             name: name.to_owned(),
             template: template.map(str::to_owned),
+            zone: Zone::find(zone),
         },
         SERVER,
         CHANNEL,
@@ -79,9 +86,7 @@ fn templated(name: &str) -> Draft {
 
 fn dated(draft: Draft, first: &str, last: &str) -> Draft {
     draft
-        .with_first_day(first)
-        .unwrap()
-        .with_last_day(last)
+        .with_typed_dates(first, last, BEFORE_THE_SESSIONS)
         .unwrap()
 }
 
@@ -99,13 +104,7 @@ fn denver_draft(first: &str, last: &str) -> Draft {
     dated(create("Ranked Sprint", None).unwrap(), first, last)
         .with_weekdays(&strings(&["wed"]))
         .unwrap()
-        .with_hour("17")
-        .unwrap()
-        .with_minute("00")
-        .unwrap()
-        .with_hours("4")
-        .unwrap()
-        .with_zone("America/Denver")
+        .with_typed_time("17:00", "21:00")
         .unwrap()
 }
 
@@ -184,12 +183,12 @@ fn component(view: &PanelView, part: PanelPart) -> serde_json::Value {
         .unwrap_or_else(|| panic!("the panel has a component {id}: {:?}", components(view)))
 }
 
-fn values(view: &PanelView, part: PanelPart) -> Vec<String> {
-    component(view, part)["options"]
+fn time_form_values(draft: &Draft) -> Vec<Option<String>> {
+    serde_json::to_value(draft.time_modal(PANEL)).unwrap()["components"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|option| option["value"].as_str().unwrap().to_owned())
+        .map(|row| row["components"][0]["value"].as_str().map(str::to_owned))
         .collect()
 }
 
@@ -272,36 +271,40 @@ fn option_values(options: &[serenity::CreateSelectMenuOption]) -> Vec<String> {
 }
 
 #[test]
-fn a_draft_refuses_an_hour_count_outside_1_to_24() {
+fn a_draft_refuses_a_typed_time_that_is_not_hh_mm() {
     let draft = templated("Ranked Sprint");
-    for count in ["0", "25", "four", "-1", "100"] {
-        let refused = draft.with_hours(count).unwrap_err();
-        assert_eq!(refused, Refusal::HoursOutOfRange, "{count}");
-        assert!(
-            refused.message().contains("1 to 24"),
-            "{}",
-            refused.message()
-        );
-    }
-}
-
-#[test]
-fn a_draft_refuses_a_start_outside_the_menus() {
-    let draft = templated("Ranked Sprint");
-    for hour in ["5pm", "24", "7", "-1", ""] {
-        assert_eq!(draft.with_hour(hour), Err(Refusal::StartFormat), "{hour}");
-    }
-    for minute in ["10", "60", "5", ":15"] {
+    for typed in [
+        "5pm", "24:00", "7", "-1:00", "", "19:5", "19:60", "1900", "19.00",
+    ] {
         assert_eq!(
-            draft.with_minute(minute),
-            Err(Refusal::StartFormat),
-            "{minute}"
+            draft.with_typed_time(typed, "21:00").err(),
+            Some(Refusal::TimeFormat),
+            "{typed}"
+        );
+        assert_eq!(
+            draft.with_typed_time("19:00", typed).err(),
+            Some(Refusal::TimeFormat),
+            "{typed}"
         );
     }
 }
 
 #[test]
-fn an_edit_keeps_its_own_minute_on_offer() {
+fn a_draft_refuses_a_length_that_is_not_whole_hours() {
+    let draft = templated("Ranked Sprint");
+    for (start, end) in [("19:00", "19:30"), ("19:15", "21:00"), ("23:30", "00:00")] {
+        assert_eq!(
+            draft.with_typed_time(start, end).err(),
+            Some(Refusal::LengthNotWholeHours),
+            "{start} to {end}"
+        );
+    }
+    let refused = Refusal::LengthNotWholeHours.message();
+    assert!(refused.contains("whole number of hours"), "{refused}");
+}
+
+#[test]
+fn an_edit_keeps_its_own_minute() {
     let held = Event {
         span: Span::new(
             day("2026-10-14"),
@@ -317,34 +320,39 @@ fn an_edit_keeps_its_own_minute_on_offer() {
         ..denver_sprint()
     };
     let draft = Draft::edit(&held, &EditOptions::default(), ADMIN, BEFORE_THE_SESSIONS).unwrap();
-    let view = draft.next().unwrap().panel(PANEL, BEFORE_THE_SESSIONS);
+    assert_eq!(draft.start(), StartTime::new(17, 10));
     assert_eq!(
-        values(&view, PanelPart::Minute),
-        ["00", "10", "15", "30", "45"]
+        time_form_values(&draft),
+        [Some("17:10".to_owned()), Some("21:10".to_owned())]
     );
-    let quarter = draft.with_minute("15").unwrap();
+    let quarter = draft.with_typed_time("17:15", "21:15").unwrap();
     assert_eq!(
-        quarter.with_minute("10").map(|draft| draft.start()),
+        quarter
+            .with_typed_time("17:10", "21:10")
+            .map(|draft| draft.start()),
         Ok(StartTime::new(17, 10))
     );
     assert_eq!(
-        templated("Ranked Sprint").with_minute("10"),
-        Err(Refusal::StartFormat)
+        templated("Ranked Sprint")
+            .with_typed_time("17:10", "21:10")
+            .map(|draft| draft.start()),
+        Ok(StartTime::new(17, 10))
     );
 }
 
 #[test]
-fn a_draft_refuses_an_abbreviated_time_zone() {
-    let refused = templated("Ranked Sprint").with_zone("MDT").unwrap_err();
-    assert_eq!(refused, Refusal::ZoneUnknown);
-    assert!(
-        refused.message().contains("America/Denver"),
-        "{}",
-        refused.message()
+fn a_command_refuses_an_abbreviated_time_zone() {
+    assert_eq!(
+        zone_for(Some("MDT"), None).err(),
+        Some(ZoneProblem::Unknown("MDT".to_owned()))
     );
     assert_eq!(
-        templated("Ranked Sprint").with_zone("other"),
-        Err(Refusal::ZoneUnknown)
+        zone_for(Some("other"), None).err(),
+        Some(ZoneProblem::Unknown("other".to_owned()))
+    );
+    assert_eq!(
+        text::zone_unknown("MDT"),
+        "MDT is not a time zone I know. Pick one from the time_zone list."
     );
 }
 
@@ -492,7 +500,7 @@ fn no_panel_text_says_night_or_season() {
     let sprint = denver_sprint();
     let edited = Draft::edit(&sprint, &EditOptions::default(), ADMIN, BEFORE_THE_SESSIONS)
         .unwrap()
-        .with_hours("6")
+        .with_typed_time("17:00", "23:00")
         .unwrap();
     let steps = [
         created.clone(),
@@ -534,21 +542,18 @@ fn no_panel_text_says_night_or_season() {
             [
                 text::CREATE_LABEL,
                 text::SAVE_LABEL,
-                text::WEEKDAYS_PLACEHOLDER,
+                text::EVENT_DAYS_PLACEHOLDER,
                 text::ROLES_PLACEHOLDER,
-                text::FIRST_DAY_PLACEHOLDER,
-                text::LAST_DAY_PLACEHOLDER,
-                text::HOUR_PLACEHOLDER,
-                text::MINUTE_PLACEHOLDER,
-                text::LENGTH_PLACEHOLDER,
-                text::ZONE_PLACEHOLDER,
                 text::NEXT_TIME_LABEL,
                 text::NEXT_PINGS_LABEL,
                 text::BACK_LABEL,
-                text::TYPE_DATES_LABEL,
+                text::SET_DATES_LABEL,
+                text::SET_TIME_LABEL,
                 text::DATES_MODAL_TITLE,
-                text::ZONE_MODAL_TITLE,
-                text::ZONE_INPUT_LABEL,
+                text::TIME_MODAL_TITLE,
+                text::START_INPUT_LABEL,
+                text::END_INPUT_LABEL,
+                text::ZONE_MISSING,
                 text::DAYS_PROMPT,
                 text::NO_WEEKDAY_IN_DATES,
                 text::EVERY_SESSION_STARTED,
@@ -562,7 +567,7 @@ fn no_panel_text_says_night_or_season() {
         .iter()
         .map(Refusal::message)
         .collect();
-    assert_eq!(refusals.len(), 41);
+    assert_eq!(refusals.len(), 44);
     for text in texts.iter().chain(refusals.iter()) {
         assert!(!says_night_or_season(text), "{text}");
     }
@@ -590,14 +595,12 @@ fn the_clan_battles_template_fills_start_hours_and_zone() {
 #[test]
 fn a_templates_values_can_be_changed_in_the_panel() {
     let draft = dated(templated("Ranked Sprint"), "2026-10-14", "2026-10-18")
-        .with_hours("3")
-        .unwrap()
-        .with_zone("America/Denver")
+        .with_typed_time("23:30", "02:30")
         .unwrap();
     let span = draft.span().unwrap();
     let schedule = span.schedule();
     assert_eq!(schedule.start(), StartTime::parse("23:30").unwrap());
-    assert_eq!(schedule.zone(), &Zone::find("America/Denver").unwrap());
+    assert_eq!(schedule.zone(), &Zone::find("UTC").unwrap());
     assert_eq!(schedule.hours(), Hours::new(3).unwrap());
 }
 
@@ -607,37 +610,24 @@ fn without_a_template_nothing_is_picked_and_each_step_names_what_is_missing() {
     assert_eq!(draft.weekdays(), None);
     assert_eq!(draft.start(), None);
     assert_eq!(draft.hours(), None);
-    assert_eq!(draft.zone(), None);
+    assert_eq!(draft.zone(), Zone::find("America/Denver").as_ref());
     assert_eq!(draft.span(), None);
     assert_eq!(
         draft.next(),
-        Err(Refusal::MissingOptions(vec![
-            "the first day",
-            "the last day",
-            "the days of the week"
-        ]))
+        Err(Refusal::MissingOptions(vec!["the dates", "the event days"]))
     );
     let days = dated(draft, "2026-10-14", "2026-10-28")
         .with_weekdays(&strings(&["wed"]))
         .unwrap()
         .next()
         .unwrap();
-    let hour_only = days.with_hour("17").unwrap();
     assert_eq!(
-        hour_only.next(),
-        Err(Refusal::MissingOptions(vec![
-            "the start minute",
-            "the length",
-            "the time zone"
-        ]))
+        days.next(),
+        Err(Refusal::MissingOptions(vec!["the session time"]))
     );
     assert_eq!(
-        hour_only.ready(BEFORE_THE_SESSIONS, &[]),
-        Err(Refusal::MissingOptions(vec![
-            "the start minute",
-            "the length",
-            "the time zone"
-        ]))
+        days.ready(BEFORE_THE_SESSIONS, &[]),
+        Err(Refusal::MissingOptions(vec!["the session time"]))
     );
 }
 
@@ -659,7 +649,7 @@ fn an_edit_moving_the_schedule_needs_a_session_ahead() {
     assert!(held.running(AFTER_THE_ONE_START));
     let opened_edit =
         Draft::edit(&held, &EditOptions::default(), ADMIN, AFTER_THE_ONE_START).unwrap();
-    let later = to_pings(opened_edit.with_minute("45").unwrap());
+    let later = to_pings(opened_edit.with_typed_time("23:45", "03:45").unwrap());
     assert_eq!(
         later.ready(AFTER_THE_ONE_START, &[]),
         Err(Refusal::NoSessionsLeft)
@@ -715,7 +705,7 @@ fn an_edit_of_the_name_needs_no_session_ahead() {
     );
     let shorter = Draft::edit(&held, &EditOptions::default(), ADMIN, AFTER_THE_ONE_START)
         .unwrap()
-        .with_hours("3")
+        .with_typed_time("23:30", "02:30")
         .unwrap();
     assert_eq!(
         shorter.ready(AFTER_THE_ONE_START, &[]),
@@ -735,18 +725,19 @@ fn an_edit_of_the_name_needs_no_session_ahead() {
 fn picking_the_held_value_again_changes_nothing() {
     let draft = Draft::edit(
         &denver_sprint(),
-        &EditOptions::default(),
+        &EditOptions {
+            zone: Zone::find("America/Denver"),
+            ..EditOptions::default()
+        },
         ADMIN,
         BEFORE_THE_SESSIONS,
     )
     .unwrap()
-    .with_first_day("2026-10-14")
+    .with_typed_dates("2026-10-14", "2026-10-28", BEFORE_THE_SESSIONS)
     .unwrap()
     .with_weekdays(&strings(&["wed"]))
     .unwrap()
-    .with_hour("17")
-    .unwrap()
-    .with_zone("America/Denver")
+    .with_typed_time("17:00", "21:00")
     .unwrap();
     assert_eq!(
         to_pings(draft).ready(BEFORE_THE_SESSIONS, &[]),
@@ -818,8 +809,8 @@ fn an_edit_may_keep_a_first_day_in_the_past() {
 fn no_picked_weekday_between_the_dates_holds_the_days_step() {
     let draft = dated(
         create("Ranked Sprint", None).unwrap(),
-        "2026-10-12",
         "2026-10-13",
+        "2026-10-14",
     )
     .with_weekdays(&strings(&["sat"]))
     .unwrap();
@@ -827,30 +818,9 @@ fn no_picked_weekday_between_the_dates_holds_the_days_step() {
 }
 
 #[test]
-fn a_first_day_after_the_last_clears_the_last() {
-    let draft = dated(templated("Ranked Sprint"), "2026-10-14", "2026-10-18")
-        .with_first_day("2026-10-20")
-        .unwrap();
-    assert_eq!(draft.first_day(), Some(day("2026-10-20")));
-    assert_eq!(draft.last_day(), None);
-    let kept = dated(templated("Ranked Sprint"), "2026-10-14", "2026-10-18")
-        .with_first_day("2026-10-16")
-        .unwrap();
-    assert_eq!(kept.last_day(), Some(day("2026-10-18")));
-}
-
-#[test]
-fn the_day_menus_count_today_in_the_servers_zone() {
+fn typed_dates_count_today_in_the_servers_zone() {
     let fresh = create("Ranked Sprint", None).unwrap();
-    let utc = fresh.panel(PANEL, EVENING_IN_EDMONTON);
-    assert_eq!(values(&utc, PanelPart::FirstDay)[0], "2026-11-02");
     let edmonton = fresh.with_server_zones(strings(&["America/Edmonton", "Asia/Tokyo"]));
-    let view = edmonton.panel(PANEL, EVENING_IN_EDMONTON);
-    assert_eq!(values(&view, PanelPart::FirstDay)[0], "2026-11-01");
-    assert_eq!(
-        component(&view, PanelPart::FirstDay)["options"][0]["description"],
-        "Today"
-    );
     assert_eq!(
         fresh.with_typed_dates("2026-11-01", "2026-11-03", EVENING_IN_EDMONTON),
         Err(Refusal::FirstDayPast)
@@ -864,7 +834,7 @@ fn the_day_menus_count_today_in_the_servers_zone() {
 
 #[test]
 fn typed_dates_measure_the_window_from_the_same_day_as_create() {
-    let tokyo = create("Ranked Sprint", None)
+    let tokyo = create_in("Ranked Sprint", None, "Asia/Tokyo")
         .unwrap()
         .with_server_zones(strings(&["Asia/Tokyo"]));
     assert_eq!(
@@ -876,13 +846,7 @@ fn typed_dates_measure_the_window_from_the_same_day_as_create() {
         .unwrap()
         .with_weekdays(&strings(&["mon"]))
         .unwrap()
-        .with_hour("17")
-        .unwrap()
-        .with_minute("00")
-        .unwrap()
-        .with_hours("4")
-        .unwrap()
-        .with_zone("Asia/Tokyo")
+        .with_typed_time("17:00", "21:00")
         .unwrap();
     assert!(draft.ready(AFTERNOON_IN_EDMONTON, &[]).is_ok());
 }
@@ -918,18 +882,18 @@ fn the_days_line_says_what_is_left_to_pick() {
     let content = |draft: &Draft| draft.panel(PANEL, BEFORE_THE_SESSIONS).content;
     assert_eq!(
         content(&fresh),
-        "**Ranked Sprint** in <#10>\n**Step 1 of 3:** Days\nPick the first day, the last day and the days of the week it runs on."
+        "**Ranked Sprint** in <#10>\n**Step 1 of 3:** Days\nTimes in America/Denver\nPress Set dates to type the first and last day, then pick the event days."
     );
     let weekdays = fresh.with_weekdays(&strings(&["mon", "fri"])).unwrap();
     assert!(
-        content(&weekdays).ends_with("\nMondays, Fridays. Now pick the first and last day."),
+        content(&weekdays)
+            .ends_with("\nMondays, Fridays. Now press Set dates to type the first and last day."),
         "{}",
         content(&weekdays)
     );
     let dates = dated(fresh, "2026-11-02", "2026-11-06");
     assert!(
-        content(&dates)
-            .ends_with("\nRuns from Mon 2 Nov to Fri 6 Nov. Now pick the days of the week."),
+        content(&dates).ends_with("\nRuns from Mon 2 Nov to Fri 6 Nov. Now pick the event days."),
         "{}",
         content(&dates)
     );
@@ -968,10 +932,10 @@ fn the_pings_step_says_who_is_pinged() {
 }
 
 #[test]
-fn the_modals_ask_for_days_and_a_zone() {
+fn the_modals_ask_for_days_and_a_session_time() {
     let dates = serde_json::to_value(event_draft::dates_modal(PANEL)).unwrap();
     assert_eq!(dates["custom_id"], panel_id(PANEL, PanelPart::DatesModal));
-    assert_eq!(dates["title"], "Dates further out");
+    assert_eq!(dates["title"], "Event dates");
     let inputs: Vec<&serde_json::Value> = dates["components"]
         .as_array()
         .unwrap()
@@ -988,13 +952,19 @@ fn the_modals_ask_for_days_and_a_zone() {
     assert_eq!(inputs[1]["label"], "Last day");
     assert_eq!(inputs[1]["placeholder"], "2026-12-18");
     assert_eq!(inputs[1]["max_length"], 32);
-    let zone = serde_json::to_value(event_draft::zone_modal(PANEL)).unwrap();
-    assert_eq!(zone["custom_id"], panel_id(PANEL, PanelPart::ZoneModal));
-    assert_eq!(zone["title"], "Another time zone");
-    let input = &zone["components"][0]["components"][0];
-    assert_eq!(input["custom_id"], "zone");
-    assert_eq!(input["label"], "Time zone, for example Asia/Tokyo");
-    assert_eq!(input["max_length"], 64);
+    let time = serde_json::to_value(templated("Ranked Sprint").time_modal(PANEL)).unwrap();
+    assert_eq!(time["custom_id"], panel_id(PANEL, PanelPart::TimeModal));
+    assert_eq!(time["title"], "Session time");
+    let start = &time["components"][0]["components"][0];
+    assert_eq!(start["custom_id"], "start");
+    assert_eq!(start["label"], "Start");
+    assert_eq!(start["placeholder"], "19:00");
+    assert_eq!(start["value"], "23:30");
+    assert_eq!(start["max_length"], 16);
+    let end = &time["components"][1]["components"][0];
+    assert_eq!(end["custom_id"], "end");
+    assert_eq!(end["label"], "End");
+    assert_eq!(end["value"], "03:30");
 }
 
 #[test]
@@ -1016,9 +986,14 @@ fn only_the_panels_admin_opens_its_modals() {
             PANEL,
             OTHER_ADMIN,
             OPENED_AT_MS,
-            event_draft::zone_modal
+            event_draft::dates_modal
         )
         .err(),
+        Some(Refusal::PanelNotYours)
+    );
+    assert!(event_draft::time_modal_opened(&drafts, PANEL, ADMIN, OPENED_AT_MS).is_ok());
+    assert_eq!(
+        event_draft::time_modal_opened(&drafts, PANEL, OTHER_ADMIN, OPENED_AT_MS).err(),
         Some(Refusal::PanelNotYours)
     );
 }
@@ -1042,6 +1017,26 @@ fn typed_dates_redraw_the_stored_panel() {
         Some(Refusal::DateFormat)
     );
     assert_eq!(stored(&drafts).last_day(), Some(day("2026-12-18")));
+}
+
+#[test]
+fn a_typed_time_redraws_the_stored_panel() {
+    let drafts = opened(season_36().back(), OPENED_AT_MS);
+    let view =
+        event_draft::time_typed(&drafts, PANEL, ADMIN, "20:00", "22:00", OPENED_AT_MS).unwrap();
+    assert!(
+        view.content
+            .contains("Starts at 20:00 UTC and runs 2 hours."),
+        "{}",
+        view.content
+    );
+    assert_eq!(stored(&drafts).start(), StartTime::new(20, 0));
+    assert_eq!(stored(&drafts).hours(), Hours::new(2));
+    assert_eq!(
+        event_draft::time_typed(&drafts, PANEL, ADMIN, "8pm", "22:00", OPENED_AT_MS).err(),
+        Some(Refusal::TimeFormat)
+    );
+    assert_eq!(stored(&drafts).start(), StartTime::new(20, 0));
 }
 
 #[test]
@@ -1094,11 +1089,11 @@ fn the_panel_previews_the_event() {
 #[test]
 fn the_days_step_offers_dates_weekdays_and_its_buttons() {
     let view = season_36().back().back().panel(PANEL, BEFORE_THE_SESSIONS);
-    assert_eq!(view.components.len(), 4);
+    assert_eq!(view.components.len(), 2);
     let days = component(&view, PanelPart::Days);
     assert_eq!(days["min_values"], 1);
-    assert_eq!(days["max_values"], 7);
-    assert_eq!(days["placeholder"], "Weekdays");
+    assert_eq!(days["max_values"], 5);
+    assert_eq!(days["placeholder"], "Event days");
     assert_eq!(
         days["options"]
             .as_array()
@@ -1106,38 +1101,24 @@ fn the_days_step_offers_dates_weekdays_and_its_buttons() {
             .iter()
             .map(|option| option["label"].as_str().unwrap())
             .collect::<Vec<&str>>(),
-        [
-            "Monday",
-            "Tuesday",
-            "Wednesday",
-            "Thursday",
-            "Friday",
-            "Saturday",
-            "Sunday"
-        ]
+        ["Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     );
     assert_eq!(picked_days(&view), ["wed", "thu", "sat", "sun"]);
-    assert_eq!(
-        button_labels(&view),
-        ["Next: time", "Type dates further out", "Cancel"]
-    );
+    assert_eq!(button_labels(&view), ["Set dates", "Next: time", "Cancel"]);
     assert_eq!(component(&view, PanelPart::Next)["style"], 1);
     assert_eq!(component(&view, PanelPart::TypeDates)["style"], 2);
-    assert_eq!(values(&view, PanelPart::LastDay)[0], "2026-10-14");
 }
 
 #[test]
-fn the_time_step_has_back_next_and_cancel() {
+fn the_time_step_has_back_set_time_next_and_cancel() {
     let view = season_36().back().panel(PANEL, BEFORE_THE_SESSIONS);
-    assert_eq!(view.components.len(), 5);
-    assert_eq!(button_labels(&view), ["Back", "Next: pings", "Cancel"]);
-    let hours = component(&view, PanelPart::Hour);
-    assert_eq!(hours["options"][0]["description"], "12 AM");
-    assert_eq!(hours["options"][12]["description"], "12 PM");
-    assert_eq!(hours["options"][23]["label"], "23:00");
-    let lengths = component(&view, PanelPart::Length);
-    assert_eq!(lengths["options"][0]["label"], "1 hour");
-    assert_eq!(lengths["options"][23]["label"], "24 hours");
+    assert_eq!(view.components.len(), 1);
+    assert_eq!(
+        button_labels(&view),
+        ["Back", "Set time", "Next: pings", "Cancel"]
+    );
+    assert_eq!(component(&view, PanelPart::SetTime)["style"], 2);
+    assert_eq!(component(&view, PanelPart::Next)["style"], 1);
 }
 
 #[test]
@@ -1167,7 +1148,7 @@ fn picking_weekdays_redraws_the_preview() {
                 .back()
                 .panel(PANEL, BEFORE_THE_SESSIONS)
         ),
-        ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        ["wed", "thu", "fri", "sat", "sun"]
     );
 }
 
@@ -1468,7 +1449,7 @@ fn an_edit_panel_starts_from_the_event() {
         BEFORE_THE_SESSIONS,
     )
     .unwrap()
-    .with_hours("6")
+    .with_typed_time("17:00", "23:00")
     .unwrap();
     assert_eq!(
         picked_days(&draft.panel(PANEL, BEFORE_THE_SESSIONS)),
