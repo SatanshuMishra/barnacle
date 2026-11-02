@@ -1097,6 +1097,15 @@ fn mark_part(field: MarkField) -> IqPanelPart {
     }
 }
 
+pub fn mark_field(part: IqPanelPart) -> Option<MarkField> {
+    match part {
+        IqPanelPart::DeniedMark => Some(MarkField::Denied),
+        IqPanelPart::AwardedMark => Some(MarkField::Awarded),
+        IqPanelPart::ConfirmMark => Some(MarkField::Confirm),
+        _ => None,
+    }
+}
+
 fn mark_button(panel: u64, field: MarkField, mark: &Mark) -> serenity::CreateButton {
     let plain = button(panel, mark_part(field), iq_text::mark_field_name(field));
     match mark.reaction() {

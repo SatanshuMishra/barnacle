@@ -8,7 +8,6 @@ use crate::iq::BoardRow;
 use crate::iq::Criterion;
 use crate::iq::Done;
 use crate::iq::JudgingMarks;
-use crate::iq::Mark;
 use crate::iq::Problem;
 use crate::iq::Standing;
 use crate::iq_setup::MarkField;
@@ -730,10 +729,6 @@ pub fn rules_not_shown(characters: usize) -> String {
     }
 }
 
-pub fn mark_label(mark: &Mark) -> String {
-    mark.text()
-}
-
 pub fn mark_field_name(field: MarkField) -> &'static str {
     match field {
         MarkField::Denied => "Denied",
@@ -769,9 +764,9 @@ pub fn review_runs(first_day: Date, last_day: Date, zone: &str, criteria: usize)
 pub fn review_who(roles: &str, judges: &str, marks: &JudgingMarks) -> String {
     format!(
         "Visible to {roles}. Judges: {judges}. Denied: {}. Awarded: {}. Confirm awarded: {}.",
-        mark_label(&marks.denied),
-        mark_label(&marks.awarded),
-        mark_label(&marks.confirm)
+        marks.denied.text(),
+        marks.awarded.text(),
+        marks.confirm.text()
     )
 }
 

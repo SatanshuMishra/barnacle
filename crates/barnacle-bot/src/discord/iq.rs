@@ -541,7 +541,6 @@ pub(super) async fn iq_points(
         "a judge changed a member's points",
         &scope,
     );
-    commands::private(ctx, iq_text::points_done(target, total)).await?;
     log_judging(
         data,
         ctx.serenity_context(),
@@ -550,6 +549,7 @@ pub(super) async fn iq_points(
         &scope,
     )
     .await;
+    commands::private(ctx, iq_text::points_done(target, total)).await?;
     Ok(())
 }
 
@@ -1036,39 +1036,16 @@ pub(super) async fn pressed(
                 .map_err(Turned::from);
             open_modal(serenity_context, component, opened, &scope).await;
         }
-        IqPanelPart::DeniedMark => {
+        IqPanelPart::DeniedMark | IqPanelPart::AwardedMark | IqPanelPart::ConfirmMark => {
+            let Some(field) = iq_setup::mark_field(part) else {
+                return;
+            };
             pick_mark(
                 data,
                 serenity_context,
                 component,
                 panel,
-                MarkField::Denied,
-                user,
-                guild,
-                &scope,
-            )
-            .await;
-        }
-        IqPanelPart::AwardedMark => {
-            pick_mark(
-                data,
-                serenity_context,
-                component,
-                panel,
-                MarkField::Awarded,
-                user,
-                guild,
-                &scope,
-            )
-            .await;
-        }
-        IqPanelPart::ConfirmMark => {
-            pick_mark(
-                data,
-                serenity_context,
-                component,
-                panel,
-                MarkField::Confirm,
+                field,
                 user,
                 guild,
                 &scope,
@@ -1993,17 +1970,7 @@ async fn build(
     .await?
     .id;
     made.channels.push(submissions);
-    let judge_log = bounded(
-        guild.create_channel(
-            http.as_ref(),
-            serenity::CreateChannel::new(iq_setup::JUDGE_LOG_NAME)
-                .kind(serenity::ChannelType::Text)
-                .category(category)
-                .permissions(judge_log_permissions(seats)?),
-        ),
-    )
-    .await?
-    .id;
+    let judge_log = create_judge_log(http, category, seats).await?;
     made.channels.push(judge_log);
     let channels = CompetitionChannels {
         category: ChannelId::new(category.get()),
@@ -2772,17 +2739,48 @@ async fn log_judging(
     }
 }
 
+static JUDGE_LOG_CREATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn stored_judge_log(
+    data: &Data,
+    competition: &Competition,
+) -> Result<Option<ChannelId>, IqError> {
+    Ok(data
+        .iq
+        .competition(competition.id)
+        .await?
+        .map_or(competition.judge_log, |current| current.judge_log))
+}
+
+async fn create_judge_log(
+    http: &serenity::Http,
+    category: serenity::ChannelId,
+    seats: Seats,
+) -> Result<serenity::ChannelId, IqError> {
+    Ok(bounded(
+        seats.guild.create_channel(
+            http,
+            serenity::CreateChannel::new(iq_setup::JUDGE_LOG_NAME)
+                .kind(serenity::ChannelType::Text)
+                .category(category)
+                .permissions(judge_log_permissions(seats)?),
+        ),
+    )
+    .await?
+    .id)
+}
+
 async fn judge_log_of(
     data: &Data,
     serenity_context: &serenity::Context,
     competition: &Competition,
     scope: &Scope,
 ) -> Result<ChannelId, IqError> {
-    let stored = match data.iq.competition(competition.id).await {
-        Ok(Some(current)) => current.judge_log,
-        Ok(None) | Err(_) => competition.judge_log,
-    };
-    if let Some(channel) = stored {
+    if let Some(channel) = stored_judge_log(data, competition).await? {
+        return Ok(channel);
+    }
+    let _creating = JUDGE_LOG_CREATION.lock().await;
+    if let Some(channel) = stored_judge_log(data, competition).await? {
         return Ok(channel);
     }
     let judge = current_judge_role(data, &serenity_context.cache, competition.guild, scope)
@@ -2794,17 +2792,12 @@ async fn judge_log_of(
         judge,
         bot: serenity_context.cache.current_user().id,
     };
-    let created = bounded(
-        guild.create_channel(
-            serenity_context.http.as_ref(),
-            serenity::CreateChannel::new(iq_setup::JUDGE_LOG_NAME)
-                .kind(serenity::ChannelType::Text)
-                .category(discord_channel(competition.category)?)
-                .permissions(judge_log_permissions(seats)?),
-        ),
+    let created = create_judge_log(
+        &serenity_context.http,
+        discord_channel(competition.category)?,
+        seats,
     )
-    .await?
-    .id;
+    .await?;
     let channel = ChannelId::new(created.get());
     if let Err(error) = data.iq.set_judge_log(competition.id, channel).await {
         failure::report(
