@@ -1,7 +1,7 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T11:37:32.735Z
-Next ids: c3 D6 R5 S1
+Updated: 2026-11-02T13:14:04.087Z
+Next ids: c3 D7 R5 S1
 
 ## Goal
 
@@ -28,6 +28,7 @@ Needs: D1, D4, R3, R4.
 - D2 Lighthouse is skipped; criterion 5.23 (live Discord) stays unproven.
 - D3 Interphase hand-off: build the reviewed spec: Build the handed-off spec now: cut the feature branch, commit the receipts config, plan, and start the unattended drive.
 - D4 IQ run hand-off: start the stacked IQ build now: Start the IQ build now; merge any event-panel fix commits into the IQ branch before its review and ship.
+- D6 IQ ship boundary: ship the regated head 0036a69: Ship 0036a69: SHIP=1 run.zsh --resume --proven-head iq-competition=0036a69 with the gate classes, then open the PR against feat/event-panel-and-iq with mitosis's title and body, assigned to the owner.
 
 ## Open risks
 
