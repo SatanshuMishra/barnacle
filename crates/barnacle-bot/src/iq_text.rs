@@ -336,8 +336,9 @@ pub fn edit_note(
 
 pub fn below_zero(member: UserId, total: i64) -> String {
     format!(
-        "{} has {total} points, so at most {total} can be removed.",
-        user(member)
+        "{} has {total} points, so at most {} can be removed.",
+        user(member),
+        total.max(0)
     )
 }
 

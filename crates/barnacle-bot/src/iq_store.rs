@@ -702,7 +702,7 @@ impl IqStore {
         .fetch_one(&mut *transaction)
         .await?;
         let total = current.saturating_add(points);
-        if total < 0 {
+        if points < 0 && total < 0 {
             transaction.rollback().await?;
             return Ok(AdjustOutcome::BelowZero { total: current });
         }

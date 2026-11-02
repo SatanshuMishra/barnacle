@@ -200,3 +200,11 @@ fn a_points_change_is_confirmed_with_the_new_total() {
         "Done. <@31> now has 20 points."
     );
 }
+
+#[test]
+fn a_negative_total_allows_no_removal() {
+    assert_eq!(
+        iq_text::below_zero(UserId::new(31), -40),
+        "<@31> has -40 points, so at most 0 can be removed."
+    );
+}

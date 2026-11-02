@@ -555,7 +555,14 @@ async fn an_addition_to_a_negative_total_is_saved() {
     );
     assert_eq!(
         store
-            .adjust(november.id, PLAYER, -1, "Wrong screenshot", JUDGE, AWARDED_AT_MS)
+            .adjust(
+                november.id,
+                PLAYER,
+                -1,
+                "Wrong screenshot",
+                JUDGE,
+                AWARDED_AT_MS
+            )
             .await
             .unwrap(),
         AdjustOutcome::BelowZero { total: -40 }
