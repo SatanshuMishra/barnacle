@@ -1,6 +1,6 @@
 # event-panel-and-iq: Redesign /event create as a panel wizard and add the IQ Competition
 Status: active
-Updated: 2026-11-02T10:48:56.181Z
+Updated: 2026-11-02T10:54:20.492Z
 Next ids: c3 D6 R5 S1
 
 ## Goal
@@ -18,7 +18,7 @@ mitosis/iq-competition is at 29f9d49, which merges feat/event-panel-and-iq (eef1
 
 ## Next step
 
-Round 2 (6b96b2d..29f9d49) has its diff, standards (no findings) and brief values under review/round-2; its suite, code-reviewer and security-reviewer run in the background. When they reply, run candidates, validator, record and verdict, and drive to green. Then, since a proven head reuses the weak gate unchanged, regate the final head by hand with `run.zsh --resume --gate-classes ~/.mitosis/barnacle/iq-competition/gate-classes.json` (the 21 weak properties classed covered-elsewhere, BUSY_TIMEOUT named), ship it, and open the pull request against feat/event-panel-and-iq.
+Round 2 (6b96b2d..29f9d49) passes its suite; its 10 candidates (carried P1 and P2, new C1 MEDIUM on clean-up failing on a deleted IQ-Judge role, C2-C5 and S1-S3 LOW) sit in review/round-2/iq-competition.candidates.md, and the validator judges them in the background. When it replies, run record and verdict, fix what it confirms (an S3 fix must not let a live post move the mark before a reconnect's catch-up), and drive to green. Then, since a proven head reuses the weak gate unchanged, regate the final head by hand with `run.zsh --resume --gate-classes ~/.mitosis/barnacle/iq-competition/gate-classes.json` (the 21 weak properties classed covered-elsewhere, BUSY_TIMEOUT named), ship it, and open the pull request against feat/event-panel-and-iq.
 
 Needs: D1, D4, R3, R4.
 
