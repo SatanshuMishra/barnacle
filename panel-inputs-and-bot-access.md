@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T19:54:47.673Z
+Updated: 2026-11-02T19:54:57.196Z
 Next ids: c2 D7 R1 S1
 
 ## Goal
@@ -17,7 +17,7 @@ access-roles is built and gated (8 of 8 pass, reconcile clean) on mitosis/access
 
 ## Next step
 
-When the access-roles suite finishes, dispatch the rendered briefs in ~/.mitosis/barnacle/panel-inputs-and-bot-access/review/round-1 (code-reviewer, conformance-auditor, security-reviewer) through pipeline agent in the background, then collect findings and validate.
+When the access-roles reviewers finish, collect their last JSON arrays with the standards finding into review/round-1/access-roles.findings.json (leave out the suite's U1), run pipeline candidates, the validator, record and verdict.
 
 Needs: D5, D6.
 
