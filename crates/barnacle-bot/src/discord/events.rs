@@ -8,6 +8,7 @@ use poise::serenity_prelude as serenity;
 use super::Context;
 use super::Data;
 use super::Error;
+use super::access;
 use super::board;
 use super::iq;
 use super::panel;
@@ -127,6 +128,8 @@ async fn clicked(
         panel::pressed(data, serenity_context, component, panel, part, guild).await;
     } else if let Some((panel, part)) = wiring::iq_panel_part(&component.data.custom_id) {
         iq::pressed(data, serenity_context, component, panel, part, guild).await;
+    } else if let Some((panel, part)) = wiring::access_panel_part(&component.data.custom_id) {
+        access::pressed(data, serenity_context, component, panel, part, guild).await;
     }
 }
 
@@ -154,6 +157,9 @@ async fn announce_pressed(
     owners: &HashSet<serenity::UserId>,
 ) {
     let scope = Scope::of_component(component).guild(guild);
+    if !access::organiser_pressed(data, serenity_context, component, guild, &scope).await {
+        return;
+    }
     if !acknowledge(serenity_context, component, &scope).await {
         return;
     }
@@ -721,6 +727,23 @@ pub async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
             let content = failure::command_failed(&ctx.command().qualified_name, &failure);
             reply(ctx, content, &scope).await;
         }
+        poise::FrameworkError::CommandCheckFailed {
+            error: Some(error),
+            ctx,
+            ..
+        } => {
+            let scope = Scope::of_command(ctx);
+            let failure = Failure::from_error(&*error);
+            failure::report(
+                "command.failed",
+                "a command's access check did not finish",
+                &failure,
+                &scope,
+            );
+            let content = failure::command_failed(&ctx.command().qualified_name, &failure);
+            reply(ctx, content, &scope).await;
+        }
+        poise::FrameworkError::CommandCheckFailed { error: None, .. } => {}
         poise::FrameworkError::MissingUserPermissions {
             missing_permissions,
             ctx,

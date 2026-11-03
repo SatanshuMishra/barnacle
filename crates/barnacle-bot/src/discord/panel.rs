@@ -3,6 +3,7 @@ use barnacle_guess::UserId;
 use poise::serenity_prelude as serenity;
 
 use super::Data;
+use super::access::organiser_pressed;
 use super::commands;
 use super::commands::CheckedPing;
 use super::events::Answer;
@@ -62,6 +63,7 @@ pub(super) async fn pressed(
                 panel,
                 user,
                 now_ms,
+                guild,
                 &scope,
             )
             .await
@@ -82,29 +84,17 @@ pub(super) async fn pressed(
             );
             open_modal(serenity_context, component, opened, &scope).await;
         }
-        PanelPart::Zone if picked(&component.data.kind) == Some(event_draft::ANOTHER_ZONE) => {
-            let opened = event_draft::modal_opened(
-                &data.drafts,
-                panel,
-                user,
-                now_ms,
-                event_draft::zone_modal,
-            );
+        PanelPart::SetTime => {
+            let opened = event_draft::time_modal_opened(&data.drafts, panel, user, now_ms);
             open_modal(serenity_context, component, opened, &scope).await;
         }
         PanelPart::Days
         | PanelPart::Roles
         | PanelPart::Everyone
-        | PanelPart::FirstDay
-        | PanelPart::LastDay
-        | PanelPart::Hour
-        | PanelPart::Minute
-        | PanelPart::Length
-        | PanelPart::Zone
         | PanelPart::Next
         | PanelPart::Back
         | PanelPart::DatesModal
-        | PanelPart::ZoneModal => {
+        | PanelPart::TimeModal => {
             match changed(
                 &data.drafts,
                 panel,
@@ -168,24 +158,21 @@ pub(super) async fn submitted(
             &typed(event_draft::LAST_DAY_INPUT),
             now_ms,
         ),
-        PanelPart::ZoneModal => {
-            let zone = typed(event_draft::ZONE_INPUT);
-            event_draft::redrawn(&data.drafts, panel, user, now_ms, |draft| {
-                draft.with_zone(&zone)
-            })
-        }
+        PanelPart::TimeModal => event_draft::time_typed(
+            &data.drafts,
+            panel,
+            user,
+            &typed(event_draft::START_INPUT),
+            &typed(event_draft::END_INPUT),
+            now_ms,
+        ),
         PanelPart::Days
         | PanelPart::Roles
         | PanelPart::Everyone
         | PanelPart::Save
         | PanelPart::Cancel
-        | PanelPart::FirstDay
-        | PanelPart::LastDay
         | PanelPart::TypeDates
-        | PanelPart::Hour
-        | PanelPart::Minute
-        | PanelPart::Length
-        | PanelPart::Zone
+        | PanelPart::SetTime
         | PanelPart::Next
         | PanelPart::Back => data
             .drafts
@@ -209,15 +196,6 @@ fn typed_value(data: &serenity::ModalInteractionData, id: &str) -> String {
         .unwrap_or_default()
 }
 
-fn picked(kind: &serenity::ComponentInteractionDataKind) -> Option<&str> {
-    match kind {
-        serenity::ComponentInteractionDataKind::StringSelect { values } => {
-            values.first().map(String::as_str)
-        }
-        _ => None,
-    }
-}
-
 fn changed(
     drafts: &Drafts<Draft>,
     panel: u64,
@@ -226,7 +204,6 @@ fn changed(
     user: UserId,
     now_ms: u64,
 ) -> Result<PanelView, Refusal> {
-    let single = picked(kind).unwrap_or_default().to_owned();
     match (part, kind) {
         (PanelPart::Days, serenity::ComponentInteractionDataKind::StringSelect { values }) => {
             event_draft::weekdays_picked(drafts, panel, user, values, now_ms)
@@ -244,38 +221,13 @@ fn changed(
         (PanelPart::Back, serenity::ComponentInteractionDataKind::Button) => {
             event_draft::redrawn(drafts, panel, user, now_ms, |draft| Ok(draft.back()))
         }
-        (
-            PanelPart::FirstDay
-            | PanelPart::LastDay
-            | PanelPart::Hour
-            | PanelPart::Minute
-            | PanelPart::Length
-            | PanelPart::Zone,
-            serenity::ComponentInteractionDataKind::StringSelect { .. },
-        ) => event_draft::redrawn(drafts, panel, user, now_ms, |draft| match part {
-            PanelPart::FirstDay => draft.with_first_day(&single),
-            PanelPart::LastDay => draft.with_last_day(&single),
-            PanelPart::Hour => draft.with_hour(&single),
-            PanelPart::Minute => draft.with_minute(&single),
-            PanelPart::Length => draft.with_hours(&single),
-            PanelPart::Zone => draft.with_zone(&single),
-            PanelPart::Days
-            | PanelPart::Roles
-            | PanelPart::Everyone
-            | PanelPart::Save
-            | PanelPart::Cancel
-            | PanelPart::TypeDates
-            | PanelPart::Next
-            | PanelPart::Back
-            | PanelPart::DatesModal
-            | PanelPart::ZoneModal => Err(Refusal::PanelUnknown),
-        }),
         _ => drafts
             .with(panel, user, now_ms)
             .and(Err(Refusal::PanelUnknown)),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn save(
     data: &Data,
     serenity_context: &serenity::Context,
@@ -283,8 +235,12 @@ async fn save(
     panel: u64,
     user: UserId,
     now_ms: u64,
+    guild: GuildId,
     scope: &Scope,
 ) {
+    if !organiser_pressed(data, serenity_context, component, guild, scope).await {
+        return;
+    }
     if !acknowledge(serenity_context, component, scope).await {
         return;
     }

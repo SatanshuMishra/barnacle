@@ -1,12 +1,13 @@
 use barnacle_bot::discord::command_list;
 use poise::serenity_prelude as serenity;
 
-const ADMIN_SUBCOMMANDS: [&str; 6] = ["start", "edit", "stop", "complete", "cleanup", "judges"];
+const ORGANISER_SUBCOMMANDS: [&str; 6] = ["start", "edit", "stop", "complete", "cleanup", "judges"];
 const OPEN_SUBCOMMANDS: [&str; 2] = ["points", "leaderboard"];
 
 struct Subcommand {
     name: String,
     required_permissions: serenity::Permissions,
+    checks: usize,
     parameters: Vec<(String, bool)>,
 }
 
@@ -20,6 +21,7 @@ fn iq_subcommands() -> Vec<Subcommand> {
         .map(|command| Subcommand {
             name: command.name.to_string(),
             required_permissions: command.required_permissions,
+            checks: command.checks.len(),
             parameters: command
                 .parameters
                 .iter()
@@ -58,27 +60,31 @@ fn the_iq_command_has_every_subcommand() {
 }
 
 #[test]
-fn admin_subcommands_need_manage_server() {
-    for name in ADMIN_SUBCOMMANDS {
+fn organiser_subcommands_carry_the_organiser_check_alone() {
+    for name in ORGANISER_SUBCOMMANDS {
+        let organiser = subcommand(name);
         assert_eq!(
-            subcommand(name).required_permissions,
-            serenity::Permissions::MANAGE_GUILD,
-            "{name}"
-        );
-    }
-    for name in OPEN_SUBCOMMANDS {
-        assert_eq!(
-            subcommand(name).required_permissions,
+            organiser.required_permissions,
             serenity::Permissions::empty(),
             "{name}"
         );
+        assert_eq!(organiser.checks, 1, "{name}");
+    }
+    for name in OPEN_SUBCOMMANDS {
+        let open = subcommand(name);
+        assert_eq!(
+            open.required_permissions,
+            serenity::Permissions::empty(),
+            "{name}"
+        );
+        assert_eq!(open.checks, 0, "{name}");
     }
     let points = subcommand("points").parameters;
     let names: Vec<&str> = points.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(names, ["member", "points", "reason"]);
     assert_eq!(
         points.iter().find(|(name, _)| name == "reason"),
-        Some(&("reason".to_owned(), false))
+        Some(&("reason".to_owned(), true))
     );
 }
 
@@ -88,6 +94,11 @@ fn only_the_iq_command_itself_carries_discord_visibility() {
         .into_iter()
         .find(|command| command.name == "iq")
         .expect("iq is registered");
+    assert_eq!(
+        iq.default_member_permissions,
+        serenity::Permissions::empty()
+    );
+    assert!(iq.checks.is_empty());
     for subcommand in &iq.subcommands {
         assert_eq!(
             subcommand.default_member_permissions,

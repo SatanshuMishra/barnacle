@@ -11,6 +11,7 @@ use poise::serenity_prelude as serenity;
 use super::Context;
 use super::Data;
 use super::Error;
+use super::access::organiser_check;
 use super::announcer::SILHOUETTE_FILE;
 use super::announcer::cancel_row;
 use super::announcer::round_embed;
@@ -46,6 +47,8 @@ use crate::ids::Place;
 use crate::ids::RoleId;
 use crate::info;
 use crate::schedule;
+use crate::schedule::Zone;
+use crate::schedule::ZoneProblem;
 use crate::solves::Standing;
 use crate::table::COUNTDOWN_SECONDS;
 use crate::table::StartOutcome;
@@ -888,12 +891,7 @@ async fn about(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(
-    slash_command,
-    guild_only,
-    default_member_permissions = "MANAGE_GUILD",
-    required_permissions = "MANAGE_GUILD"
-)]
+#[poise::command(slash_command, guild_only, check = "organiser_check")]
 async fn event(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -952,7 +950,7 @@ pub fn cached_event_channel(
     })
 }
 
-#[poise::command(slash_command, rename = "create")]
+#[poise::command(slash_command, rename = "create", check = "organiser_check")]
 async fn event_create(
     ctx: Context<'_>,
     #[description = "The event's name, for example Ranked Sprint"]
@@ -961,6 +959,10 @@ async fn event_create(
     #[description = "Fill in the weekdays, start, length and time zone from a template"]
     #[choices("Clan Battles")]
     template: Option<&'static str>,
+    #[description = "The time zone for the event's times, remembered for next time"]
+    #[autocomplete = "suggest_zones"]
+    #[max_length = 64]
+    time_zone: Option<String>,
 ) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -971,23 +973,70 @@ async fn event_create(
     if let Some(refusal) = missing_here(wiring::missing_signup_permissions(channel_access(ctx))) {
         return refuse(ctx, refusal).await;
     }
+    let author = UserId::new(ctx.author().id.get());
+    let given = given_zone(time_zone.as_deref());
+    let remembered = ctx.data().zones.remembered(author).await?;
+    let zone = match schedule::zone_for(given, remembered.as_deref()) {
+        Ok(zone) => Some(zone),
+        Err(ZoneProblem::Missing) if template.is_some() => None,
+        Err(ZoneProblem::Missing) => return refuse(ctx, text::Refusal::ZoneNeeded).await,
+        Err(ZoneProblem::Unknown(typed)) => return refuse_unknown_zone(ctx, &typed).await,
+    };
+    if given.is_some() {
+        remember_zone(ctx, author, zone.as_ref()).await;
+    }
     let options = CreateOptions {
         name,
         template: template.map(str::to_owned),
+        zone,
     };
     let now_unix = super::now_unix();
-    match Draft::create(
-        &options,
-        place.guild,
-        place.channel,
-        UserId::new(ctx.author().id.get()),
-        now_unix,
-    ) {
+    match Draft::create(&options, place.guild, place.channel, author, now_unix) {
         Ok(draft) => {
             let zones = recent_zones(ctx, place.guild, now_unix).await;
             open_panel(ctx, draft.with_server_zones(zones)).await
         }
         Err(refusal) => refuse(ctx, refusal).await,
+    }
+}
+
+pub(super) async fn suggest_zones(
+    _ctx: Context<'_>,
+    partial: &str,
+) -> serenity::CreateAutocompleteResponse {
+    serenity::CreateAutocompleteResponse::new().set_choices(
+        schedule::zone_suggestions(partial)
+            .into_iter()
+            .map(|name| serenity::AutocompleteChoice::new(name.clone(), name))
+            .collect(),
+    )
+}
+
+pub(super) fn given_zone(typed: Option<&str>) -> Option<&str> {
+    typed.map(str::trim).filter(|text| !text.is_empty())
+}
+
+pub(super) async fn refuse_unknown_zone(ctx: Context<'_>, typed: &str) -> Result<(), Error> {
+    failure::refused(
+        "command.refused",
+        "a command was refused",
+        "zone_unknown",
+        &Scope::of_command(ctx),
+    );
+    private(ctx, text::zone_unknown(typed)).await
+}
+
+pub(super) async fn remember_zone(ctx: Context<'_>, author: UserId, zone: Option<&Zone>) {
+    let Some(zone) = zone else {
+        return;
+    };
+    if let Err(error) = ctx.data().zones.remember(author, zone.name()).await {
+        failure::report(
+            "command.failed",
+            "a member's time zone could not be remembered, so the next command will ask for it again",
+            &Failure::from_error(&error),
+            &Scope::of_command(ctx),
+        );
     }
 }
 
@@ -997,7 +1046,7 @@ pub(super) async fn recent_zones(ctx: Context<'_>, guild: GuildId, now_unix: i64
         Err(error) => {
             failure::report(
                 "command.failed",
-                "the server's events could not be read, so the time zone menu lists only the common zones",
+                "the server's events could not be read, so typed dates are counted from today in UTC",
                 &Failure::from_error(&error),
                 &Scope::of_command(ctx),
             );
@@ -1006,7 +1055,7 @@ pub(super) async fn recent_zones(ctx: Context<'_>, guild: GuildId, now_unix: i64
     }
 }
 
-#[poise::command(slash_command, rename = "edit")]
+#[poise::command(slash_command, rename = "edit", check = "organiser_check")]
 async fn event_edit(
     ctx: Context<'_>,
     #[description = "The event, picked from the list"]
@@ -1018,6 +1067,10 @@ async fn event_edit(
     #[description = "A text channel to move the sign-up posts to"]
     #[channel_types("Text")]
     channel: Option<serenity::ChannelId>,
+    #[description = "Move the event's times to this time zone"]
+    #[autocomplete = "suggest_zones"]
+    #[max_length = 64]
+    time_zone: Option<String>,
 ) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -1050,13 +1103,22 @@ async fn event_edit(
             return refuse(ctx, refusal).await;
         }
     }
-    let options = EditOptions { name, channel };
-    match Draft::edit(
-        &event,
-        &options,
-        UserId::new(ctx.author().id.get()),
-        now_unix,
-    ) {
+    let author = UserId::new(ctx.author().id.get());
+    let given = given_zone(time_zone.as_deref());
+    let zone = match given.map(|typed| schedule::zone_for(Some(typed), None)) {
+        None | Some(Err(ZoneProblem::Missing)) => None,
+        Some(Ok(zone)) => Some(zone),
+        Some(Err(ZoneProblem::Unknown(typed))) => {
+            return refuse_unknown_zone(ctx, &typed).await;
+        }
+    };
+    remember_zone(ctx, author, zone.as_ref()).await;
+    let options = EditOptions {
+        name,
+        channel,
+        zone,
+    };
+    match Draft::edit(&event, &options, author, now_unix) {
         Ok(draft) => {
             open_panel(
                 ctx,
@@ -1068,7 +1130,7 @@ async fn event_edit(
     }
 }
 
-#[poise::command(slash_command, rename = "repost")]
+#[poise::command(slash_command, rename = "repost", check = "organiser_check")]
 async fn event_repost(
     ctx: Context<'_>,
     #[description = "The event, picked from the list"]
@@ -1182,7 +1244,7 @@ async fn event_repost(
     }
 }
 
-#[poise::command(slash_command, rename = "end")]
+#[poise::command(slash_command, rename = "end", check = "organiser_check")]
 async fn event_end(
     ctx: Context<'_>,
     #[description = "The event, picked from the list"]
@@ -1225,7 +1287,7 @@ async fn event_end(
     }
 }
 
-#[poise::command(slash_command, rename = "list")]
+#[poise::command(slash_command, rename = "list", check = "organiser_check")]
 async fn event_list(ctx: Context<'_>) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -1244,12 +1306,7 @@ pub fn event_list_reply(events: &[Event], now_unix: i64) -> poise::CreateReply {
     private_reply(text::event_list(&lines))
 }
 
-#[poise::command(
-    slash_command,
-    guild_only,
-    default_member_permissions = "MANAGE_GUILD",
-    required_permissions = "MANAGE_GUILD"
-)]
+#[poise::command(slash_command, guild_only, check = "organiser_check")]
 async fn rehearse(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -1266,7 +1323,7 @@ async fn posts_of(store: &Attendance, events: &[Event]) -> Result<Vec<(i64, Vec<
     Ok(posts)
 }
 
-#[poise::command(slash_command, rename = "start")]
+#[poise::command(slash_command, rename = "start", check = "organiser_check")]
 #[allow(clippy::too_many_arguments)]
 async fn rehearse_start(
     ctx: Context<'_>,
@@ -1386,7 +1443,7 @@ async fn rehearse_start(
     }
 }
 
-#[poise::command(slash_command, rename = "next")]
+#[poise::command(slash_command, rename = "next", check = "organiser_check")]
 async fn rehearse_next(ctx: Context<'_>) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -1437,7 +1494,7 @@ async fn rehearse_next(ctx: Context<'_>) -> Result<(), Error> {
     .await
 }
 
-#[poise::command(slash_command, rename = "reset")]
+#[poise::command(slash_command, rename = "reset", check = "organiser_check")]
 async fn rehearse_reset(ctx: Context<'_>) -> Result<(), Error> {
     let Some(place) = place(ctx) else {
         return Ok(());
@@ -1461,17 +1518,12 @@ async fn rehearse_reset(ctx: Context<'_>) -> Result<(), Error> {
     private(ctx, text::reset_done(&purged)).await
 }
 
-#[poise::command(
-    slash_command,
-    guild_only,
-    default_member_permissions = "MANAGE_GUILD",
-    required_permissions = "MANAGE_GUILD"
-)]
+#[poise::command(slash_command, guild_only, check = "organiser_check")]
 async fn updates(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command, rename = "setup")]
+#[poise::command(slash_command, rename = "setup", check = "organiser_check")]
 async fn updates_setup(
     ctx: Context<'_>,
     #[description = "Channel for Barnacle update posts"]
@@ -1507,12 +1559,7 @@ async fn updates_setup(
     private(ctx, text::updates_setup_reply(place.channel, ping, verdict)).await
 }
 
-#[poise::command(
-    slash_command,
-    guild_only,
-    owners_only,
-    default_member_permissions = "MANAGE_GUILD"
-)]
+#[poise::command(slash_command, guild_only, owners_only, check = "organiser_check")]
 async fn announce(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild) = ctx.guild_id() else {
         return Ok(());
@@ -1558,17 +1605,12 @@ fn send_row(version: &str) -> serenity::CreateActionRow {
     ])
 }
 
-#[poise::command(
-    slash_command,
-    guild_only,
-    default_member_permissions = "MANAGE_CHANNELS",
-    required_permissions = "MANAGE_CHANNELS"
-)]
+#[poise::command(slash_command, guild_only, check = "organiser_check")]
 async fn voice(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command)]
+#[poise::command(slash_command, check = "organiser_check")]
 async fn hub(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -1655,7 +1697,7 @@ fn with_readiness(reply: String, blockers: &[&str]) -> String {
     }
 }
 
-#[poise::command(slash_command, rename = "create")]
+#[poise::command(slash_command, rename = "create", check = "organiser_check")]
 async fn hub_create(
     ctx: Context<'_>,
     #[description = "Rooms are named this plus a number: cb gives cb-1, cb-2"]
@@ -1735,7 +1777,7 @@ async fn hub_create(
     .await
 }
 
-#[poise::command(slash_command, rename = "edit")]
+#[poise::command(slash_command, rename = "edit", check = "organiser_check")]
 async fn hub_edit(
     ctx: Context<'_>,
     #[description = "The Join to Create channel to change"]
@@ -1834,7 +1876,7 @@ async fn hub_edit(
     .await
 }
 
-#[poise::command(slash_command, rename = "remove")]
+#[poise::command(slash_command, rename = "remove", check = "organiser_check")]
 async fn hub_remove(
     ctx: Context<'_>,
     #[description = "The Join to Create channel to delete"]
@@ -1859,7 +1901,7 @@ async fn hub_remove(
     private(ctx, voice_text::hub_removed(&hub.name)).await
 }
 
-#[poise::command(slash_command, rename = "list")]
+#[poise::command(slash_command, rename = "list", check = "organiser_check")]
 async fn hub_list(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild) = ctx.guild_id() else {
         return Ok(());
