@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: parked
-Updated: 2026-11-03T00:12:10.487Z
+Updated: 2026-11-03T00:34:22.478Z
 Next ids: c2 D11 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-All three MSPs are shipped as stacked pull requests waiting for the owner's merge: 56 access-roles (d1dce61, carrying the lock commit 425f25a), 57 panel-inputs (a69fbc7) and 58 iq-judging (b7f625f). Each stacked pull request must merge into its predecessor's branch before that predecessor merges. Criterion 5.23 (live Discord) is unproven, for the owner's dev-bot check. with_typed_dates counts today in the server's newest-event zone, not the draft's, a defect main already has. CI clippy all-targets fails on 56 and 57 alone, since the later locked test files only compile with iq-judging.
+Integration is running: pull requests 58, 57 and 56 merged in stack order, so origin/feat/panel-inputs-and-bot-access is at 11872c2, checked out in the integration worktree ~/.mitosis/runs/barnacle/panel-inputs-and-bot-access/integration; the acceptance checks, the suite and the integration plan are running on it. Criterion 5.23 (live Discord) is unproven, for the owner's dev-bot check. with_typed_dates counts today in the server's newest-event zone, not the draft's, a defect main already has. CI clippy all-targets fails on 56 and 57 alone, since the later locked test files only compile with iq-judging.
 
 ## Next step
 
