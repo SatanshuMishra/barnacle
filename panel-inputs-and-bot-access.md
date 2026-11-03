@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-03T00:11:28.713Z
+Updated: 2026-11-03T00:11:58.702Z
 Next ids: c2 D11 R1 S1
 
 ## Goal
@@ -9,7 +9,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Done when
 
-- [ ] c1 The pull requests for this request are open, reviewed green and assigned to the owner
+- [x] c1 The pull requests for this request are open, reviewed green and assigned to the owner evidence: pull requests 56 (access-roles into feat/panel-inputs-and-bot-access), 57 (panel-inputs into mitosis/access-roles) and 58 (iq-judging into mitosis/panel-inputs) are open, ready for review and assigned to SatanshuMishra; all three reviewed green, with access-roles and panel-inputs in round 1 and iq-judging in round 2
 
 ## Where things stand
 
