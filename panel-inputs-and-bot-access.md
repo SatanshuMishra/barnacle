@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: parked
-Updated: 2026-11-03T00:36:18.579Z
+Updated: 2026-11-03T00:38:11.386Z
 Next ids: c2 D11 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-Integration is running: pull requests 58, 57 and 56 merged in stack order, so origin/feat/panel-inputs-and-bot-access is at 11872c2, checked out in the integration worktree ~/.mitosis/runs/barnacle/panel-inputs-and-bot-access/integration. Its suite passes (927 passed, 0 failed); the acceptance checks and integration plan are rerunning, after the record's criterion 5.23 got the empty acceptance list the parser requires (the original record is saved as scratchpad/record.before-5.23.json). Criterion 5.23 (live Discord) is unproven, for the owner's dev-bot check. with_typed_dates counts today in the server's newest-event zone, not the draft's, a defect main already has.
+The FEATURE pull request 59 (feat/panel-inputs-and-bot-access at 11872c2 into main) is open, ready for review and assigned to the owner. On that head the suite passes (927 passed, 0 failed), the acceptance checks pass (60 of 60), integration-plan says lighthouse skip and integration-ready is true. The record's criterion 5.23 carries an empty acceptance list, which the pipeline's record parser requires. Criterion 5.23 (live Discord) is unproven, for the owner's dev-bot check. with_typed_dates counts today in the server's newest-event zone, not the draft's, a defect main already has.
 
 ## Next step
 
