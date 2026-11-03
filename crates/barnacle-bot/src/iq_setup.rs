@@ -1,28 +1,33 @@
 use std::num::NonZeroU64;
 
 use barnacle_guess::UserId;
-use jiff::ToSpan;
 use jiff::civil::Date;
+use jiff::tz::TimeZone;
 use poise::serenity_prelude as serenity;
 
+use crate::event_draft::FIRST_DAY_INPUT;
+use crate::event_draft::LAST_DAY_INPUT;
 use crate::event_draft::PanelView;
-use crate::event_draft::ZONE_INPUT;
-use crate::event_draft::day_options;
-use crate::event_draft::zone_options;
+use crate::event_draft::day_input;
+use crate::event_draft::read_day;
+use crate::event_draft::within_window;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::RoleId;
 use crate::iq::Criterion;
-use crate::iq::JudgingReaction;
+use crate::iq::JudgingMarks;
+use crate::iq::Mark;
 use crate::iq_store::Competition;
 pub use crate::iq_store::ConfigChange;
 use crate::iq_store::NewCompetition;
 use crate::iq_text;
 use crate::panels;
 use crate::panels::Owned;
-use crate::schedule;
-use crate::schedule::ZONE_NAME_LIMIT;
+use crate::schedule::Schedule;
+use crate::schedule::Span;
 use crate::schedule::Zone;
+use crate::voice::Overwrite;
+use crate::voice::OverwriteTarget;
 use crate::wiring::IqPanelPart;
 use crate::wiring::iq_panel_id;
 use crate::wiring::same_name;
@@ -30,7 +35,6 @@ use crate::wiring::same_name;
 pub type Drafts = panels::Drafts<SetupDraft>;
 
 pub const BLANK_TEMPLATE: &str = "blank";
-pub const DEFAULT_ZONE: &str = "America/Edmonton";
 pub const NAME_INPUT: &str = "name";
 pub const DESCRIPTION_INPUT: &str = "description";
 pub const POINTS_INPUT: &str = "points";
@@ -44,12 +48,22 @@ pub const CRITERION_NAME_LIMIT: usize = 50;
 pub const DESCRIPTION_LIMIT: usize = 300;
 pub const RULES_LIMIT: usize = 4000;
 pub const POINTS_LIMIT: u32 = 1000;
+pub const JUDGE_LOG_NAME: &str = "iq-judge-log";
 
 const CONTENT_LIMIT: usize = 2000;
-const DAY_MENU_DAYS: i64 = 25;
 const POINTS_INPUT_MAX: usize = 4;
 const MENU_MAX: u8 = 25;
 const QUOTE_MARK: &str = "> ";
+const JUDGE_LOG_JUDGES_ALLOW: serenity::Permissions =
+    serenity::Permissions::VIEW_CHANNEL.union(serenity::Permissions::READ_MESSAGE_HISTORY);
+const JUDGE_LOG_JUDGES_DENY: serenity::Permissions = serenity::Permissions::SEND_MESSAGES
+    .union(serenity::Permissions::ADD_REACTIONS)
+    .union(serenity::Permissions::CREATE_PUBLIC_THREADS)
+    .union(serenity::Permissions::CREATE_PRIVATE_THREADS)
+    .union(serenity::Permissions::SEND_MESSAGES_IN_THREADS);
+const JUDGE_LOG_BOT_ALLOW: serenity::Permissions = serenity::Permissions::VIEW_CHANNEL
+    .union(serenity::Permissions::SEND_MESSAGES)
+    .union(serenity::Permissions::READ_MESSAGE_HISTORY);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetupStep {
@@ -73,12 +87,20 @@ pub enum SetupRefusal {
     TooManyRoles,
     TooManyJudges,
     TemplateUnknown,
+    DateFormat,
     DayNotOffered,
     LastDayNotAfterFirst,
-    ZoneUnknown,
-    ReactionUnknown,
+    DatesTooFar,
+    MarkRepeated,
     FixedAfterStart,
     StepIncomplete(SetupStep),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkField {
+    Denied,
+    Awarded,
+    Confirm,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -110,6 +132,7 @@ pub struct CompetitionChannels {
     pub category: ChannelId,
     pub announcements: ChannelId,
     pub submissions: ChannelId,
+    pub judge_log: ChannelId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,7 +146,7 @@ pub struct SetupPlan {
     pub rules: String,
     pub roles: Vec<RoleId>,
     pub judges: Vec<UserId>,
-    pub reaction: JudgingReaction,
+    pub marks: JudgingMarks,
     pub created_by: UserId,
 }
 
@@ -142,7 +165,8 @@ impl SetupPlan {
             rules: self.rules.clone(),
             roles: self.roles.clone(),
             judges: self.judges.clone(),
-            reaction: self.reaction,
+            marks: self.marks.clone(),
+            judge_log: Some(channels.judge_log),
             created_by: self.created_by,
             created_at_ms,
         }
@@ -161,7 +185,6 @@ pub struct SetupDraft {
     guild: GuildId,
     owner: UserId,
     templates: Vec<Competition>,
-    server_zones: Vec<String>,
     today: Date,
     step: SetupStep,
     name: String,
@@ -175,7 +198,7 @@ pub struct SetupDraft {
     rules: String,
     roles: Vec<RoleId>,
     judges: Vec<UserId>,
-    reaction: JudgingReaction,
+    marks: JudgingMarks,
 }
 
 impl Owned for SetupDraft {
@@ -189,7 +212,7 @@ impl SetupDraft {
         guild: GuildId,
         owner: UserId,
         templates: Vec<Competition>,
-        server_zones: Vec<String>,
+        zone: Zone,
         today: Date,
     ) -> SetupDraft {
         SetupDraft {
@@ -197,21 +220,20 @@ impl SetupDraft {
             guild,
             owner,
             templates: templates.into_iter().take(TEMPLATE_LIMIT).collect(),
-            server_zones,
             today,
             step: SetupStep::Basics,
             name: iq_text::competition_name(today),
             renamed: false,
             first_day: None,
             last_day: None,
-            zone: DEFAULT_ZONE.to_owned(),
+            zone: zone.name().to_owned(),
             template: None,
             criteria: Vec::new(),
             picked: None,
             rules: String::new(),
             roles: Vec::new(),
             judges: Vec::new(),
-            reaction: JudgingReaction::Trophy,
+            marks: JudgingMarks::default(),
         }
     }
 
@@ -223,7 +245,6 @@ impl SetupDraft {
             guild: competition.guild,
             owner,
             templates: Vec::new(),
-            server_zones: Vec::new(),
             today: competition.first_day,
             step: SetupStep::Criteria,
             name: competition.name.clone(),
@@ -237,7 +258,7 @@ impl SetupDraft {
             rules: competition.rules.clone(),
             roles: competition.roles.clone(),
             judges: competition.judges.clone(),
-            reaction: competition.reaction,
+            marks: competition.marks.clone(),
         }
     }
 
@@ -297,8 +318,8 @@ impl SetupDraft {
         &self.judges
     }
 
-    pub fn reaction(&self) -> JudgingReaction {
-        self.reaction
+    pub fn marks(&self) -> &JudgingMarks {
+        &self.marks
     }
 
     pub fn with_template(&self, value: &str) -> Result<SetupDraft, SetupRefusal> {
@@ -311,7 +332,7 @@ impl SetupDraft {
                 rules: String::new(),
                 roles: Vec::new(),
                 judges: Vec::new(),
-                reaction: JudgingReaction::Trophy,
+                marks: JudgingMarks::default(),
                 ..self.clone()
             });
         }
@@ -327,48 +348,35 @@ impl SetupDraft {
             rules: source.rules.clone(),
             roles: source.roles.clone(),
             judges: source.judges.clone(),
-            reaction: source.reaction,
+            marks: source.marks.clone(),
             ..self.clone()
         })
     }
 
-    pub fn with_first_day(&self, value: &str) -> Result<SetupDraft, SetupRefusal> {
+    pub fn with_typed_dates(&self, first: &str, last: &str) -> Result<SetupDraft, SetupRefusal> {
         self.starting()?;
-        let first_day = offered_day(value, self.today)?;
-        let last_day = self.last_day.filter(|last| *last > first_day);
+        let first_day = read_day(first).map_err(|_| SetupRefusal::DateFormat)?;
+        let last_day = read_day(last).map_err(|_| SetupRefusal::DateFormat)?;
+        if first_day < self.today {
+            return Err(SetupRefusal::DayNotOffered);
+        }
+        if last_day <= first_day {
+            return Err(SetupRefusal::LastDayNotAfterFirst);
+        }
+        let typed = Span::new(first_day, last_day, Schedule::clan_battles())
+            .ok_or(SetupRefusal::LastDayNotAfterFirst)?;
+        let today_unix = start_of(self.today).ok_or(SetupRefusal::DatesTooFar)?;
+        if !within_window(&typed, today_unix) {
+            return Err(SetupRefusal::DatesTooFar);
+        }
         let name = match self.renamed {
             true => self.name.clone(),
             false => iq_text::competition_name(first_day),
         };
         Ok(SetupDraft {
             first_day: Some(first_day),
-            last_day,
-            name,
-            ..self.clone()
-        })
-    }
-
-    pub fn with_last_day(&self, value: &str) -> Result<SetupDraft, SetupRefusal> {
-        self.starting()?;
-        let last_day = schedule::parse_day(value.trim()).ok_or(SetupRefusal::DayNotOffered)?;
-        if self.first_day.is_some_and(|first| last_day <= first) {
-            return Err(SetupRefusal::LastDayNotAfterFirst);
-        }
-        let menu_start = self.last_day_menu_start();
-        if !within_menu(last_day, menu_start) {
-            return Err(SetupRefusal::DayNotOffered);
-        }
-        Ok(SetupDraft {
             last_day: Some(last_day),
-            ..self.clone()
-        })
-    }
-
-    pub fn with_zone(&self, name: &str) -> Result<SetupDraft, SetupRefusal> {
-        self.starting()?;
-        let zone = Zone::find(name).ok_or(SetupRefusal::ZoneUnknown)?;
-        Ok(SetupDraft {
-            zone: zone.name().to_owned(),
+            name,
             ..self.clone()
         })
     }
@@ -511,10 +519,17 @@ impl SetupDraft {
         })
     }
 
-    pub fn with_reaction(&self, value: &str) -> Result<SetupDraft, SetupRefusal> {
-        let reaction = JudgingReaction::parse(value).ok_or(SetupRefusal::ReactionUnknown)?;
+    pub fn with_mark(&self, field: MarkField, mark: Mark) -> Result<SetupDraft, SetupRefusal> {
+        let held = &self.marks;
+        let (denied, awarded, confirm) = match field {
+            MarkField::Denied => (mark, held.awarded.clone(), held.confirm.clone()),
+            MarkField::Awarded => (held.denied.clone(), mark, held.confirm.clone()),
+            MarkField::Confirm => (held.denied.clone(), held.awarded.clone(), mark),
+        };
+        let marks =
+            JudgingMarks::new(denied, awarded, confirm).map_err(|_| SetupRefusal::MarkRepeated)?;
         Ok(SetupDraft {
-            reaction,
+            marks,
             ..self.clone()
         })
     }
@@ -573,7 +588,7 @@ impl SetupDraft {
                     rules: self.rules.clone(),
                     roles: self.roles.clone(),
                     judges: self.judges.clone(),
-                    reaction: self.reaction,
+                    marks: self.marks.clone(),
                     created_by: self.owner,
                 }))
             }
@@ -583,7 +598,7 @@ impl SetupDraft {
                 rules: self.rules.clone(),
                 roles: self.roles.clone(),
                 judges: self.judges.clone(),
-                reaction: self.reaction,
+                marks: self.marks.clone(),
             })),
         }
     }
@@ -619,25 +634,15 @@ impl SetupDraft {
 
     fn step_met(&self, step: SetupStep) -> bool {
         match step {
-            SetupStep::Basics => {
-                self.template.is_some()
-                    && self
-                        .first_day
-                        .zip(self.last_day)
-                        .is_some_and(|(first, last)| last > first)
-            }
+            SetupStep::Basics => self
+                .first_day
+                .zip(self.last_day)
+                .is_some_and(|(first, last)| last > first),
             SetupStep::Criteria => !self.criteria.is_empty(),
             SetupStep::Rules => !self.rules.trim().is_empty(),
             SetupStep::Who => !self.roles.is_empty() && !self.judges.is_empty(),
             SetupStep::Review => true,
         }
-    }
-
-    fn last_day_menu_start(&self) -> Date {
-        self.first_day
-            .unwrap_or(self.today)
-            .checked_add(1.day())
-            .unwrap_or(Date::MAX)
     }
 
     fn editing(&self) -> bool {
@@ -653,7 +658,7 @@ impl SetupDraft {
 
     fn basics_content(&self) -> String {
         let dates = match self.first_day.zip(self.last_day) {
-            Some((first, last)) => iq_text::basics_line(first, last, &self.zone),
+            Some((first, last)) => iq_text::basics_line(first, last),
             None => iq_text::BASICS_PROMPT.to_owned(),
         };
         let used = match self.template {
@@ -667,7 +672,11 @@ impl SetupDraft {
             (false, Some(source)) => iq_text::template_copied(&source.name),
             (false, None) => iq_text::TEMPLATES_OFFERED.to_owned(),
         };
-        joined(self.top_lines().into_iter().chain([dates, template]))
+        joined(self.top_lines().into_iter().chain([
+            dates,
+            iq_text::ends_line(&self.zone),
+            template,
+        ]))
     }
 
     fn criteria_content(&self) -> String {
@@ -742,6 +751,7 @@ impl SetupDraft {
         joined(self.top_lines().into_iter().chain([
             iq_text::WHO_ROLES_INTRO.to_owned(),
             iq_text::WHO_JUDGES_INTRO.to_owned(),
+            iq_text::WHO_MARKS_INTRO.to_owned(),
         ]))
     }
 
@@ -771,6 +781,7 @@ impl SetupDraft {
                 iq_text::category_branch(&self.name),
                 iq_text::announcements_branch(roles),
                 iq_text::SUBMISSIONS_BRANCH.to_owned(),
+                iq_text::JUDGE_LOG_BRANCH.to_owned(),
             ],
             Purpose::Edit { .. } => Vec::new(),
         };
@@ -783,7 +794,7 @@ impl SetupDraft {
             self.top_lines()
                 .into_iter()
                 .chain(runs)
-                .chain([iq_text::review_who(roles, judges, self.reaction)])
+                .chain([iq_text::review_who(roles, judges, &self.marks)])
                 .chain(tree)
                 .chain(role_line)
                 .chain(missing_line),
@@ -811,25 +822,8 @@ impl SetupDraft {
                 iq_text::TEMPLATE_PLACEHOLDER,
                 options,
             ),
-            string_menu(
-                panel,
-                IqPanelPart::FirstDay,
-                iq_text::FIRST_DAY_PLACEHOLDER,
-                day_options(self.today, self.today, self.first_day),
-            ),
-            string_menu(
-                panel,
-                IqPanelPart::LastDay,
-                iq_text::LAST_DAY_PLACEHOLDER,
-                day_options(self.last_day_menu_start(), self.today, self.last_day),
-            ),
-            string_menu(
-                panel,
-                IqPanelPart::Zone,
-                iq_text::ZONE_PLACEHOLDER,
-                zone_options(&self.server_zones, Some(self.zone.as_str())),
-            ),
             serenity::CreateActionRow::Buttons(vec![
+                button(panel, IqPanelPart::SetDates, iq_text::SET_DATES_LABEL),
                 button(panel, IqPanelPart::Rename, iq_text::RENAME_LABEL),
                 next_button(
                     panel,
@@ -931,25 +925,20 @@ impl SetupDraft {
         .placeholder(iq_text::JUDGES_PLACEHOLDER)
         .min_values(1)
         .max_values(MENU_MAX);
-        let reactions = JudgingReaction::ALL
+        let marks = serenity::CreateActionRow::Buttons(
+            [
+                (MarkField::Denied, &self.marks.denied),
+                (MarkField::Awarded, &self.marks.awarded),
+                (MarkField::Confirm, &self.marks.confirm),
+            ]
             .into_iter()
-            .map(|reaction| {
-                serenity::CreateSelectMenuOption::new(
-                    iq_text::reaction_label(reaction),
-                    reaction.value(),
-                )
-                .default_selection(self.reaction == reaction)
-            })
-            .collect();
+            .map(|(field, mark)| mark_button(panel, field, mark))
+            .collect(),
+        );
         vec![
             serenity::CreateActionRow::SelectMenu(roles),
             serenity::CreateActionRow::SelectMenu(judges),
-            string_menu(
-                panel,
-                IqPanelPart::Reaction,
-                iq_text::REACTION_PLACEHOLDER,
-                reactions,
-            ),
+            marks,
             serenity::CreateActionRow::Buttons(vec![
                 back_button(panel),
                 next_button(
@@ -1045,18 +1034,23 @@ pub fn rules_modal(panel: u64, rules: &str) -> serenity::CreateModal {
     ))])
 }
 
-pub fn zone_modal(panel: u64) -> serenity::CreateModal {
+pub fn dates_modal(panel: u64) -> serenity::CreateModal {
     serenity::CreateModal::new(
-        iq_panel_id(panel, IqPanelPart::ZoneModal),
-        iq_text::ZONE_MODAL_TITLE,
+        iq_panel_id(panel, IqPanelPart::DatesModal),
+        iq_text::DATES_MODAL_TITLE,
     )
-    .components(vec![serenity::CreateActionRow::InputText(text_input(
-        serenity::InputTextStyle::Short,
-        iq_text::ZONE_INPUT_LABEL,
-        ZONE_INPUT,
-        ZONE_NAME_LIMIT,
-        "",
-    ))])
+    .components(vec![
+        day_input(
+            iq_text::FIRST_DAY_INPUT_LABEL,
+            FIRST_DAY_INPUT,
+            iq_text::FIRST_DAY_EXAMPLE,
+        ),
+        day_input(
+            iq_text::LAST_DAY_INPUT_LABEL,
+            LAST_DAY_INPUT,
+            iq_text::LAST_DAY_EXAMPLE,
+        ),
+    ])
 }
 
 fn text_input(
@@ -1095,6 +1089,51 @@ fn button(panel: u64, part: IqPanelPart, label: &str) -> serenity::CreateButton 
         .style(serenity::ButtonStyle::Secondary)
 }
 
+fn mark_part(field: MarkField) -> IqPanelPart {
+    match field {
+        MarkField::Denied => IqPanelPart::DeniedMark,
+        MarkField::Awarded => IqPanelPart::AwardedMark,
+        MarkField::Confirm => IqPanelPart::ConfirmMark,
+    }
+}
+
+pub fn mark_field(part: IqPanelPart) -> Option<MarkField> {
+    match part {
+        IqPanelPart::DeniedMark => Some(MarkField::Denied),
+        IqPanelPart::AwardedMark => Some(MarkField::Awarded),
+        IqPanelPart::ConfirmMark => Some(MarkField::Confirm),
+        _ => None,
+    }
+}
+
+fn mark_button(panel: u64, field: MarkField, mark: &Mark) -> serenity::CreateButton {
+    let plain = button(panel, mark_part(field), iq_text::mark_field_name(field));
+    match mark.reaction() {
+        Some(reaction) => plain.emoji(reaction),
+        None => plain,
+    }
+}
+
+pub fn judge_log_overwrites(everyone: RoleId, judge_role: RoleId, bot: UserId) -> Vec<Overwrite> {
+    vec![
+        Overwrite {
+            target: OverwriteTarget::Role(everyone),
+            allow: 0,
+            deny: serenity::Permissions::VIEW_CHANNEL.bits(),
+        },
+        Overwrite {
+            target: OverwriteTarget::Role(judge_role),
+            allow: JUDGE_LOG_JUDGES_ALLOW.bits(),
+            deny: JUDGE_LOG_JUDGES_DENY.bits(),
+        },
+        Overwrite {
+            target: OverwriteTarget::Member(bot),
+            allow: JUDGE_LOG_BOT_ALLOW.bits(),
+            deny: 0,
+        },
+    ]
+}
+
 fn next_button(panel: u64, label: &str, blocked: bool) -> serenity::CreateButton {
     serenity::CreateButton::new(iq_panel_id(panel, IqPanelPart::Next))
         .label(label)
@@ -1110,16 +1149,10 @@ fn cancel_button(panel: u64) -> serenity::CreateButton {
     button(panel, IqPanelPart::Cancel, iq_text::CANCEL_LABEL)
 }
 
-fn offered_day(value: &str, today: Date) -> Result<Date, SetupRefusal> {
-    schedule::parse_day(value.trim())
-        .filter(|day| within_menu(*day, today))
-        .ok_or(SetupRefusal::DayNotOffered)
-}
-
-fn within_menu(day: Date, menu_start: Date) -> bool {
-    menu_start
-        .checked_add(DAY_MENU_DAYS.days())
-        .is_ok_and(|menu_end| day >= menu_start && day < menu_end)
+fn start_of(day: Date) -> Option<i64> {
+    day.to_zoned(TimeZone::UTC)
+        .ok()
+        .map(|midnight| midnight.timestamp().as_second())
 }
 
 fn read_points(text: &str) -> Option<u32> {

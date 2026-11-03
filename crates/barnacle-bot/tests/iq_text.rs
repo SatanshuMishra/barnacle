@@ -3,6 +3,8 @@ use barnacle_bot::iq::BoardRow;
 use barnacle_bot::iq::Done;
 use barnacle_bot::iq::Problem;
 use barnacle_bot::iq::Standing;
+use barnacle_bot::iq_setup::MarkField;
+use barnacle_bot::iq_text;
 use barnacle_bot::iq_text::board_line;
 use barnacle_bot::iq_text::submission_reply;
 use barnacle_bot::iq_text::unfinished;
@@ -172,5 +174,37 @@ fn a_typed_name_is_quoted_as_plain_text() {
     assert_eq!(
         lines[1],
         "- No criterion is called \"x # Judges: \\[everyone](https://example.com) gets \\*1000\\*\". The closest is Drunken Kraken."
+    );
+}
+
+#[test]
+fn the_mark_prompt_names_the_owner_and_the_field() {
+    assert_eq!(
+        iq_text::mark_prompt(UserId::new(100), MarkField::Confirm),
+        "<@100> react to this message with the emoji for Confirm awarded."
+    );
+    assert_eq!(
+        iq_text::mark_repeated(MarkField::Denied),
+        "That emoji is already the Denied mark. Pick a different one."
+    );
+    assert_eq!(
+        iq_text::NO_EMOJI_PICKED,
+        "No emoji picked. Press the button to try again."
+    );
+}
+
+#[test]
+fn a_points_change_is_confirmed_with_the_new_total() {
+    assert_eq!(
+        iq_text::points_done(UserId::new(31), 20),
+        "Done. <@31> now has 20 points."
+    );
+}
+
+#[test]
+fn a_negative_total_allows_no_removal() {
+    assert_eq!(
+        iq_text::below_zero(UserId::new(31), -40),
+        "<@31> has -40 points, so at most 0 can be removed."
     );
 }

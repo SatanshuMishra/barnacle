@@ -27,6 +27,7 @@ use barnacle_bot::wiring::AccessPanelPart;
 use barnacle_bot::wiring::ChannelAccess;
 use barnacle_bot::wiring::ChannelProblem;
 use barnacle_bot::wiring::EventChoice;
+use barnacle_bot::wiring::IqPanelPart;
 use barnacle_bot::wiring::LeaderboardRequest;
 use barnacle_bot::wiring::PanelPart;
 use barnacle_bot::wiring::PingAllowance;
@@ -1111,20 +1112,66 @@ fn a_malformed_panel_id_is_ignored() {
 #[test]
 fn each_wizard_part_reads_back_from_its_id() {
     for (id, part) in [
-        ("barnacle-event:12:first-day", PanelPart::FirstDay),
-        ("barnacle-event:12:last-day", PanelPart::LastDay),
         ("barnacle-event:12:type-dates", PanelPart::TypeDates),
-        ("barnacle-event:12:hour", PanelPart::Hour),
-        ("barnacle-event:12:minute", PanelPart::Minute),
-        ("barnacle-event:12:length", PanelPart::Length),
-        ("barnacle-event:12:zone", PanelPart::Zone),
+        ("barnacle-event:12:set-time", PanelPart::SetTime),
         ("barnacle-event:12:next", PanelPart::Next),
         ("barnacle-event:12:back", PanelPart::Back),
         ("barnacle-event:12:dates-modal", PanelPart::DatesModal),
-        ("barnacle-event:12:zone-modal", PanelPart::ZoneModal),
+        ("barnacle-event:12:time-modal", PanelPart::TimeModal),
     ] {
         assert_eq!(wiring::panel_part(id), Some((12, part)), "{id}");
         assert_eq!(wiring::panel_id(12, part), id);
+    }
+}
+
+#[test]
+fn the_removed_menu_parts_no_longer_read_back() {
+    for id in [
+        "barnacle-event:12:first-day",
+        "barnacle-event:12:last-day",
+        "barnacle-event:12:hour",
+        "barnacle-event:12:minute",
+        "barnacle-event:12:length",
+        "barnacle-event:12:zone",
+        "barnacle-event:12:zone-modal",
+    ] {
+        assert_eq!(wiring::panel_part(id), None, "{id}");
+    }
+}
+
+#[test]
+fn the_iq_dates_parts_read_back_from_their_ids() {
+    for (id, part) in [
+        ("iq-panel:12:set-dates", IqPanelPart::SetDates),
+        ("iq-panel:12:dates-modal", IqPanelPart::DatesModal),
+    ] {
+        assert_eq!(wiring::iq_panel_part(id), Some((12, part)), "{id}");
+        assert_eq!(wiring::iq_panel_id(12, part), id);
+    }
+}
+
+#[test]
+fn the_iq_mark_parts_read_back_from_their_ids() {
+    for (id, part) in [
+        ("iq-panel:12:denied-mark", IqPanelPart::DeniedMark),
+        ("iq-panel:12:awarded-mark", IqPanelPart::AwardedMark),
+        ("iq-panel:12:confirm-mark", IqPanelPart::ConfirmMark),
+    ] {
+        assert_eq!(wiring::iq_panel_part(id), Some((12, part)), "{id}");
+        assert_eq!(wiring::iq_panel_id(12, part), id);
+    }
+}
+
+#[test]
+fn the_removed_iq_menu_parts_no_longer_read_back() {
+    for id in [
+        "iq-panel:12:first-day",
+        "iq-panel:12:last-day",
+        "iq-panel:12:zone",
+        "iq-panel:12:zone-modal",
+        "iq-panel:12:reaction",
+    ] {
+        assert_eq!(wiring::iq_panel_part(id), None, "{id}");
     }
 }
 

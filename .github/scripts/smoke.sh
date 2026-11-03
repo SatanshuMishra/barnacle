@@ -89,7 +89,7 @@ ledger="$(docker run --rm \
 
 printf '\n=== checks ===\n'
 
-for migration in 0001_guess_solves 0002_cb_attendance 0003_cb_season_controls 0004_cb_rehearsal_harness 0005_voice_rooms 0006_cb_ping_roles 0007_bot_updates 0008_events 0009_iq_competition 0010_organiser_roles; do
+for migration in 0001_guess_solves 0002_cb_attendance 0003_cb_season_controls 0004_cb_rehearsal_harness 0005_voice_rooms 0006_cb_ping_roles 0007_bot_updates 0008_events 0009_iq_competition 0010_organiser_roles 0011_member_zones 0012_iq_marks_and_judge_log; do
     expect_present "first start applies $migration" "$first" "applying $migration"
 done
 expect_present 'first start renders the config from the environment' "$first" \
@@ -127,7 +127,9 @@ expected_ledger='0001_guess_solves
 0007_bot_updates
 0008_events
 0009_iq_competition
-0010_organiser_roles'
+0010_organiser_roles
+0011_member_zones
+0012_iq_marks_and_judge_log'
 
 if [ "$ledger" = "$expected_ledger" ]; then
     report pass 'the migration ledger holds every migration'

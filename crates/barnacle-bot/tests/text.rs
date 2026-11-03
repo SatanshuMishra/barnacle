@@ -272,16 +272,16 @@ fn variant(refusal: &Refusal) -> usize {
         Refusal::SeriesRoundsOutOfRange => 28,
         Refusal::TemplateUnknown => 29,
         Refusal::MissingOptions(_) => 30,
-        Refusal::StartFormat => 31,
-        Refusal::HoursOutOfRange => 32,
-        Refusal::ZoneUnknown => 33,
-        Refusal::WeekdaysInvalid => 34,
-        Refusal::TooManyRoles => 35,
-        Refusal::PanelUnknown => 36,
-        Refusal::PanelNotYours => 37,
-        Refusal::PanelExpired => 38,
-        Refusal::ChannelUnknown => 39,
-        Refusal::FirstDayPast => 40,
+        Refusal::WeekdaysInvalid => 31,
+        Refusal::TooManyRoles => 32,
+        Refusal::PanelUnknown => 33,
+        Refusal::PanelNotYours => 34,
+        Refusal::PanelExpired => 35,
+        Refusal::ChannelUnknown => 36,
+        Refusal::FirstDayPast => 37,
+        Refusal::ZoneNeeded => 38,
+        Refusal::LengthNotWholeHours => 39,
+        Refusal::TimeFormat => 40,
     }
 }
 
@@ -1927,4 +1927,44 @@ fn an_event_line_names_its_pings() {
     let line = text::event_line(&three, BEFORE_THE_SPRINT);
     assert!(line.ends_with(" Pings <@&4>, <@&5> and <@&6>."), "{line}");
     assert!(!text::event_line(&listed_sprint(), BEFORE_THE_SPRINT).contains("Pings"));
+}
+
+#[test]
+fn the_typed_time_refusals_say_how_to_type_a_time() {
+    assert_eq!(
+        Refusal::LengthNotWholeHours.message(),
+        "End must be a whole number of hours after Start, such as 19:00 to 21:00."
+    );
+    assert_eq!(
+        Refusal::TimeFormat.message(),
+        "Type times as 24-hour HH:MM, such as 19:00."
+    );
+}
+
+#[test]
+fn the_panel_points_at_its_forms_for_what_is_missing() {
+    assert_eq!(
+        Refusal::MissingOptions(vec!["the dates", "the event days", "the session time"]).message(),
+        "The panel still needs the dates, the event days and the session time. Use Set dates, Event days and Set time, then press the button again."
+    );
+}
+
+#[test]
+fn a_missing_or_unknown_zone_says_what_to_give() {
+    let needed = "Add the time_zone option once, such as time_zone: America/Edmonton. I will remember it for next time.";
+    assert_eq!(Refusal::ZoneNeeded.message(), needed);
+    assert_eq!(text::ZONE_MISSING, needed);
+    assert_eq!(
+        text::zone_unknown("Mars/Olympus"),
+        "Mars/Olympus is not a time zone I know. Pick one from the time_zone list."
+    );
+    assert_eq!(
+        text::zone_unknown("*Mars*"),
+        "\\*Mars\\* is not a time zone I know. Pick one from the time_zone list."
+    );
+}
+
+#[test]
+fn every_panel_step_names_its_zone() {
+    assert_eq!(text::zone_line("Europe/Berlin"), "Times in Europe/Berlin");
 }

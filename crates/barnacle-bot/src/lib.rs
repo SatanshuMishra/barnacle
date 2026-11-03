@@ -27,3 +27,4 @@ pub mod voice;
 pub mod voice_store;
 pub mod voice_text;
 pub mod wiring;
+pub mod zone_store;

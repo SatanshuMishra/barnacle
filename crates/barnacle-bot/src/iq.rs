@@ -1,11 +1,13 @@
 use std::collections::BTreeSet;
 use std::collections::HashSet;
+use std::num::NonZeroU64;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::PoisonError;
 
 use barnacle_guess::UserId;
 use jiff::civil::Date;
+use poise::serenity_prelude as serenity;
 
 use crate::failure::Kind;
 use crate::ids::ChannelId;
@@ -13,15 +15,18 @@ use crate::ids::GuildId;
 use crate::schedule::Zone;
 use crate::wiring::same_name;
 
-pub const VALID_MARK: &str = "\u{2705}";
-pub const INVALID_MARK: &str = "\u{274C}";
-
 const SCREENSHOTS: usize = 2;
 const TYPED_LIMIT: usize = 100;
 const ELLIPSIS: char = '\u{2026}';
 const BOARD_LINES: usize = 10;
 const ADJUSTMENT_LIMIT: i64 = 1000;
 const MESSAGE_LIMIT: usize = 2000;
+const UNICODE_MARK_LIMIT: usize = 32;
+const CUSTOM_NAME_LIMIT: usize = 32;
+const VARIATION_SELECTOR: char = '\u{FE0F}';
+const DENIED_DEFAULT: &str = "\u{274C}";
+const AWARDED_DEFAULT: &str = "\u{1F3C6}";
+const CONFIRM_DEFAULT: &str = "\u{2705}";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Criterion {
@@ -65,41 +70,155 @@ pub enum Status {
     Archived,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum JudgingReaction {
-    #[default]
-    Trophy,
-    Star,
-    Hundred,
-    Crown,
+#[derive(Debug, Clone)]
+pub enum Mark {
+    Unicode(String),
+    Custom {
+        id: u64,
+        name: String,
+        animated: bool,
+    },
 }
 
-impl JudgingReaction {
-    pub const ALL: [Self; 4] = [Self::Trophy, Self::Star, Self::Hundred, Self::Crown];
-
-    pub fn emoji(self) -> &'static str {
-        match self {
-            Self::Trophy => "\u{1F3C6}",
-            Self::Star => "\u{2B50}",
-            Self::Hundred => "\u{1F4AF}",
-            Self::Crown => "\u{1F451}",
+impl Mark {
+    pub fn parse(text: &str) -> Option<Mark> {
+        match text.strip_prefix('<') {
+            Some(inner) => custom_mark(inner),
+            None => unicode_mark(text),
         }
     }
 
-    pub fn value(self) -> &'static str {
+    pub fn text(&self) -> String {
         match self {
-            Self::Trophy => "trophy",
-            Self::Star => "star",
-            Self::Hundred => "hundred",
-            Self::Crown => "crown",
+            Mark::Unicode(text) => text.clone(),
+            Mark::Custom {
+                id,
+                name,
+                animated: true,
+            } => format!("<a:{name}:{id}>"),
+            Mark::Custom {
+                id,
+                name,
+                animated: false,
+            } => format!("<:{name}:{id}>"),
         }
     }
 
-    pub fn parse(text: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|reaction| reaction.value() == text)
+    pub fn from_reaction(reaction: &serenity::ReactionType) -> Option<Mark> {
+        match reaction {
+            serenity::ReactionType::Unicode(text) => Some(Mark::Unicode(text.clone())),
+            serenity::ReactionType::Custom { animated, id, name } => {
+                name.as_ref().map(|name| Mark::Custom {
+                    id: id.get(),
+                    name: name.clone(),
+                    animated: *animated,
+                })
+            }
+            _ => None,
+        }
     }
+
+    pub fn reaction(&self) -> Option<serenity::ReactionType> {
+        match self {
+            Mark::Unicode(text) => Some(serenity::ReactionType::Unicode(text.clone())),
+            Mark::Custom { id, name, animated } => {
+                NonZeroU64::new(*id).map(|id| serenity::ReactionType::Custom {
+                    animated: *animated,
+                    id: serenity::EmojiId::from(id),
+                    name: Some(name.clone()),
+                })
+            }
+        }
+    }
+}
+
+impl PartialEq for Mark {
+    fn eq(&self, other: &Mark) -> bool {
+        match (self, other) {
+            (Mark::Unicode(left), Mark::Unicode(right)) => left
+                .chars()
+                .filter(|c| *c != VARIATION_SELECTOR)
+                .eq(right.chars().filter(|c| *c != VARIATION_SELECTOR)),
+            (Mark::Custom { id: left, .. }, Mark::Custom { id: right, .. }) => left == right,
+            (Mark::Unicode(_), Mark::Custom { .. }) | (Mark::Custom { .. }, Mark::Unicode(_)) => {
+                false
+            }
+        }
+    }
+}
+
+impl Eq for Mark {}
+
+fn custom_mark(inner: &str) -> Option<Mark> {
+    let body = inner.strip_suffix('>')?;
+    let (animated, rest) = match body.strip_prefix(':') {
+        Some(rest) => (false, rest),
+        None => (true, body.strip_prefix("a:")?),
+    };
+    let (name, id) = rest.split_once(':')?;
+    let name_fits = (1..=CUSTOM_NAME_LIMIT).contains(&name.chars().count())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let parsed = id
+        .parse::<u64>()
+        .ok()
+        .filter(|parsed| *parsed > 0 && parsed.to_string() == id);
+    match (name_fits, parsed) {
+        (true, Some(id)) => Some(Mark::Custom {
+            id,
+            name: name.to_owned(),
+            animated,
+        }),
+        _ => None,
+    }
+}
+
+fn unicode_mark(text: &str) -> Option<Mark> {
+    let length = text.chars().count();
+    let fits = (1..=UNICODE_MARK_LIMIT).contains(&length)
+        && !text
+            .chars()
+            .any(|c| c.is_whitespace() || c == '<' || c == ':')
+        && !text.is_ascii();
+    fits.then(|| Mark::Unicode(text.to_owned()))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarksRefusal {
+    Repeated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JudgingMarks {
+    pub denied: Mark,
+    pub awarded: Mark,
+    pub confirm: Mark,
+}
+
+impl Default for JudgingMarks {
+    fn default() -> JudgingMarks {
+        JudgingMarks {
+            denied: Mark::Unicode(DENIED_DEFAULT.to_owned()),
+            awarded: Mark::Unicode(AWARDED_DEFAULT.to_owned()),
+            confirm: Mark::Unicode(CONFIRM_DEFAULT.to_owned()),
+        }
+    }
+}
+
+impl JudgingMarks {
+    pub fn new(denied: Mark, awarded: Mark, confirm: Mark) -> Result<JudgingMarks, MarksRefusal> {
+        if denied == awarded || denied == confirm || awarded == confirm {
+            return Err(MarksRefusal::Repeated);
+        }
+        Ok(JudgingMarks {
+            denied,
+            awarded,
+            confirm,
+        })
+    }
+}
+
+pub fn counts_as_award(reaction: &Mark, marks: &JudgingMarks, by_judge: bool) -> bool {
+    by_judge && *reaction == marks.awarded
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -434,6 +553,10 @@ pub fn should_check(status: Status, end_unix: i64, sent_unix: i64) -> bool {
         Status::Running => sent_unix < end_unix,
         Status::Stopped | Status::Completed | Status::Archived => false,
     }
+}
+
+pub fn checks_at_catch_up(checkable: bool, bot_marked: bool, recorded: bool) -> bool {
+    checkable && !bot_marked && !recorded
 }
 
 pub fn moves_last_seen(path: CheckPath, caught_up: bool) -> bool {

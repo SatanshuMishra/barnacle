@@ -84,7 +84,7 @@ fn organiser_subcommands_carry_the_organiser_check_alone() {
     assert_eq!(names, ["member", "points", "reason"]);
     assert_eq!(
         points.iter().find(|(name, _)| name == "reason"),
-        Some(&("reason".to_owned(), false))
+        Some(&("reason".to_owned(), true))
     );
 }
 

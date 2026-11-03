@@ -17,6 +17,12 @@ fn event_parameters(subcommand: &str) -> Vec<String> {
 
 #[test]
 fn event_create_and_edit_take_only_the_kept_options() {
-    assert_eq!(event_parameters("create"), ["name", "template"]);
-    assert_eq!(event_parameters("edit"), ["event", "name", "channel"]);
+    assert_eq!(
+        event_parameters("create"),
+        ["name", "template", "time_zone"]
+    );
+    assert_eq!(
+        event_parameters("edit"),
+        ["event", "name", "channel", "time_zone"]
+    );
 }
