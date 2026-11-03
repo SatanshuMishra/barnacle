@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: parked
-Updated: 2026-11-03T00:55:15.914Z
+Updated: 2026-11-03T00:55:18.027Z
 Next ids: c2 D11 R1 S1
 
 ## Goal
@@ -17,9 +17,7 @@ Pull request 59 is merged and main is at 1ccc2b7. pipeline clean removed and arc
 
 ## Next step
 
-The owner checks criterion 5.23 on the dev bot and merges pull request 59; the owner starts Clean-up by saying the FEATURE pull request merged.
-
-Needs: D2.
+With the owner's go-ahead, copy ~/.mitosis/barnacle/panel-inputs to ~/.mitosis/barnacle/archive/panel-inputs, remove the worktrees ~/.mitosis/runs/barnacle/panel-inputs/{base,trees/panel-inputs}, delete branch mitosis/panel-inputs and the folders ~/.mitosis/runs/barnacle/panel-inputs, ~/.mitosis/barnacle/panel-inputs and ~/.mitosis/barnacle/iq-judging, then close the thread.
 
 ## Decisions in force
 
