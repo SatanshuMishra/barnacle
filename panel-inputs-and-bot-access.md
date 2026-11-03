@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
-Status: active
-Updated: 2026-11-03T00:12:05.011Z
+Status: parked
+Updated: 2026-11-03T00:12:10.487Z
 Next ids: c2 D11 R1 S1
 
 ## Goal
@@ -17,9 +17,9 @@ All three MSPs are shipped as stacked pull requests waiting for the owner's merg
 
 ## Next step
 
-Run SHIP=1 ~/.mitosis/barnacle/iq-judging/run.zsh --resume --proven-head iq-judging=b7f625f, open its pull request into mitosis/panel-inputs with mitosis's title and body, assign it, post review/iq-judging.comment.md, then park the thread for the owner's merge.
+The owner merges 58 into mitosis/panel-inputs, then 57 into mitosis/access-roles, then 56 into feat/panel-inputs-and-bot-access; the owner starts Integration by saying the MSP pull requests merged.
 
-Needs: D8.
+Needs: D2, D8.
 
 ## Decisions in force
 
