@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: parked
-Updated: 2026-11-03T00:38:12.734Z
+Updated: 2026-11-03T00:55:15.914Z
 Next ids: c2 D11 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-The FEATURE pull request 59 (feat/panel-inputs-and-bot-access at 11872c2 into main) is open, ready for review and assigned to the owner. On that head the suite passes (927 passed, 0 failed), the acceptance checks pass (60 of 60), integration-plan says lighthouse skip and integration-ready is true. The record's criterion 5.23 carries an empty acceptance list, which the pipeline's record parser requires. Criterion 5.23 (live Discord) is unproven, for the owner's dev-bot check. with_typed_dates counts today in the server's newest-event zone, not the draft's, a defect main already has.
+Pull request 59 is merged and main is at 1ccc2b7. pipeline clean removed and archived the panel-inputs-and-bot-access and iq-judging runs. It refused the panel-inputs run because its feature branch mitosis/access-roles was already deleted, so it cannot find a merge into main. Its work, a69fbc7, is in main. Still on disk: branch mitosis/panel-inputs, worktrees ~/.mitosis/runs/barnacle/panel-inputs/{base,trees/panel-inputs}, the run folder ~/.mitosis/runs/barnacle/panel-inputs (about 16 GB), and the unarchived home ~/.mitosis/barnacle/panel-inputs. ~/.mitosis/barnacle/iq-judging is kept only because mitosis/panel-inputs was in use. Criterion 5.23 (live Discord) is unproven, for the owner's dev-bot check. with_typed_dates counts today in the server's newest-event zone, not the draft's, a defect main already has.
 
 ## Next step
 
