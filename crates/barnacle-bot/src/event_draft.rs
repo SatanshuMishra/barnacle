@@ -1,5 +1,3 @@
-use std::cmp::Reverse;
-use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
@@ -12,7 +10,6 @@ use poise::serenity_prelude as serenity;
 use crate::attendance::Board;
 use crate::attendance::EditReport;
 use crate::attendance::Signups;
-use crate::attendance::listed_events;
 use crate::attendance::next_post_at;
 use crate::attendance_store::AttendanceError;
 use crate::attendance_store::CreateOutcome;
@@ -185,7 +182,7 @@ pub struct Draft {
     start: Option<StartTime>,
     hours: Option<Hours>,
     zone: Option<Zone>,
-    server_zones: Vec<String>,
+    today_zone: Zone,
     everyone: bool,
     roles: Vec<RoleId>,
     changed: Changed,
@@ -303,8 +300,8 @@ impl Draft {
             weekdays: template.as_ref().map(Schedule::weekdays),
             start: template.as_ref().map(Schedule::start),
             hours: template.as_ref().map(Schedule::hours),
+            today_zone: options.zone.clone().unwrap_or_else(|| zone.clone()),
             zone: Some(zone),
-            server_zones: Vec::new(),
             everyone: false,
             roles: Vec::new(),
             changed: Changed::default(),
@@ -346,8 +343,8 @@ impl Draft {
             weekdays: Some(held.weekdays()),
             start: Some(held.start()),
             hours: Some(held.hours()),
+            today_zone: zone.clone(),
             zone: Some(zone),
-            server_zones: Vec::new(),
             everyone: event.ping_roles.contains(&everyone),
             roles: event
                 .ping_roles
@@ -356,13 +353,6 @@ impl Draft {
                 .filter(|role| *role != everyone)
                 .collect(),
         })
-    }
-
-    pub fn with_server_zones(&self, zones: Vec<String>) -> Draft {
-        Draft {
-            server_zones: zones,
-            ..self.clone()
-        }
     }
 
     pub fn purpose(&self) -> Purpose {
@@ -459,7 +449,10 @@ impl Draft {
     ) -> Result<Draft, Refusal> {
         let first_day = read_day(first)?;
         let last_day = read_day(last)?;
-        let today = zone_today(&self.server_zones, now_unix).ok_or(Refusal::DatesTooFar)?;
+        let today = self
+            .today_zone
+            .today(now_unix)
+            .ok_or(Refusal::DatesTooFar)?;
         if self.purpose == Purpose::Create && first_day < today {
             return Err(Refusal::FirstDayPast);
         }
@@ -1142,28 +1135,6 @@ fn unix_of(now_ms: u64) -> i64 {
     i64::try_from(now_ms / MILLIS_PER_SECOND).unwrap_or(i64::MAX)
 }
 
-pub fn server_zones(events: &[Event], now_unix: i64) -> Vec<String> {
-    let newest_first: BTreeMap<Reverse<(u64, i64)>, &Event> = listed_events(events, now_unix)
-        .into_iter()
-        .map(|event| (Reverse((event.created_at_ms, event.id)), event))
-        .collect();
-    once_each(
-        newest_first
-            .into_values()
-            .map(|event| event.span.schedule().zone().name().to_owned()),
-    )
-}
-
-fn once_each(names: impl Iterator<Item = String>) -> Vec<String> {
-    names.fold(Vec::new(), |kept: Vec<String>, name| {
-        if kept.contains(&name) {
-            kept
-        } else {
-            kept.into_iter().chain(std::iter::once(name)).collect()
-        }
-    })
-}
-
 fn everyone_role(guild: GuildId) -> RoleId {
     RoleId::new(guild.get())
 }
@@ -1197,28 +1168,6 @@ fn weekdays_between(first_day: Date, last_day: Date) -> Vec<Weekday> {
         .map(|(day, _)| *day)
         .filter(|day| occurring.contains(day))
         .collect()
-}
-
-fn zone_today(server_zones: &[String], now_unix: i64) -> Option<Date> {
-    let zone = server_zones
-        .first()
-        .and_then(|name| Zone::find(name))
-        .unwrap_or_else(Zone::utc);
-    let midnight = Schedule::new(
-        Weekdays::EVERY_DAY,
-        StartTime::new(0, 0)?,
-        zone,
-        Hours::new(1)?,
-    );
-    let utc_today = schedule::today(now_unix)?;
-    [1, 0, -1]
-        .into_iter()
-        .filter_map(|offset: i64| utc_today.checked_add(offset.days()).ok())
-        .find(|day| {
-            midnight
-                .session_at(*day)
-                .is_some_and(|session| session.start_unix() <= now_unix)
-        })
 }
 
 pub(crate) fn within_window(span: &Span, now_unix: i64) -> bool {

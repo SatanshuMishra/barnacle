@@ -5,8 +5,6 @@ use std::time::Duration;
 
 use barnacle_guess::Snowflake;
 use barnacle_guess::UserId;
-use jiff::ToSpan;
-use jiff::civil::Date;
 use poise::serenity_prelude as serenity;
 
 use super::Context;
@@ -661,7 +659,7 @@ async fn open_setup(ctx: Context<'_>, guild: GuildId, typed: Option<&str>) -> Re
     }
     let now_unix = super::now_unix();
     let templates = ctx.data().iq.templates(guild).await?;
-    let Some(today) = local_today(now_unix, &zone) else {
+    let Some(today) = zone.today(now_unix) else {
         return commands::fail(ctx, Failure::from_error(&IqError::Clock)).await;
     };
     let draft = SetupDraft::new(guild, member, templates, zone, today);
@@ -679,19 +677,6 @@ async fn open_draft(ctx: Context<'_>, guild: GuildId, draft: SetupDraft) -> Resu
     ctx.data().iq_drafts.open(panel, draft, now_ms);
     ctx.send(event_draft::panel_reply(view)).await?;
     Ok(())
-}
-
-fn local_today(now_unix: i64, zone: &Zone) -> Option<Date> {
-    let utc_today = schedule::today(now_unix)?;
-    [-1_i64, 0, 1]
-        .into_iter()
-        .filter_map(|offset| utc_today.checked_add(offset.days()).ok())
-        .find(|day| {
-            let began = day
-                .checked_sub(1.day())
-                .is_ok_and(|before| zone.midnight_after(before) <= now_unix);
-            began && now_unix < zone.midnight_after(*day)
-        })
 }
 
 async fn setup_checks(

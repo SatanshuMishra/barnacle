@@ -210,6 +210,11 @@ impl Zone {
         &self.name
     }
 
+    pub fn today(&self, now_unix: i64) -> Option<Date> {
+        let stamp = jiff::Timestamp::from_second(now_unix).ok()?;
+        Some(stamp.to_zoned(self.time_zone.clone()).date())
+    }
+
     pub fn midnight_after(&self, day: Date) -> i64 {
         day.saturating_add(1.day())
             .to_datetime(time(0, 0, 0, 0))
