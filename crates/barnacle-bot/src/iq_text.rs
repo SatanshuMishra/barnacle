@@ -5,6 +5,7 @@ use crate::failure::join_names;
 use crate::ids::ChannelId;
 use crate::ids::RoleId;
 use crate::iq::BoardRow;
+use crate::iq::Completion;
 use crate::iq::Criterion;
 use crate::iq::Done;
 use crate::iq::JudgingMarks;
@@ -460,16 +461,10 @@ pub fn needs_cleanup(competition: &str) -> String {
     )
 }
 
-pub fn complete_too_early(competition: &str, end_unix: i64) -> String {
-    format!(
-        "**{competition}** ends <t:{}:F>. You can complete it after that. To end it early, pause it with /iq stop.",
-        shown_end(end_unix)
-    )
-}
-
 pub fn complete_question(
     competition: &str,
     end_unix: i64,
+    completion: Completion,
     announcements: ChannelId,
     roles: &[RoleId],
     winners: &[&str],
@@ -485,11 +480,18 @@ pub fn complete_question(
                 .join(" ")
         ),
     };
-    let first = format!(
-        "**{competition}** ended on <t:{}:D>. Post the result in {}{pinging}?",
-        shown_end(end_unix),
-        channel(announcements)
-    );
+    let first = match completion {
+        Completion::AfterEnd => format!(
+            "**{competition}** ended on <t:{}:D>. Post the result in {}{pinging}?",
+            shown_end(end_unix),
+            channel(announcements)
+        ),
+        Completion::Early => format!(
+            "**{competition}** runs until <t:{}:F>. End it now and post the result in {}{pinging}? Posts after this are not judged.",
+            shown_end(end_unix),
+            channel(announcements)
+        ),
+    };
     let bold: Vec<String> = winners.iter().map(|name| format!("**{name}**")).collect();
     let bold_refs: Vec<&str> = bold.iter().map(String::as_str).collect();
     let second = match bold_refs.as_slice() {

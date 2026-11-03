@@ -1,5 +1,7 @@
+use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::iq::BoardRow;
+use barnacle_bot::iq::Completion;
 use barnacle_bot::iq::Done;
 use barnacle_bot::iq::Problem;
 use barnacle_bot::iq::Standing;
@@ -206,5 +208,22 @@ fn a_negative_total_allows_no_removal() {
     assert_eq!(
         iq_text::below_zero(UserId::new(31), -40),
         "<@31> has -40 points, so at most 0 can be removed."
+    );
+}
+
+#[test]
+fn an_early_complete_says_it_ends_before_the_last_day() {
+    let question = iq_text::complete_question(
+        "November IQ",
+        1_796_104_800,
+        Completion::Early,
+        ChannelId::new(30),
+        &[],
+        &["Shrimpy"],
+        21,
+    );
+    assert_eq!(
+        question,
+        "**November IQ** runs until <t:1796104740:F>. End it now and post the result in <#30>? Posts after this are not judged.\nWinner: **Shrimpy** with 21 points."
     );
 }

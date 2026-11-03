@@ -252,8 +252,13 @@ pub enum StartChoice {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompleteRefusal {
-    TooEarly,
     NotLive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Completion {
+    Early,
+    AfterEnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -533,10 +538,14 @@ pub fn end_unix(last_day: Date, zone: &Zone) -> i64 {
     zone.midnight_after(last_day)
 }
 
-pub fn may_complete(status: Status, end_unix: i64, now_unix: i64) -> Result<(), CompleteRefusal> {
+pub fn may_complete(
+    status: Status,
+    end_unix: i64,
+    now_unix: i64,
+) -> Result<Completion, CompleteRefusal> {
     match status {
-        Status::Running | Status::Stopped if now_unix >= end_unix => Ok(()),
-        Status::Running | Status::Stopped => Err(CompleteRefusal::TooEarly),
+        Status::Running | Status::Stopped if now_unix >= end_unix => Ok(Completion::AfterEnd),
+        Status::Running | Status::Stopped => Ok(Completion::Early),
         Status::Completed | Status::Archived => Err(CompleteRefusal::NotLive),
     }
 }

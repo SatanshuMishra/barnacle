@@ -8,6 +8,7 @@ use barnacle_bot::iq::CheckPath;
 use barnacle_bot::iq::Checked;
 use barnacle_bot::iq::CleanupRefusal;
 use barnacle_bot::iq::CompleteRefusal;
+use barnacle_bot::iq::Completion;
 use barnacle_bot::iq::Criterion;
 use barnacle_bot::iq::Judged;
 use barnacle_bot::iq::Problem;
@@ -311,13 +312,23 @@ fn the_end_is_midnight_after_the_last_day_in_its_zone() {
 }
 
 #[test]
-fn complete_waits_for_the_end() {
+fn complete_before_the_end_is_early() {
     assert_eq!(
         may_complete(Status::Running, END, END - 1),
-        Err(CompleteRefusal::TooEarly)
+        Ok(Completion::Early)
     );
-    assert_eq!(may_complete(Status::Running, END, END), Ok(()));
-    assert_eq!(may_complete(Status::Stopped, END, END + 60), Ok(()));
+    assert_eq!(
+        may_complete(Status::Running, END, END),
+        Ok(Completion::AfterEnd)
+    );
+    assert_eq!(
+        may_complete(Status::Stopped, END, END + 60),
+        Ok(Completion::AfterEnd)
+    );
+    assert_eq!(
+        may_complete(Status::Completed, END, END - 1),
+        Err(CompleteRefusal::NotLive)
+    );
 }
 
 #[test]

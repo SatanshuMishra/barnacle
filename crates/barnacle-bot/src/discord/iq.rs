@@ -373,14 +373,6 @@ pub(super) async fn iq_complete(ctx: Context<'_>) -> Result<(), Error> {
     };
     let end = end_unix(&competition)?;
     match iq::may_complete(competition.status, end, super::now_unix()) {
-        Err(CompleteRefusal::TooEarly) => {
-            refuse(
-                ctx,
-                "too_early",
-                iq_text::complete_too_early(&competition.name, end),
-            )
-            .await
-        }
         Err(CompleteRefusal::NotLive) => {
             refuse(
                 ctx,
@@ -389,7 +381,7 @@ pub(super) async fn iq_complete(ctx: Context<'_>) -> Result<(), Error> {
             )
             .await
         }
-        Ok(()) => {
+        Ok(completion) => {
             ctx.defer_ephemeral().await?;
             let standings = iq::standings(&ctx.data().iq.scores(competition.id).await?);
             let (named, points) =
@@ -398,6 +390,7 @@ pub(super) async fn iq_complete(ctx: Context<'_>) -> Result<(), Error> {
             let question = iq_text::complete_question(
                 &competition.name,
                 end,
+                completion,
                 competition.announcements,
                 &competition.roles,
                 &winner_names,
@@ -1574,12 +1567,10 @@ async fn complete(
         return Ok(iq_text::NO_COMPETITION_RUNNING.to_owned());
     };
     let end = end_unix(&competition).map_err(Unfinished::untouched)?;
-    match iq::may_complete(competition.status, end, super::now_unix()) {
-        Ok(()) => {}
-        Err(CompleteRefusal::TooEarly) => {
-            return Ok(iq_text::complete_too_early(&competition.name, end));
-        }
-        Err(CompleteRefusal::NotLive) => return Ok(iq_text::needs_cleanup(&competition.name)),
+    if let Err(CompleteRefusal::NotLive) =
+        iq::may_complete(competition.status, end, super::now_unix())
+    {
+        return Ok(iq_text::needs_cleanup(&competition.name));
     }
     let standings = iq::standings(
         &data
