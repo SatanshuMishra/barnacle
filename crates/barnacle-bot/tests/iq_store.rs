@@ -6,9 +6,11 @@ use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::iq::Criterion;
-use barnacle_bot::iq::JudgingReaction;
+use barnacle_bot::iq::JudgingMarks;
+use barnacle_bot::iq::Mark;
 use barnacle_bot::iq::Score;
 use barnacle_bot::iq::Status;
+use barnacle_bot::iq_store::AdjustOutcome;
 use barnacle_bot::iq_store::AwardOutcome;
 use barnacle_bot::iq_store::Competition;
 use barnacle_bot::iq_store::ConfigChange;
@@ -21,6 +23,10 @@ use jiff::civil::date;
 use sqlx::sqlite::SqlitePool;
 
 const IQ_MIGRATION: &str = "0009_iq_competition.sql";
+const MARKS_MIGRATION: &str = "0012_iq_marks_and_judge_log.sql";
+const MARKS_MIGRATION_DOWN: &str = "0012_iq_marks_and_judge_log.down.sql";
+const RED_X: &str = "\u{274C}";
+const GREEN_CHECK: &str = "\u{2705}";
 const CLI_DIRECTIVE: &str = ".bail on\n";
 const GUILD: GuildId = GuildId::new(5);
 const ADMIN: UserId = UserId::new(100);
@@ -34,19 +40,24 @@ const POSTED_AT_MS: i64 = 1_793_600_000_000;
 const AWARDED_AT_MS: i64 = 1_793_600_060_000;
 const RULES: &str = "Post your own battles only.\nOne post per battle.";
 
-async fn iq_pool() -> SqlitePool {
-    let pool = attendance_pool().await;
+async fn apply(pool: &SqlitePool, file: &str) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../migrations")
-        .join(IQ_MIGRATION);
+        .join(file);
     let script = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{} is readable: {error}", path.display()));
     sqlx::raw_sql(sqlx::AssertSqlSafe(
         script.trim_start_matches(CLI_DIRECTIVE).to_owned(),
     ))
-    .execute(&pool)
+    .execute(pool)
     .await
     .unwrap();
+}
+
+async fn iq_pool() -> SqlitePool {
+    let pool = attendance_pool().await;
+    apply(&pool, IQ_MIGRATION).await;
+    apply(&pool, MARKS_MIGRATION).await;
     pool
 }
 
@@ -83,19 +94,25 @@ fn competition(name: &str, created_at_ms: i64) -> NewCompetition {
         rules: RULES.to_owned(),
         roles: vec![RoleId::new(31)],
         judges: vec![JUDGE, SECOND_JUDGE],
-        reaction: JudgingReaction::Trophy,
+        marks: JudgingMarks::default(),
+        judge_log: None,
         created_by: ADMIN,
         created_at_ms,
     }
 }
 
-fn reaction_for(number: u32) -> JudgingReaction {
-    match number % 4 {
-        0 => JudgingReaction::Trophy,
-        1 => JudgingReaction::Star,
-        2 => JudgingReaction::Hundred,
-        _ => JudgingReaction::Crown,
-    }
+fn mark(text: &str) -> Mark {
+    Mark::parse(text).unwrap_or_else(|| panic!("{text} is a mark"))
+}
+
+fn marks_for(number: u32) -> JudgingMarks {
+    let awarded = match number % 4 {
+        0 => "\u{1F3C6}",
+        1 => "\u{2B50}",
+        2 => "\u{1F4AF}",
+        _ => "<:kraken:42>",
+    };
+    JudgingMarks::new(mark(RED_X), mark(awarded), mark(GREEN_CHECK)).unwrap()
 }
 
 fn numbered(number: u32) -> NewCompetition {
@@ -108,7 +125,7 @@ fn numbered(number: u32) -> NewCompetition {
         rules: format!("Rules {number}"),
         roles: vec![RoleId::new(300 + u64::from(number))],
         judges: vec![UserId::new(200 + u64::from(number))],
-        reaction: reaction_for(number),
+        marks: marks_for(number),
         ..competition(
             &format!("IQ {number}"),
             CREATED_AT_MS + i64::from(number) * 1_000,
@@ -285,7 +302,7 @@ async fn points_are_kept_as_they_were_when_posted() {
             rules: RULES.to_owned(),
             roles: vec![RoleId::new(31)],
             judges: vec![JUDGE, SECOND_JUDGE],
-            reaction: JudgingReaction::Trophy,
+            marks: JudgingMarks::default(),
         })
         .await
         .unwrap();
@@ -386,7 +403,7 @@ async fn templates_are_the_ten_newest_competitions() {
         assert_eq!(template.rules, expected.rules, "{}", template.name);
         assert_eq!(template.roles, expected.roles, "{}", template.name);
         assert_eq!(template.judges, expected.judges, "{}", template.name);
-        assert_eq!(template.reaction, expected.reaction, "{}", template.name);
+        assert_eq!(template.marks, expected.marks, "{}", template.name);
     }
 }
 
@@ -402,28 +419,30 @@ async fn an_adjustment_counts_in_the_scores() {
     let november = running(&store).await;
     kraken_posted(&store, november.id, 900, PLAYER).await;
     store.award(900, JUDGE, AWARDED_AT_MS).await.unwrap();
-    store
+    let taken = store
         .adjust(
             november.id,
             PLAYER,
             -5,
-            Some("The same battle was posted twice"),
+            "The same battle was posted twice",
             JUDGE,
             AWARDED_AT_MS + 1_000,
         )
         .await
         .unwrap();
-    store
+    assert_eq!(taken, AdjustOutcome::Adjusted { total: 0 });
+    let given = store
         .adjust(
             november.id,
             SECOND_PLAYER,
             3,
-            None,
+            "Bonus round",
             JUDGE,
             AWARDED_AT_MS + 2_000,
         )
         .await
         .unwrap();
+    assert_eq!(given, AdjustOutcome::Adjusted { total: 3 });
     let scores = store.scores(november.id).await.unwrap();
     assert_eq!(points_of(&scores, PLAYER), 0);
     assert_eq!(points_of(&scores, SECOND_PLAYER), 3);
@@ -467,4 +486,112 @@ async fn reverting_a_completion_leaves_an_archived_competition_alone() {
             .unwrap()
     );
     assert!(store.live(GUILD).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn rolling_back_the_marks_keeps_each_standard_judging_emoji() {
+    let pool = iq_pool().await;
+    let store = IqStore::with_pool(pool.clone()).await.unwrap();
+    for number in 1..=4 {
+        let made = created(&store, &numbered(number)).await;
+        store.archive(made.id).await.unwrap();
+    }
+    apply(&pool, MARKS_MIGRATION_DOWN).await;
+    let kept: Vec<(String, String)> =
+        sqlx::query_as("SELECT name, judging_reaction FROM iq_competitions ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        kept,
+        [
+            ("IQ 1".to_owned(), "star".to_owned()),
+            ("IQ 2".to_owned(), "hundred".to_owned()),
+            ("IQ 3".to_owned(), "trophy".to_owned()),
+            ("IQ 4".to_owned(), "trophy".to_owned()),
+        ]
+    );
+    apply(&pool, MARKS_MIGRATION).await;
+    let store = IqStore::with_pool(pool).await.unwrap();
+    let awarded: Vec<(String, Mark)> = store
+        .templates(GUILD)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|template| (template.name, template.marks.awarded))
+        .collect();
+    assert_eq!(
+        awarded,
+        [
+            ("IQ 4".to_owned(), mark("\u{1F3C6}")),
+            ("IQ 3".to_owned(), mark("\u{1F3C6}")),
+            ("IQ 2".to_owned(), mark("\u{1F4AF}")),
+            ("IQ 1".to_owned(), mark("\u{2B50}")),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_addition_to_a_negative_total_is_saved() {
+    let pool = iq_pool().await;
+    let store = IqStore::with_pool(pool.clone()).await.unwrap();
+    let november = running(&store).await;
+    sqlx::query(
+        "INSERT INTO iq_adjustments (competition_id, user_id, points, reason, judge_id, made_at_ms) VALUES (?, ?, -50, 'Before the floor', ?, ?)",
+    )
+    .bind(november.id)
+    .bind(i64::try_from(PLAYER.get()).unwrap())
+    .bind(i64::try_from(JUDGE.get()).unwrap())
+    .bind(POSTED_AT_MS)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        store
+            .adjust(november.id, PLAYER, 10, "Bonus round", JUDGE, AWARDED_AT_MS)
+            .await
+            .unwrap(),
+        AdjustOutcome::Adjusted { total: -40 }
+    );
+    assert_eq!(
+        store
+            .adjust(
+                november.id,
+                PLAYER,
+                -1,
+                "Wrong screenshot",
+                JUDGE,
+                AWARDED_AT_MS
+            )
+            .await
+            .unwrap(),
+        AdjustOutcome::BelowZero { total: -40 }
+    );
+}
+
+#[tokio::test]
+async fn a_recorded_post_reads_as_recorded_until_forgotten() {
+    let store = store().await;
+    let november = running(&store).await;
+    kraken_posted(&store, november.id, 900, PLAYER).await;
+    kraken_posted(&store, november.id, 901, SECOND_PLAYER).await;
+    store.award(901, JUDGE, AWARDED_AT_MS).await.unwrap();
+    assert!(store.recorded(november.id, 900).await.unwrap());
+    assert!(store.recorded(november.id, 901).await.unwrap());
+    assert!(!store.recorded(november.id, 902).await.unwrap());
+    store.forget(november.id, 900).await.unwrap();
+    assert!(!store.recorded(november.id, 900).await.unwrap());
+}
+
+#[tokio::test]
+async fn an_awarded_post_keeps_the_criterion_it_was_recorded_with() {
+    let store = store().await;
+    let november = running(&store).await;
+    kraken_posted(&store, november.id, 900, PLAYER).await;
+    store.award(900, JUDGE, AWARDED_AT_MS).await.unwrap();
+    assert_eq!(
+        store.criterion(900).await.unwrap(),
+        Some("Drunken Kraken".to_owned())
+    );
+    assert_eq!(store.criterion(902).await.unwrap(), None);
 }

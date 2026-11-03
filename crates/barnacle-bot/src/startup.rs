@@ -161,6 +161,14 @@ pub enum StartupError {
         #[source]
         source: ZoneStoreError,
     },
+    #[error(
+        "the IQ judging marks are missing from {path}; back the file up, then add them with `sqlite3 {path} < migrations/0012_iq_marks_and_judge_log.sql`"
+    )]
+    IqMarks {
+        path: PathBuf,
+        #[source]
+        source: IqStoreError,
+    },
 }
 
 fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
@@ -306,12 +314,19 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
             source,
         })?;
     let attendance = attendance?;
-    let iq = IqStore::with_pool(pool.clone())
-        .await
-        .map_err(|source| StartupError::Iq {
+    let iq = match IqStore::with_pool(pool.clone()).await {
+        Ok(iq) => Ok(iq),
+        Err(source @ IqStoreError::BeforeMarks) => Err(StartupError::IqMarks {
             path: path.to_owned(),
             source,
-        })?;
+        }),
+        Err(source) => {
+            return Err(StartupError::Iq {
+                path: path.to_owned(),
+                source,
+            });
+        }
+    };
     let access = AccessStore::with_pool(pool.clone())
         .await
         .map_err(|source| StartupError::Access {
@@ -324,6 +339,7 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
             path: path.to_owned(),
             source,
         })?;
+    let iq = iq?;
     Ok(Stores {
         solves,
         attendance,

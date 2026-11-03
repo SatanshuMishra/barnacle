@@ -3,18 +3,21 @@ use std::time::Duration;
 
 use barnacle_guess::UserId;
 use jiff::civil::Date;
+use sqlx::Row;
 use sqlx::Sqlite;
 use sqlx::Transaction;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::SqliteRow;
 
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::RoleId;
 use crate::iq;
 use crate::iq::Criterion;
-use crate::iq::JudgingReaction;
+use crate::iq::JudgingMarks;
+use crate::iq::Mark;
 use crate::iq::Score;
 use crate::iq::Status;
 use crate::solves::Column;
@@ -24,7 +27,7 @@ const DISCORD_EPOCH_MS: i64 = 1_420_070_400_000;
 const SNOWFLAKE_TIME_SHIFT: u32 = 22;
 const SNOWFLAKE_TIME_LIMIT: u64 = 1 << 41;
 const TEMPLATE_LIMIT: i64 = 10;
-const REASON_LIMIT: usize = 200;
+pub const REASON_LIMIT: usize = 200;
 
 const COMPETITIONS: &str = "iq_competitions";
 const CRITERIA: &str = "iq_criteria";
@@ -36,6 +39,8 @@ const ADJUSTMENTS: &str = "iq_adjustments";
 const SERVERS: &str = "iq_servers";
 const LIVE_INDEX: &str = "iq_competitions_live";
 const CRITERION_NAME_INDEX: &str = "iq_criteria_name";
+const UNAWARDED_INDEX: &str = "iq_submissions_unawarded";
+const PRE_MARKS_COLUMN: &str = "judging_reaction";
 
 type ColumnSpec = (&'static str, &'static str, bool, bool);
 type TableSpec = (&'static str, &'static [ColumnSpec]);
@@ -54,7 +59,10 @@ const EXPECTED_COLUMNS: [TableSpec; 8] = [
             ("category_id", "INTEGER", true, false),
             ("announcements_id", "INTEGER", true, false),
             ("submissions_id", "INTEGER", true, false),
-            ("judging_reaction", "TEXT", true, false),
+            ("judge_log_channel_id", "INTEGER", false, false),
+            ("denied_mark", "TEXT", true, false),
+            ("awarded_mark", "TEXT", true, false),
+            ("confirm_mark", "TEXT", true, false),
             ("rules", "TEXT", true, false),
             ("last_seen_message", "INTEGER", false, false),
             ("created_by", "INTEGER", true, false),
@@ -129,29 +137,57 @@ const EXPECTED_COLUMNS: [TableSpec; 8] = [
 
 const EXPECTED_INDEXES: [&str; 2] = [LIVE_INDEX, CRITERION_NAME_INDEX];
 
-const LIVE_IN_GUILD: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judging_reaction, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE guild_id = ? AND status <> 'archived' ORDER BY id DESC LIMIT 1";
-const LIVE_BY_SUBMISSIONS: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judging_reaction, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE submissions_id = ? AND status <> 'archived' ORDER BY id DESC LIMIT 1";
-const BY_ID: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judging_reaction, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE id = ?";
-const LAST_ARCHIVED: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judging_reaction, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE guild_id = ? AND status = 'archived' ORDER BY created_at_ms DESC, id DESC LIMIT 1";
-const NEWEST_IN_GUILD: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judging_reaction, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE guild_id = ? ORDER BY created_at_ms DESC, id DESC LIMIT ?";
+const LIVE_IN_GUILD: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE guild_id = ? AND status <> 'archived' ORDER BY id DESC LIMIT 1";
+const LIVE_BY_SUBMISSIONS: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE submissions_id = ? AND status <> 'archived' ORDER BY id DESC LIMIT 1";
+const BY_ID: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE id = ?";
+const LAST_ARCHIVED: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE guild_id = ? AND status = 'archived' ORDER BY created_at_ms DESC, id DESC LIMIT 1";
+const NEWEST_IN_GUILD: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE guild_id = ? ORDER BY created_at_ms DESC, id DESC LIMIT ?";
 
-type CompetitionRow = (
-    i64,
-    i64,
-    String,
-    String,
-    String,
-    String,
-    String,
-    i64,
-    i64,
-    i64,
-    String,
-    String,
-    Option<i64>,
-    i64,
-    i64,
-);
+struct CompetitionRow {
+    id: i64,
+    guild: i64,
+    name: String,
+    first_day: String,
+    last_day: String,
+    zone: String,
+    status: String,
+    category: i64,
+    announcements: i64,
+    submissions: i64,
+    judge_log: Option<i64>,
+    denied: String,
+    awarded: String,
+    confirm: String,
+    rules: String,
+    last_seen: Option<i64>,
+    created_by: i64,
+    created_at_ms: i64,
+}
+
+impl CompetitionRow {
+    fn read(row: &SqliteRow) -> Result<CompetitionRow, sqlx::Error> {
+        Ok(CompetitionRow {
+            id: row.try_get("id")?,
+            guild: row.try_get("guild_id")?,
+            name: row.try_get("name")?,
+            first_day: row.try_get("first_day")?,
+            last_day: row.try_get("last_day")?,
+            zone: row.try_get("time_zone")?,
+            status: row.try_get("status")?,
+            category: row.try_get("category_id")?,
+            announcements: row.try_get("announcements_id")?,
+            submissions: row.try_get("submissions_id")?,
+            judge_log: row.try_get("judge_log_channel_id")?,
+            denied: row.try_get("denied_mark")?,
+            awarded: row.try_get("awarded_mark")?,
+            confirm: row.try_get("confirm_mark")?,
+            rules: row.try_get("rules")?,
+            last_seen: row.try_get("last_seen_message")?,
+            created_by: row.try_get("created_by")?,
+            created_at_ms: row.try_get("created_at_ms")?,
+        })
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum IqStoreError {
@@ -166,6 +202,8 @@ pub enum IqStoreError {
     },
     #[error("the IQ Competition database has no {index} index")]
     MissingIndex { index: &'static str },
+    #[error("the IQ Competition database has no judging marks or judge log")]
+    BeforeMarks,
     #[error("{value} does not fit in a SQLite integer")]
     OutOfRange { value: u128 },
     #[error("the IQ Competition database holds a negative value, {value}")]
@@ -176,12 +214,16 @@ pub enum IqStoreError {
     BadDate { value: String },
     #[error("the IQ Competition database holds {value}, which is not a competition status")]
     BadStatus { value: String },
-    #[error("the IQ Competition database holds {value}, which is not a judging reaction")]
-    BadReaction { value: String },
+    #[error("the IQ Competition database holds {value}, which is not a judging mark")]
+    BadMark { value: String },
+    #[error("the IQ Competition database holds a competition whose judging marks repeat")]
+    RepeatedMarks,
     #[error("the IQ Competition database holds {value}, which is not a criterion's points")]
     BadPoints { value: i64 },
     #[error("{points} is not a points change between -1000 and 1000 other than 0")]
     BadAdjustment { points: i64 },
+    #[error("a points change has no reason")]
+    ReasonMissing,
     #[error("a points change reason is longer than {REASON_LIMIT} characters")]
     ReasonTooLong,
     #[error("{at_unix} is outside the moments a Discord message ID can hold")]
@@ -199,7 +241,7 @@ pub struct ConfigChange {
     pub rules: String,
     pub roles: Vec<RoleId>,
     pub judges: Vec<UserId>,
-    pub reaction: JudgingReaction,
+    pub marks: JudgingMarks,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,7 +258,8 @@ pub struct NewCompetition {
     pub rules: String,
     pub roles: Vec<RoleId>,
     pub judges: Vec<UserId>,
-    pub reaction: JudgingReaction,
+    pub marks: JudgingMarks,
+    pub judge_log: Option<ChannelId>,
     pub created_by: UserId,
     pub created_at_ms: i64,
 }
@@ -238,7 +281,8 @@ pub struct Competition {
     pub rules: String,
     pub roles: Vec<RoleId>,
     pub judges: Vec<UserId>,
-    pub reaction: JudgingReaction,
+    pub marks: JudgingMarks,
+    pub judge_log: Option<ChannelId>,
     pub created_by: UserId,
     pub created_at_ms: i64,
 }
@@ -248,6 +292,12 @@ pub struct Competition {
 pub enum CreateOutcome {
     Created(Competition),
     AlreadyLive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdjustOutcome {
+    Adjusted { total: i64 },
+    BelowZero { total: i64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,10 +327,15 @@ impl IqStore {
     }
 
     pub async fn with_pool(pool: SqlitePool) -> Result<Self, IqStoreError> {
+        let mut before_marks = false;
         for (table, expected) in EXPECTED_COLUMNS {
             let found = columns(&pool, table).await?;
             if found.is_empty() {
                 return Err(IqStoreError::MissingTable { table });
+            }
+            if found.iter().any(|column| column.name == PRE_MARKS_COLUMN) {
+                before_marks = true;
+                continue;
             }
             if found != expected_columns(expected) {
                 return Err(IqStoreError::UnexpectedColumns { table, found });
@@ -295,6 +350,14 @@ impl IqStore {
             if present.is_none() {
                 return Err(IqStoreError::MissingIndex { index });
             }
+        }
+        let unawarded: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?")
+                .bind(UNAWARDED_INDEX)
+                .fetch_optional(&pool)
+                .await?;
+        if before_marks || unawarded.is_none() {
+            return Err(IqStoreError::BeforeMarks);
         }
         Ok(Self { pool })
     }
@@ -313,7 +376,7 @@ impl IqStore {
             return Ok(CreateOutcome::AlreadyLive);
         }
         let id: i64 = sqlx::query_scalar(
-            "INSERT INTO iq_competitions (guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judging_reaction, rules, last_seen_message, created_by, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) RETURNING id",
+            "INSERT INTO iq_competitions (guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) RETURNING id",
         )
         .bind(guild)
         .bind(&new.name)
@@ -324,7 +387,14 @@ impl IqStore {
         .bind(to_integer(new.category.get().into())?)
         .bind(to_integer(new.announcements.get().into())?)
         .bind(to_integer(new.submissions.get().into())?)
-        .bind(new.reaction.value())
+        .bind(
+            new.judge_log
+                .map(|channel| to_integer(channel.get().into()))
+                .transpose()?,
+        )
+        .bind(new.marks.denied.text())
+        .bind(new.marks.awarded.text())
+        .bind(new.marks.confirm.text())
         .bind(&new.rules)
         .bind(to_integer(new.created_by.get().into())?)
         .bind(new.created_at_ms)
@@ -340,7 +410,7 @@ impl IqStore {
     }
 
     pub async fn live(&self, guild: GuildId) -> Result<Option<Competition>, IqStoreError> {
-        let row: Option<CompetitionRow> = sqlx::query_as(LIVE_IN_GUILD)
+        let row = sqlx::query(LIVE_IN_GUILD)
             .bind(to_integer(guild.get().into())?)
             .fetch_optional(&self.pool)
             .await?;
@@ -351,7 +421,7 @@ impl IqStore {
         &self,
         channel: ChannelId,
     ) -> Result<Option<Competition>, IqStoreError> {
-        let row: Option<CompetitionRow> = sqlx::query_as(LIVE_BY_SUBMISSIONS)
+        let row = sqlx::query(LIVE_BY_SUBMISSIONS)
             .bind(to_integer(channel.get().into())?)
             .fetch_optional(&self.pool)
             .await?;
@@ -359,7 +429,7 @@ impl IqStore {
     }
 
     pub async fn competition(&self, id: i64) -> Result<Option<Competition>, IqStoreError> {
-        let row: Option<CompetitionRow> = sqlx::query_as(BY_ID)
+        let row = sqlx::query(BY_ID)
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
@@ -429,6 +499,16 @@ impl IqStore {
             .transpose()
     }
 
+    pub async fn set_judge_log(&self, id: i64, channel: ChannelId) -> Result<(), IqStoreError> {
+        let changed =
+            sqlx::query("UPDATE iq_competitions SET judge_log_channel_id = ? WHERE id = ?")
+                .bind(to_integer(channel.get().into())?)
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+        expect_one(changed.rows_affected(), id)
+    }
+
     pub async fn update_config(&self, change: &ConfigChange) -> Result<(), IqStoreError> {
         let ConfigChange {
             competition: id,
@@ -436,17 +516,20 @@ impl IqStore {
             rules,
             roles,
             judges,
-            reaction,
+            marks,
         } = change;
         let id = *id;
         let mut transaction = self.pool.begin().await?;
-        let changed =
-            sqlx::query("UPDATE iq_competitions SET rules = ?, judging_reaction = ? WHERE id = ?")
-                .bind(rules)
-                .bind(reaction.value())
-                .bind(id)
-                .execute(&mut *transaction)
-                .await?;
+        let changed = sqlx::query(
+            "UPDATE iq_competitions SET rules = ?, denied_mark = ?, awarded_mark = ?, confirm_mark = ? WHERE id = ?",
+        )
+        .bind(rules)
+        .bind(marks.denied.text())
+        .bind(marks.awarded.text())
+        .bind(marks.confirm.text())
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
         if changed.rows_affected() != 1 {
             transaction.rollback().await?;
             return Err(IqStoreError::UnknownCompetition { id });
@@ -567,31 +650,95 @@ impl IqStore {
         }
     }
 
+    pub async fn unawarded(&self, competition: i64, limit: u32) -> Result<Vec<u64>, IqStoreError> {
+        let rows: Vec<i64> = sqlx::query_scalar(
+            "SELECT message_id FROM iq_submissions WHERE competition_id = ? AND awarded_by IS NULL ORDER BY message_id DESC LIMIT ?",
+        )
+        .bind(competition)
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(to_unsigned).collect()
+    }
+
+    pub async fn criterion(&self, message: u64) -> Result<Option<String>, IqStoreError> {
+        Ok(
+            sqlx::query_scalar("SELECT criterion FROM iq_submissions WHERE message_id = ?")
+                .bind(to_integer(message.into())?)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
+    pub async fn recorded(&self, competition: i64, message: u64) -> Result<bool, IqStoreError> {
+        let found: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM iq_submissions WHERE competition_id = ? AND message_id = ?",
+        )
+        .bind(competition)
+        .bind(to_integer(message.into())?)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(found.is_some())
+    }
+
+    pub async fn forget(&self, competition: i64, message: u64) -> Result<(), IqStoreError> {
+        sqlx::query(
+            "DELETE FROM iq_submissions WHERE competition_id = ? AND message_id = ? AND awarded_by IS NULL",
+        )
+        .bind(competition)
+        .bind(to_integer(message.into())?)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn adjust(
         &self,
         id: i64,
         user: UserId,
         points: i64,
-        reason: Option<&str>,
+        reason: &str,
         judge: UserId,
         at_ms: i64,
-    ) -> Result<(), IqStoreError> {
+    ) -> Result<AdjustOutcome, IqStoreError> {
         let points = iq::adjustment(points).ok_or(IqStoreError::BadAdjustment { points })?;
-        if reason.is_some_and(|reason| reason.chars().count() > REASON_LIMIT) {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err(IqStoreError::ReasonMissing);
+        }
+        if reason.chars().count() > REASON_LIMIT {
             return Err(IqStoreError::ReasonTooLong);
+        }
+        let user = to_integer(user.get().into())?;
+        let judge = to_integer(judge.get().into())?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let current: i64 = sqlx::query_scalar(
+            "SELECT coalesce(sum(points), 0) FROM (SELECT points FROM iq_submissions WHERE competition_id = ? AND user_id = ? AND awarded_by IS NOT NULL UNION ALL SELECT points FROM iq_adjustments WHERE competition_id = ? AND user_id = ?)",
+        )
+        .bind(id)
+        .bind(user)
+        .bind(id)
+        .bind(user)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let total = current.saturating_add(points);
+        if points < 0 && total < 0 {
+            transaction.rollback().await?;
+            return Ok(AdjustOutcome::BelowZero { total: current });
         }
         sqlx::query(
             "INSERT INTO iq_adjustments (competition_id, user_id, points, reason, judge_id, made_at_ms) VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(id)
-        .bind(to_integer(user.get().into())?)
+        .bind(user)
         .bind(points)
         .bind(reason)
-        .bind(to_integer(judge.get().into())?)
+        .bind(judge)
         .bind(at_ms)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
-        Ok(())
+        transaction.commit().await?;
+        Ok(AdjustOutcome::Adjusted { total })
     }
 
     pub async fn scores(&self, id: i64) -> Result<Vec<Score>, IqStoreError> {
@@ -617,7 +764,7 @@ impl IqStore {
     }
 
     pub async fn last_archived(&self, guild: GuildId) -> Result<Option<Competition>, IqStoreError> {
-        let row: Option<CompetitionRow> = sqlx::query_as(LAST_ARCHIVED)
+        let row = sqlx::query(LAST_ARCHIVED)
             .bind(to_integer(guild.get().into())?)
             .fetch_optional(&self.pool)
             .await?;
@@ -625,14 +772,14 @@ impl IqStore {
     }
 
     pub async fn templates(&self, guild: GuildId) -> Result<Vec<Competition>, IqStoreError> {
-        let rows: Vec<CompetitionRow> = sqlx::query_as(NEWEST_IN_GUILD)
+        let rows = sqlx::query(NEWEST_IN_GUILD)
             .bind(to_integer(guild.get().into())?)
             .bind(TEMPLATE_LIMIT)
             .fetch_all(&self.pool)
             .await?;
         let mut templates = Vec::with_capacity(rows.len());
         for row in rows {
-            templates.push(self.with_config(row).await?);
+            templates.push(self.with_config(CompetitionRow::read(&row)?).await?);
         }
         Ok(templates)
     }
@@ -658,18 +805,15 @@ impl IqStore {
         Ok(())
     }
 
-    async fn complete(
-        &self,
-        row: Option<CompetitionRow>,
-    ) -> Result<Option<Competition>, IqStoreError> {
+    async fn complete(&self, row: Option<SqliteRow>) -> Result<Option<Competition>, IqStoreError> {
         match row {
-            Some(row) => Ok(Some(self.with_config(row).await?)),
+            Some(row) => Ok(Some(self.with_config(CompetitionRow::read(&row)?).await?)),
             None => Ok(None),
         }
     }
 
     async fn with_config(&self, row: CompetitionRow) -> Result<Competition, IqStoreError> {
-        let id = row.0;
+        let id = row.id;
         let criteria: Vec<(String, String, i64)> = sqlx::query_as(
             "SELECT name, description, points FROM iq_criteria WHERE competition_id = ? ORDER BY position",
         )
@@ -763,35 +907,24 @@ fn to_competition(
     roles: Vec<i64>,
     judges: Vec<i64>,
 ) -> Result<Competition, IqStoreError> {
-    let (
-        id,
-        guild,
-        name,
-        first_day,
-        last_day,
-        zone,
-        status,
-        category,
-        announcements,
-        submissions,
-        reaction,
-        rules,
-        last_seen,
-        created_by,
-        created_at_ms,
-    ) = row;
+    let marks = JudgingMarks::new(
+        parse_mark(row.denied)?,
+        parse_mark(row.awarded)?,
+        parse_mark(row.confirm)?,
+    )
+    .map_err(|_| IqStoreError::RepeatedMarks)?;
     Ok(Competition {
-        id,
-        status: parse_status(&status)?,
-        last_seen: last_seen.map(to_unsigned).transpose()?,
-        guild: GuildId::new(to_unsigned(guild)?),
-        name,
-        first_day: parse_date(first_day)?,
-        last_day: parse_date(last_day)?,
-        zone,
-        category: ChannelId::new(to_unsigned(category)?),
-        announcements: ChannelId::new(to_unsigned(announcements)?),
-        submissions: ChannelId::new(to_unsigned(submissions)?),
+        id: row.id,
+        status: parse_status(&row.status)?,
+        last_seen: row.last_seen.map(to_unsigned).transpose()?,
+        guild: GuildId::new(to_unsigned(row.guild)?),
+        name: row.name,
+        first_day: parse_date(row.first_day)?,
+        last_day: parse_date(row.last_day)?,
+        zone: row.zone,
+        category: ChannelId::new(to_unsigned(row.category)?),
+        announcements: ChannelId::new(to_unsigned(row.announcements)?),
+        submissions: ChannelId::new(to_unsigned(row.submissions)?),
         criteria: criteria
             .into_iter()
             .map(|(name, description, points)| {
@@ -802,17 +935,24 @@ fn to_competition(
                 })
             })
             .collect::<Result<_, IqStoreError>>()?,
-        rules,
+        rules: row.rules,
         roles: roles
             .into_iter()
             .map(|role| to_unsigned(role).map(RoleId::new))
             .collect::<Result<_, _>>()?,
         judges: judges.into_iter().map(to_user).collect::<Result<_, _>>()?,
-        reaction: JudgingReaction::parse(&reaction)
-            .ok_or(IqStoreError::BadReaction { value: reaction })?,
-        created_by: to_user(created_by)?,
-        created_at_ms,
+        marks,
+        judge_log: row
+            .judge_log
+            .map(|channel| to_unsigned(channel).map(ChannelId::new))
+            .transpose()?,
+        created_by: to_user(row.created_by)?,
+        created_at_ms: row.created_at_ms,
     })
+}
+
+fn parse_mark(text: String) -> Result<Mark, IqStoreError> {
+    Mark::parse(&text).ok_or(IqStoreError::BadMark { value: text })
 }
 
 fn status_text(status: Status) -> &'static str {

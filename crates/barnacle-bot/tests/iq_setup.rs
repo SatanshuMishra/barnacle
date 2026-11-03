@@ -3,10 +3,14 @@ use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::iq::Criterion;
-use barnacle_bot::iq::JudgingReaction;
+use barnacle_bot::iq::JudgingMarks;
+use barnacle_bot::iq::Mark;
 use barnacle_bot::iq::Status;
+use barnacle_bot::iq_setup::CompetitionChannels;
+use barnacle_bot::iq_setup::MarkField;
 use barnacle_bot::iq_setup::SetupChecks;
 use barnacle_bot::iq_setup::SetupDraft;
+use barnacle_bot::iq_setup::SetupReady;
 use barnacle_bot::iq_setup::SetupRefusal;
 use barnacle_bot::iq_setup::SetupStep;
 use barnacle_bot::iq_store::Competition;
@@ -71,7 +75,13 @@ fn october() -> Competition {
         rules: OCTOBER_RULES.to_owned(),
         roles: vec![TARGET_ROLE],
         judges: vec![JUDGE, SECOND_JUDGE],
-        reaction: JudgingReaction::Star,
+        marks: JudgingMarks::new(
+            Mark::parse("\u{274C}").unwrap(),
+            Mark::parse("\u{2B50}").unwrap(),
+            Mark::parse("\u{2705}").unwrap(),
+        )
+        .unwrap(),
+        judge_log: None,
         created_by: ADMIN,
         created_at_ms: 1_790_000_000_000,
     }
@@ -322,7 +332,7 @@ fn picking_a_template_copies_its_setup() {
     assert_eq!(picked.rules().to_owned(), OCTOBER_RULES.to_owned());
     assert_eq!(picked.roles().to_vec(), vec![TARGET_ROLE]);
     assert_eq!(picked.judges().to_vec(), vec![JUDGE, SECOND_JUDGE]);
-    assert_eq!(picked.reaction(), JudgingReaction::Star);
+    assert_eq!(picked.marks().awarded, Mark::parse("\u{2B50}").unwrap());
 }
 
 #[test]
@@ -360,4 +370,55 @@ fn the_dates_form_asks_for_the_first_and_last_day() {
             ("last".to_owned(), "Last day".to_owned()),
         ]
     );
+}
+
+#[test]
+fn the_review_lists_the_three_marks() {
+    let review = at_review()
+        .with_mark(MarkField::Awarded, Mark::parse("<:kraken:42>").unwrap())
+        .unwrap();
+    let view = review.panel(PANEL, NOW, &passing());
+    assert!(
+        view.content
+            .contains("Denied: \u{274C}. Awarded: <:kraken:42>. Confirm awarded: \u{2705}."),
+        "{}",
+        view.content
+    );
+    assert!(
+        view.content
+            .contains("> #iq-judge-log \u{b7} judges only, a record of judge actions"),
+        "{}",
+        view.content
+    );
+}
+
+#[test]
+fn a_custom_mark_shows_on_its_button_by_id() {
+    let who = at_review()
+        .back()
+        .with_mark(MarkField::Denied, Mark::parse("<a:spin:77>").unwrap())
+        .unwrap();
+    assert_eq!(who.step(), SetupStep::Who);
+    let button = component(&who.panel(PANEL, NOW, &passing()), IqPanelPart::DeniedMark);
+    assert_eq!(button["label"], "Denied", "{button}");
+    assert_eq!(button["emoji"]["id"], "77", "{button}");
+    assert_eq!(button["emoji"]["name"], "spin", "{button}");
+    assert_eq!(button["emoji"]["animated"], true, "{button}");
+}
+
+#[test]
+fn a_started_competition_stores_its_judge_log() {
+    let Ok(SetupReady::Start(plan)) = at_review().ready() else {
+        panic!("the review step is ready to start");
+    };
+    let competition = plan.competition(
+        CompetitionChannels {
+            category: ChannelId::new(40),
+            announcements: ChannelId::new(41),
+            submissions: ChannelId::new(42),
+            judge_log: ChannelId::new(43),
+        },
+        1_793_569_140_000,
+    );
+    assert_eq!(competition.judge_log, Some(ChannelId::new(43)));
 }
