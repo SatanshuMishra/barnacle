@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-02T23:58:22.146Z
+Updated: 2026-11-03T00:04:10.703Z
 Next ids: c2 D8 R1 S1
 
 ## Goal
@@ -13,11 +13,11 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-access-roles is reviewed green at d1dce61 on mitosis/access-roles (base 425f25a on feat/panel-inputs-and-bot-access), and panel-inputs green at a69fbc7 on mitosis/panel-inputs (base d1dce61); their fix-checks run against records cut to their own criteria, since fix-check refuses 5.23, which has no test rows. The panel-inputs C1 rejection (with_typed_dates counts today in the server's newest-event zone, not the draft's) goes in the final report as a defect main already has. iq-judging (base ad151bc, criteria 5.15-5.23) is at a1bc768 on mitosis/iq-judging with every round 1 blocker and advisory fixed and fix-check clean; its mitosis reconcile lists discord/commands.rs and tests/iq.rs as declared but unwritten, both harmless. Its review round 2 (fix diff c1bc979..a1bc768) has its suite passing (927 passed, 0 failed) and code-reviewer and security-reviewer running.
+access-roles is reviewed green at d1dce61 on mitosis/access-roles (base 425f25a on feat/panel-inputs-and-bot-access), and panel-inputs green at a69fbc7 on mitosis/panel-inputs (base d1dce61); their fix-checks run against records cut to their own criteria, since fix-check refuses 5.23, which has no test rows. The panel-inputs C1 rejection (with_typed_dates counts today in the server's newest-event zone, not the draft's) goes in the final report as a defect main already has. iq-judging (base ad151bc, criteria 5.15-5.23) is at a1bc768 on mitosis/iq-judging with every round 1 blocker and advisory fixed and fix-check clean; its mitosis reconcile lists discord/commands.rs and tests/iq.rs as declared but unwritten, both harmless. Its review round 2 (fix diff c1bc979..a1bc768) has its suite passing (927 passed, 0 failed) and the validator judging five candidates: the three carried blockers and one LOW advisory both reviewers raised (C1, S1: /iq points now posts the judge-log line before its first reply with no defer, so a slow first-use channel creation can miss Discord's 3 s reply window). The intended fix replies first, keeps the reply's result, posts the log line, then returns that result.
 
 ## Next step
 
-When the iq-judging round 2 reviewers finish, run the validator, record and verdict; on green, record the ship boundary and ship all three MSPs as stacked pull requests.
+When the iq-judging round 2 validator finishes, record and take the verdict, fix a confirmed C1/S1 on mitosis/iq-judging, then record the ship boundary and ship all three MSPs as stacked pull requests.
 
 Needs: D5, D7.
 
