@@ -7,6 +7,7 @@ use barnacle_bot::iq::JudgingMarks;
 use barnacle_bot::iq::Mark;
 use barnacle_bot::iq::Status;
 use barnacle_bot::iq_setup::CompetitionChannels;
+use barnacle_bot::iq_setup::GuildRole;
 use barnacle_bot::iq_setup::MarkField;
 use barnacle_bot::iq_setup::SetupChecks;
 use barnacle_bot::iq_setup::SetupDraft;
@@ -522,4 +523,78 @@ fn a_numbered_template_loses_its_typed_numbers() {
         picked.rules().to_vec(),
         ["Post your own battles only.", "One post per battle."]
     );
+}
+
+fn guild_role(id: u64, name: &str, position: u16, managed: bool) -> GuildRole {
+    GuildRole {
+        id: RoleId::new(id),
+        name: name.to_owned(),
+        position,
+        managed,
+    }
+}
+
+fn server_roles() -> Vec<GuildRole> {
+    vec![
+        guild_role(GUILD.get(), "@everyone", 0, false),
+        guild_role(31, "Periscope", 2, false),
+        guild_role(60, "IQ-Judge", 5, false),
+        guild_role(61, "Barnacle", 9, true),
+        guild_role(62, "Shrimpy", 3, false),
+    ]
+}
+
+#[test]
+fn the_roles_menu_leaves_out_everyone_bot_roles_and_the_judge_role() {
+    let draft = opened(vec![]).with_role_list(&server_roles(), Some(RoleId::new(60)));
+    let names: Vec<String> = draft
+        .role_options()
+        .into_iter()
+        .map(|(_, name)| name)
+        .collect();
+    assert_eq!(names, ["Shrimpy", "Periscope"]);
+}
+
+#[test]
+fn a_template_naming_the_judge_role_loses_it() {
+    let october_with_judges = Competition {
+        roles: vec![TARGET_ROLE, RoleId::new(60)],
+        ..october()
+    };
+    let draft =
+        opened(vec![october_with_judges]).with_role_list(&server_roles(), Some(RoleId::new(60)));
+    let value = template_value(&draft, "October IQ");
+    let picked = draft.with_template(&value).unwrap();
+    assert_eq!(picked.roles().to_vec(), vec![TARGET_ROLE]);
+    assert_eq!(
+        picked
+            .with_roles(vec![RoleId::new(62), RoleId::new(60)])
+            .unwrap()
+            .roles()
+            .to_vec(),
+        vec![RoleId::new(62)]
+    );
+}
+
+#[test]
+fn the_roles_menu_keeps_picked_roles_when_the_server_has_more_than_it_shows() {
+    let many: Vec<GuildRole> = (0..40)
+        .map(|number| {
+            guild_role(
+                100 + number,
+                &format!("Role {number}"),
+                200 - number as u16,
+                false,
+            )
+        })
+        .collect();
+    let draft = opened(vec![])
+        .with_role_list(&many, None)
+        .with_roles(vec![RoleId::new(139), RoleId::new(4242)])
+        .unwrap();
+    let options = draft.role_options();
+    assert_eq!(options.len(), 25);
+    assert!(options.contains(&(RoleId::new(139), "Role 39".to_owned())));
+    assert!(options.contains(&(RoleId::new(4242), "Deleted role".to_owned())));
+    assert_eq!(options[0], (RoleId::new(100), "Role 0".to_owned()));
 }

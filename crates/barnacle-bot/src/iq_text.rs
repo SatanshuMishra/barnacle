@@ -597,6 +597,9 @@ pub const BLANK_LABEL: &str = "Start blank";
 pub const BLANK_DESCRIPTION: &str = "No criteria, rules or roles filled in";
 pub const CRITERION_PLACEHOLDER: &str = "Pick a criterion to edit or remove";
 pub const ROLES_PLACEHOLDER: &str = "Roles that can take part (pick any)";
+pub const GONE_ROLE: &str = "Deleted role";
+pub const NO_ROLES_TO_PICK: &str =
+    "This server has no roles to pick. Create a role for the players, then open /iq start again.";
 pub const JUDGES_PLACEHOLDER: &str = "Members who judge (pick any)";
 pub const SET_DATES_LABEL: &str = crate::text::SET_DATES_LABEL;
 pub const RENAME_LABEL: &str = "Set name";

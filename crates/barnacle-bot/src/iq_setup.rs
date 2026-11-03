@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::num::NonZeroU64;
 
 use barnacle_guess::UserId;
@@ -108,6 +109,14 @@ pub enum MarkField {
     Confirm,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuildRole {
+    pub id: RoleId,
+    pub name: String,
+    pub position: u16,
+    pub managed: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SetupChecks {
     pub role_below_judge: bool,
@@ -202,6 +211,8 @@ pub struct SetupDraft {
     rules: Vec<String>,
     picked_rule: Option<usize>,
     roles: Vec<RoleId>,
+    role_list: Vec<GuildRole>,
+    judge_role: Option<RoleId>,
     judges: Vec<UserId>,
     marks: JudgingMarks,
 }
@@ -237,6 +248,8 @@ impl SetupDraft {
             rules: Vec::new(),
             picked_rule: None,
             roles: Vec::new(),
+            role_list: Vec::new(),
+            judge_role: None,
             judges: Vec::new(),
             marks: JudgingMarks::default(),
         }
@@ -262,8 +275,26 @@ impl SetupDraft {
             rules: iq::rule_lines(&competition.rules),
             picked_rule: None,
             roles: competition.roles.clone(),
+            role_list: Vec::new(),
+            judge_role: None,
             judges: competition.judges.clone(),
             marks: competition.marks.clone(),
+        }
+    }
+
+    pub fn with_role_list(&self, roles: &[GuildRole], judge_role: Option<RoleId>) -> SetupDraft {
+        let everyone = RoleId::new(self.guild.get());
+        let mut eligible: Vec<GuildRole> = roles
+            .iter()
+            .filter(|role| role.id != everyone && !role.managed && Some(role.id) != judge_role)
+            .cloned()
+            .collect();
+        eligible.sort_by_key(|role| (Reverse(role.position), role.id.get()));
+        SetupDraft {
+            role_list: eligible,
+            judge_role,
+            roles: without_role(&self.roles, judge_role),
+            ..self.clone()
         }
     }
 
@@ -357,7 +388,7 @@ impl SetupDraft {
             picked: None,
             rules: iq::rule_lines(&source.rules),
             picked_rule: None,
-            roles: source.roles.clone(),
+            roles: without_role(&source.roles, self.judge_role),
             judges: source.judges.clone(),
             marks: source.marks.clone(),
             ..self.clone()
@@ -572,7 +603,7 @@ impl SetupDraft {
             return Err(SetupRefusal::TooManyRoles);
         }
         Ok(SetupDraft {
-            roles,
+            roles: without_role(&roles, self.judge_role),
             ..self.clone()
         })
     }
@@ -842,7 +873,11 @@ impl SetupDraft {
     }
 
     fn who_content(&self) -> String {
-        joined(self.top_lines().into_iter().chain([
+        let no_roles = self
+            .role_options()
+            .is_empty()
+            .then(|| iq_text::NO_ROLES_TO_PICK.to_owned());
+        joined(self.top_lines().into_iter().chain(no_roles).chain([
             iq_text::WHO_ROLES_INTRO.to_owned(),
             iq_text::WHO_JUDGES_INTRO.to_owned(),
             iq_text::WHO_MARKS_INTRO.to_owned(),
@@ -1008,21 +1043,49 @@ impl SetupDraft {
         menu.into_iter().chain([editing_row, moving_row]).collect()
     }
 
+    pub fn role_options(&self) -> Vec<(RoleId, String)> {
+        let chosen = |id: RoleId| self.roles.contains(&id);
+        let room = usize::from(MENU_MAX).saturating_sub(self.roles.len());
+        let unchosen: Vec<RoleId> = self
+            .role_list
+            .iter()
+            .map(|role| role.id)
+            .filter(|id| !chosen(*id))
+            .take(room)
+            .collect();
+        let listed = self
+            .role_list
+            .iter()
+            .filter(|role| chosen(role.id) || unchosen.contains(&role.id))
+            .map(|role| (role.id, role.name.clone()));
+        let gone = self
+            .roles
+            .iter()
+            .filter(|id| !self.role_list.iter().any(|role| role.id == **id))
+            .map(|id| (*id, iq_text::GONE_ROLE.to_owned()));
+        listed.chain(gone).take(usize::from(MENU_MAX)).collect()
+    }
+
     fn who_rows(&self, panel: u64) -> Vec<serenity::CreateActionRow> {
-        let roles = serenity::CreateSelectMenu::new(
-            iq_panel_id(panel, IqPanelPart::Roles),
-            serenity::CreateSelectMenuKind::Role {
-                default_roles: (!self.roles.is_empty()).then(|| {
-                    self.roles
-                        .iter()
-                        .filter_map(|role| NonZeroU64::new(role.get()).map(serenity::RoleId::from))
-                        .collect()
-                }),
-            },
-        )
-        .placeholder(iq_text::ROLES_PLACEHOLDER)
-        .min_values(1)
-        .max_values(MENU_MAX);
+        let options = self.role_options();
+        let count = options.len();
+        let roles = (count > 0).then(|| {
+            serenity::CreateSelectMenu::new(
+                iq_panel_id(panel, IqPanelPart::Roles),
+                serenity::CreateSelectMenuKind::String {
+                    options: options
+                        .into_iter()
+                        .map(|(id, name)| {
+                            serenity::CreateSelectMenuOption::new(name, id.get().to_string())
+                                .default_selection(self.roles.contains(&id))
+                        })
+                        .collect(),
+                },
+            )
+            .placeholder(iq_text::ROLES_PLACEHOLDER)
+            .min_values(1)
+            .max_values(u8::try_from(count).unwrap_or(u8::MAX))
+        });
         let judges = serenity::CreateSelectMenu::new(
             iq_panel_id(panel, IqPanelPart::Judges),
             serenity::CreateSelectMenuKind::User {
@@ -1049,20 +1112,23 @@ impl SetupDraft {
             .map(|(field, mark)| mark_button(panel, field, mark))
             .collect(),
         );
-        vec![
-            serenity::CreateActionRow::SelectMenu(roles),
-            serenity::CreateActionRow::SelectMenu(judges),
-            marks,
-            serenity::CreateActionRow::Buttons(vec![
-                back_button(panel),
-                next_button(
-                    panel,
-                    iq_text::NEXT_REVIEW_LABEL,
-                    !self.step_met(SetupStep::Who),
-                ),
-                cancel_button(panel),
-            ]),
-        ]
+        roles
+            .map(serenity::CreateActionRow::SelectMenu)
+            .into_iter()
+            .chain([
+                serenity::CreateActionRow::SelectMenu(judges),
+                marks,
+                serenity::CreateActionRow::Buttons(vec![
+                    back_button(panel),
+                    next_button(
+                        panel,
+                        iq_text::NEXT_REVIEW_LABEL,
+                        !self.step_met(SetupStep::Who),
+                    ),
+                    cancel_button(panel),
+                ]),
+            ])
+            .collect()
     }
 
     fn review_rows(&self, panel: u64, checks: &SetupChecks) -> Vec<serenity::CreateActionRow> {
@@ -1285,6 +1351,14 @@ fn read_points(text: &str) -> Option<u32> {
     text.parse::<u32>()
         .ok()
         .filter(|points| (1..=POINTS_LIMIT).contains(points))
+}
+
+fn without_role(roles: &[RoleId], dropped: Option<RoleId>) -> Vec<RoleId> {
+    roles
+        .iter()
+        .copied()
+        .filter(|role| Some(*role) != dropped)
+        .collect()
 }
 
 fn joined(lines: impl Iterator<Item = String>) -> String {

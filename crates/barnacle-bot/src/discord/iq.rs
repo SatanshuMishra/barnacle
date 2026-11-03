@@ -40,6 +40,7 @@ use crate::iq::Status;
 use crate::iq_setup;
 use crate::iq_setup::CompetitionChannels;
 use crate::iq_setup::ConfigChange;
+use crate::iq_setup::GuildRole;
 use crate::iq_setup::MarkField;
 use crate::iq_setup::Purpose;
 use crate::iq_setup::SetupChecks;
@@ -665,6 +666,10 @@ async fn open_draft(ctx: Context<'_>, guild: GuildId, draft: SetupDraft) -> Resu
     };
     let scope = Scope::of_command(ctx);
     let checks = setup_checks(ctx.serenity_context(), ctx.data(), guild, &scope).await;
+    let judge_role = current_judge_role(ctx.data(), ctx.cache(), guild, &scope)
+        .await
+        .map(|role| RoleId::new(role.get()));
+    let draft = draft.with_role_list(&guild_roles(ctx.cache(), guild), judge_role);
     let panel = ctx.id();
     let view = draft.panel(panel, super::now_unix(), &checks);
     ctx.data().iq_drafts.open(panel, draft, now_ms);
@@ -705,6 +710,23 @@ async fn stored_judge_role(data: &Data, guild: GuildId, scope: &Scope) -> Option
             None
         }
     }
+}
+
+fn guild_roles(cache: &serenity::Cache, guild: GuildId) -> Vec<GuildRole> {
+    NonZeroU64::new(guild.get())
+        .and_then(|id| cache.guild(id))
+        .map(|held| {
+            held.roles
+                .values()
+                .map(|role| GuildRole {
+                    id: RoleId::new(role.id.get()),
+                    name: role.name.clone(),
+                    position: role.position,
+                    managed: role.managed,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn find_judge_role(
@@ -1289,8 +1311,14 @@ fn changed(
                 .map_err(|_| SetupRefusal::RuleUnknown)?;
             draft.with_picked_rule(index)?
         }
-        (IqPanelPart::Roles, serenity::ComponentInteractionDataKind::RoleSelect { values }) => {
-            draft.with_roles(values.iter().map(|role| RoleId::new(role.get())).collect())?
+        (IqPanelPart::Roles, serenity::ComponentInteractionDataKind::StringSelect { values }) => {
+            draft.with_roles(
+                values
+                    .iter()
+                    .filter_map(|value| value.parse::<u64>().ok())
+                    .map(RoleId::new)
+                    .collect(),
+            )?
         }
         (IqPanelPart::Judges, serenity::ComponentInteractionDataKind::UserSelect { values }) => {
             draft.with_judges(values.iter().map(|user| UserId::new(user.get())).collect())?
