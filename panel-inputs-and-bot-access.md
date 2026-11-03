@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-03T00:11:58.702Z
+Updated: 2026-11-03T00:12:05.011Z
 Next ids: c2 D11 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-access-roles is reviewed green at d1dce61 on mitosis/access-roles (base 425f25a on feat/panel-inputs-and-bot-access), and panel-inputs green at a69fbc7 on mitosis/panel-inputs (base d1dce61); their fix-checks run against records cut to their own criteria, since fix-check refuses 5.23, which has no test rows. The panel-inputs C1 rejection (with_typed_dates counts today in the server's newest-event zone, not the draft's) goes in the final report as a defect main already has. iq-judging (base ad151bc, criteria 5.15-5.23) is reviewed green in round 2 at b7f625f on mitosis/iq-judging, its round 2 advisory (the /iq points reply waiting behind the judge-log line) fixed and fix-check clean; its mitosis reconcile lists discord/commands.rs and tests/iq.rs as declared but unwritten, both harmless. The ship of access-roles has run; panel-inputs and iq-judging follow.
+All three MSPs are shipped as stacked pull requests waiting for the owner's merge: 56 access-roles (d1dce61, carrying the lock commit 425f25a), 57 panel-inputs (a69fbc7) and 58 iq-judging (b7f625f). Each stacked pull request must merge into its predecessor's branch before that predecessor merges. Criterion 5.23 (live Discord) is unproven, for the owner's dev-bot check. with_typed_dates counts today in the server's newest-event zone, not the draft's, a defect main already has. CI clippy all-targets fails on 56 and 57 alone, since the later locked test files only compile with iq-judging.
 
 ## Next step
 
