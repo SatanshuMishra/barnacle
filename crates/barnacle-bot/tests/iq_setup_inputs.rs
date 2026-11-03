@@ -114,6 +114,8 @@ fn basics_needs_no_template() {
     let moved = draft
         .with_typed_dates("2026-11-02", "2026-11-30")
         .unwrap()
+        .renamed("November IQ")
+        .unwrap()
         .next();
     assert!(moved.is_ok(), "{moved:?}");
     let moved = moved.unwrap();
@@ -132,4 +134,19 @@ fn the_competition_uses_the_given_zone() {
         "{}",
         view.content
     );
+}
+
+#[test]
+fn a_new_competition_has_no_name_until_one_is_typed() {
+    let dated = opened()
+        .with_typed_dates("2026-11-02", "2026-11-30")
+        .unwrap();
+    assert_eq!(dated.name(), "");
+    assert_eq!(
+        dated.next().err(),
+        Some(SetupRefusal::StepIncomplete(SetupStep::Basics))
+    );
+    let named = dated.renamed("  Kraken Cup  ").unwrap();
+    assert_eq!(named.name(), "Kraken Cup");
+    assert_eq!(named.next().unwrap().step(), SetupStep::Criteria);
 }

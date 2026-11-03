@@ -188,7 +188,6 @@ pub struct SetupDraft {
     today: Date,
     step: SetupStep,
     name: String,
-    renamed: bool,
     first_day: Option<Date>,
     last_day: Option<Date>,
     zone: String,
@@ -222,8 +221,7 @@ impl SetupDraft {
             templates: templates.into_iter().take(TEMPLATE_LIMIT).collect(),
             today,
             step: SetupStep::Basics,
-            name: iq_text::competition_name(today),
-            renamed: false,
+            name: String::new(),
             first_day: None,
             last_day: None,
             zone: zone.name().to_owned(),
@@ -248,7 +246,6 @@ impl SetupDraft {
             today: competition.first_day,
             step: SetupStep::Criteria,
             name: competition.name.clone(),
-            renamed: true,
             first_day: Some(competition.first_day),
             last_day: Some(competition.last_day),
             zone: competition.zone.clone(),
@@ -369,14 +366,9 @@ impl SetupDraft {
         if !within_window(&typed, today_unix) {
             return Err(SetupRefusal::DatesTooFar);
         }
-        let name = match self.renamed {
-            true => self.name.clone(),
-            false => iq_text::competition_name(first_day),
-        };
         Ok(SetupDraft {
             first_day: Some(first_day),
             last_day: Some(last_day),
-            name,
             ..self.clone()
         })
     }
@@ -389,7 +381,6 @@ impl SetupDraft {
         }
         Ok(SetupDraft {
             name: name.to_owned(),
-            renamed: true,
             ..self.clone()
         })
     }
@@ -634,10 +625,13 @@ impl SetupDraft {
 
     fn step_met(&self, step: SetupStep) -> bool {
         match step {
-            SetupStep::Basics => self
-                .first_day
-                .zip(self.last_day)
-                .is_some_and(|(first, last)| last > first),
+            SetupStep::Basics => {
+                !self.name.is_empty()
+                    && self
+                        .first_day
+                        .zip(self.last_day)
+                        .is_some_and(|(first, last)| last > first)
+            }
             SetupStep::Criteria => !self.criteria.is_empty(),
             SetupStep::Rules => !self.rules.trim().is_empty(),
             SetupStep::Who => !self.roles.is_empty() && !self.judges.is_empty(),
@@ -659,7 +653,11 @@ impl SetupDraft {
     fn basics_content(&self) -> String {
         let dates = match self.first_day.zip(self.last_day) {
             Some((first, last)) => iq_text::basics_line(first, last),
-            None => iq_text::BASICS_PROMPT.to_owned(),
+            None => iq_text::DATES_PROMPT.to_owned(),
+        };
+        let name = match self.name.is_empty() {
+            true => iq_text::NAME_PROMPT.to_owned(),
+            false => iq_text::name_line(&self.name),
         };
         let used = match self.template {
             Some(TemplateChoice::Competition(id)) => {
@@ -673,6 +671,7 @@ impl SetupDraft {
             (false, None) => iq_text::TEMPLATES_OFFERED.to_owned(),
         };
         joined(self.top_lines().into_iter().chain([
+            name,
             dates,
             iq_text::ends_line(&self.zone),
             template,
@@ -979,7 +978,8 @@ pub fn rename_modal(panel: u64, name: &str) -> serenity::CreateModal {
         NAME_INPUT,
         NAME_LIMIT,
         name,
-    ))])
+    )
+    .placeholder(iq_text::NAME_EXAMPLE))])
 }
 
 pub fn criterion_modal(panel: u64, editing: Option<&Criterion>) -> serenity::CreateModal {

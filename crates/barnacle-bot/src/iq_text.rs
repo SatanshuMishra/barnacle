@@ -598,7 +598,7 @@ pub const CRITERION_PLACEHOLDER: &str = "Pick a criterion to edit or remove";
 pub const ROLES_PLACEHOLDER: &str = "Roles that can take part (pick any)";
 pub const JUDGES_PLACEHOLDER: &str = "Members who judge (pick any)";
 pub const SET_DATES_LABEL: &str = crate::text::SET_DATES_LABEL;
-pub const RENAME_LABEL: &str = "Rename";
+pub const RENAME_LABEL: &str = "Set name";
 pub const NEXT_CRITERIA_LABEL: &str = "Next: criteria";
 pub const NEXT_RULES_LABEL: &str = "Next: rules";
 pub const NEXT_WHO_LABEL: &str = "Next: who";
@@ -611,8 +611,10 @@ pub const START_LABEL: &str = "Start competition";
 pub const SAVE_CHANGES_LABEL: &str = "Save changes";
 pub const BACK_LABEL: &str = "Back";
 pub const CANCEL_LABEL: &str = "Cancel";
-pub const BASICS_PROMPT: &str =
+pub const NAME_PROMPT: &str = "Press Set name to name the competition.";
+pub const DATES_PROMPT: &str =
     "Press Set dates to type the first and last day. A template is optional.";
+pub const NAME_EXAMPLE: &str = "November IQ";
 pub const NO_TEMPLATES: &str =
     "No past competitions yet, so there are no templates. The last 10 are kept once you have some.";
 pub const TEMPLATES_OFFERED: &str = "Templates are the last 10 competitions. Picking one copies its criteria, rules, roles, judges and marks.";
@@ -648,10 +650,15 @@ pub const FIRST_DAY_EXAMPLE: &str = "2026-11-02";
 pub const LAST_DAY_EXAMPLE: &str = "2026-11-30";
 
 pub fn setup_heading(name: &str, editing: bool) -> String {
-    match editing {
-        true => format!("**Editing {}**", escape(name)),
-        false => format!("**New IQ Competition: {}**", escape(name)),
+    match (editing, name.is_empty()) {
+        (true, _) => format!("**Editing {}**", escape(name)),
+        (false, true) => "**New IQ Competition**".to_owned(),
+        (false, false) => format!("**New IQ Competition: {}**", escape(name)),
     }
+}
+
+pub fn name_line(name: &str) -> String {
+    format!("Named **{}**.", escape(name))
 }
 
 pub fn setup_step_line(step: SetupStep) -> String {
@@ -680,10 +687,6 @@ fn step_name(step: SetupStep) -> &'static str {
         SetupStep::Who => "Who",
         SetupStep::Review => "Review",
     }
-}
-
-pub fn competition_name(first_day: Date) -> String {
-    format!("{} IQ", first_day.strftime("%B"))
 }
 
 pub fn basics_line(first_day: Date, last_day: Date) -> String {
@@ -858,7 +861,7 @@ pub fn setup_refusal(refusal: &SetupRefusal) -> String {
 
 fn step_need(step: SetupStep) -> &'static str {
     match step {
-        SetupStep::Basics => "Set the first and last day first.",
+        SetupStep::Basics => "Set the name and the first and last day first.",
         SetupStep::Criteria => "Add at least one criterion first.",
         SetupStep::Rules => "Write the rules first.",
         SetupStep::Who => "Pick at least one role and one judge first.",

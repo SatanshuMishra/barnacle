@@ -148,6 +148,8 @@ fn basics_done(draft: SetupDraft) -> SetupDraft {
         .unwrap()
         .with_typed_dates("2026-11-02", "2026-11-26")
         .unwrap()
+        .renamed("November IQ")
+        .unwrap()
 }
 
 fn at_criteria() -> SetupDraft {

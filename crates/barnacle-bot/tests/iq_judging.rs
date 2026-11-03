@@ -33,6 +33,8 @@ fn at_who() -> SetupDraft {
     )
     .with_typed_dates("2026-11-02", "2026-11-30")
     .unwrap()
+    .renamed("November IQ")
+    .unwrap()
     .next()
     .unwrap()
     .with_criterion("Drunken Kraken", "Five kills in one battle.", "5", None)
