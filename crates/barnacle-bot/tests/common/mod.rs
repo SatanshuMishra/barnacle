@@ -242,15 +242,15 @@ pub fn every_refusal() -> Vec<Refusal> {
         Refusal::TemplateUnknown,
         Refusal::FirstDayPast,
         Refusal::MissingOptions(vec!["name", "first_day"]),
-        Refusal::StartFormat,
-        Refusal::HoursOutOfRange,
-        Refusal::ZoneUnknown,
         Refusal::WeekdaysInvalid,
         Refusal::TooManyRoles,
         Refusal::PanelUnknown,
         Refusal::PanelNotYours,
         Refusal::PanelExpired,
         Refusal::ChannelUnknown,
+        Refusal::ZoneNeeded,
+        Refusal::LengthNotWholeHours,
+        Refusal::TimeFormat,
     ];
     for refusal in &refusals {
         match refusal {
@@ -286,15 +286,15 @@ pub fn every_refusal() -> Vec<Refusal> {
             | Refusal::TemplateUnknown
             | Refusal::FirstDayPast
             | Refusal::MissingOptions(_)
-            | Refusal::StartFormat
-            | Refusal::HoursOutOfRange
-            | Refusal::ZoneUnknown
             | Refusal::WeekdaysInvalid
             | Refusal::TooManyRoles
             | Refusal::PanelUnknown
             | Refusal::PanelNotYours
             | Refusal::PanelExpired
-            | Refusal::ChannelUnknown => {}
+            | Refusal::ChannelUnknown
+            | Refusal::ZoneNeeded
+            | Refusal::LengthNotWholeHours
+            | Refusal::TimeFormat => {}
         }
     }
     refusals

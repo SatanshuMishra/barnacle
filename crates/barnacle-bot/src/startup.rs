@@ -20,6 +20,8 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 
+use crate::access_store::AccessStore;
+use crate::access_store::AccessStoreError;
 use crate::attendance_store::Attendance;
 use crate::attendance_store::AttendanceError;
 use crate::config::Config;
@@ -33,6 +35,8 @@ use crate::updates_store::UpdatesStore;
 use crate::updates_store::UpdatesStoreError;
 use crate::voice_store::VoiceStore;
 use crate::voice_store::VoiceStoreError;
+use crate::zone_store::ZoneStore;
+use crate::zone_store::ZoneStoreError;
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -141,6 +145,30 @@ pub enum StartupError {
         #[source]
         source: IqStoreError,
     },
+    #[error(
+        "the organiser roles table is missing from {path}; back the file up, then add it with `sqlite3 {path} < migrations/0010_organiser_roles.sql`"
+    )]
+    Access {
+        path: PathBuf,
+        #[source]
+        source: AccessStoreError,
+    },
+    #[error(
+        "the member zones table is missing from {path}; back the file up, then add it with `sqlite3 {path} < migrations/0011_member_zones.sql`"
+    )]
+    Zones {
+        path: PathBuf,
+        #[source]
+        source: ZoneStoreError,
+    },
+    #[error(
+        "the IQ judging marks are missing from {path}; back the file up, then add them with `sqlite3 {path} < migrations/0012_iq_marks_and_judge_log.sql`"
+    )]
+    IqMarks {
+        path: PathBuf,
+        #[source]
+        source: IqStoreError,
+    },
 }
 
 fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
@@ -161,6 +189,8 @@ pub struct Stores {
     pub voice: VoiceStore,
     pub updates: UpdatesStore,
     pub iq: IqStore,
+    pub access: AccessStore,
+    pub zones: ZoneStore,
 }
 
 pub struct Loaded {
@@ -284,18 +314,40 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
             source,
         })?;
     let attendance = attendance?;
-    let iq = IqStore::with_pool(pool)
+    let iq = match IqStore::with_pool(pool.clone()).await {
+        Ok(iq) => Ok(iq),
+        Err(source @ IqStoreError::BeforeMarks) => Err(StartupError::IqMarks {
+            path: path.to_owned(),
+            source,
+        }),
+        Err(source) => {
+            return Err(StartupError::Iq {
+                path: path.to_owned(),
+                source,
+            });
+        }
+    };
+    let access = AccessStore::with_pool(pool.clone())
         .await
-        .map_err(|source| StartupError::Iq {
+        .map_err(|source| StartupError::Access {
             path: path.to_owned(),
             source,
         })?;
+    let zones = ZoneStore::with_pool(pool)
+        .await
+        .map_err(|source| StartupError::Zones {
+            path: path.to_owned(),
+            source,
+        })?;
+    let iq = iq?;
     Ok(Stores {
         solves,
         attendance,
         voice,
         updates,
         iq,
+        access,
+        zones,
     })
 }
 

@@ -1,3 +1,4 @@
+mod access;
 mod announcer;
 mod board;
 mod commands;
@@ -19,6 +20,7 @@ use poise::serenity_prelude as serenity;
 use rand::rngs::StdRng;
 use tokio::sync::Semaphore;
 
+use crate::access_store::AccessStore;
 use crate::attendance::Signups;
 use crate::attendance_store::Attendance;
 use crate::config::CommandScope;
@@ -41,7 +43,11 @@ use crate::updates::Updates;
 use crate::updates_store::UpdatesStore;
 use crate::voice::VoiceRooms;
 use crate::voice_store::VoiceStore;
+use crate::zone_store::ZoneStore;
 
+pub use access::AccessDraft;
+pub use access::access_rows;
+pub use access::organiser_roles_text;
 pub use announcer::DiscordAnnouncer;
 pub use announcer::ending_mentions;
 pub use announcer::ending_message;
@@ -83,6 +89,9 @@ pub struct Data {
     pub iq_drafts: Arc<iq_setup::Drafts>,
     pub iq_caught_up: Arc<crate::iq::CaughtUp>,
     pub iq_unsettled: Arc<crate::iq::Unsettled>,
+    pub access: AccessStore,
+    pub access_drafts: Arc<Drafts<AccessDraft>>,
+    pub zones: ZoneStore,
 }
 
 fn now_unix() -> i64 {
@@ -133,6 +142,8 @@ pub async fn run(
     voice: VoiceStore,
     updates: UpdatesStore,
     iq: IqStore,
+    access: AccessStore,
+    zones: ZoneStore,
 ) -> Result<(), Box<RunError>> {
     let version = env!("CARGO_PKG_VERSION");
     let releases = release_notes::all().map_err(RunError::Notes)?;
@@ -280,6 +291,9 @@ pub async fn run(
                     iq_drafts: Arc::new(iq_setup::Drafts::default()),
                     iq_caught_up: Arc::new(crate::iq::CaughtUp::default()),
                     iq_unsettled: Arc::new(crate::iq::Unsettled::default()),
+                    access,
+                    access_drafts: Arc::new(Drafts::default()),
+                    zones,
                 };
                 tracing::info!(
                     "event.name" = "service.started",
@@ -338,7 +352,11 @@ pub fn command_list(rehearsing: bool) -> Vec<poise::Command<Data, Error>> {
     } else {
         Vec::new()
     };
-    commands::all().into_iter().chain(extra).collect()
+    commands::all()
+        .into_iter()
+        .chain(access::commands())
+        .chain(extra)
+        .collect()
 }
 
 pub fn command_list_for(guild: u64, rehearsal: &[u64]) -> Vec<poise::Command<Data, Error>> {

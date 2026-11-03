@@ -431,3 +431,11 @@ fn a_failed_check_in_another_channel_leaves_the_submissions_mark_free() {
         .settle(Judged::Failed);
     assert_eq!(unsettled.mark_ceiling(submissions, 9000), Some(9000));
 }
+
+#[test]
+fn catch_up_checks_only_a_new_unmarked_post() {
+    assert!(barnacle_bot::iq::checks_at_catch_up(true, false, false));
+    assert!(!barnacle_bot::iq::checks_at_catch_up(true, false, true));
+    assert!(!barnacle_bot::iq::checks_at_catch_up(true, true, false));
+    assert!(!barnacle_bot::iq::checks_at_catch_up(false, false, false));
+}

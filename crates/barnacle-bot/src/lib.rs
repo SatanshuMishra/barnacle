@@ -1,3 +1,5 @@
+pub mod access;
+pub mod access_store;
 pub mod attendance;
 pub mod attendance_store;
 pub mod config;
@@ -25,3 +27,4 @@ pub mod voice;
 pub mod voice_store;
 pub mod voice_text;
 pub mod wiring;
+pub mod zone_store;
