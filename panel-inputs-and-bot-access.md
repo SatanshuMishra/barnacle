@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-03T00:09:05.038Z
+Updated: 2026-11-03T00:09:08.000Z
 Next ids: c2 D9 R1 S1
 
 ## Goal
@@ -17,9 +17,9 @@ access-roles is reviewed green at d1dce61 on mitosis/access-roles (base 425f25a 
 
 ## Next step
 
-When the iq-judging round 2 validator finishes, record and take the verdict, fix a confirmed C1/S1 on mitosis/iq-judging, then record the ship boundary and ship all three MSPs as stacked pull requests.
+Run SHIP=1 <home>/run.zsh --resume --proven-head <msp>=<head> for access-roles (d1dce61), panel-inputs (a69fbc7) and iq-judging (b7f625f) in that order, open each pull request through GitHub MCP with mitosis's title and body, assign each to SatanshuMishra, then park the thread for the owner's merge.
 
-Needs: D5, D7.
+Needs: D5, D8.
 
 ## Decisions in force
 
