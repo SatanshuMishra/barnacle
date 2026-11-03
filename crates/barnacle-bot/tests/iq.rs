@@ -24,6 +24,7 @@ use barnacle_bot::iq::may_complete;
 use barnacle_bot::iq::message_chunks;
 use barnacle_bot::iq::moves_last_seen;
 use barnacle_bot::iq::role_already_off;
+use barnacle_bot::iq::rule_lines;
 use barnacle_bot::iq::should_check;
 use barnacle_bot::iq::standings;
 use barnacle_bot::iq::start_choice;
@@ -449,4 +450,20 @@ fn catch_up_checks_only_a_new_unmarked_post() {
     assert!(!barnacle_bot::iq::checks_at_catch_up(true, false, true));
     assert!(!barnacle_bot::iq::checks_at_catch_up(true, true, false));
     assert!(!barnacle_bot::iq::checks_at_catch_up(false, false, false));
+}
+
+#[test]
+fn rule_lines_drop_blank_lines_and_typed_list_markers() {
+    let typed = "1. Own replays only.\n\n  2) No subterfuge.\n* Be kind.\n> 10. Ten\n2026 is the season.\n-1 point for spam.";
+    assert_eq!(
+        rule_lines(typed),
+        [
+            "Own replays only.",
+            "No subterfuge.",
+            "Be kind.",
+            "Ten",
+            "2026 is the season.",
+            "-1 point for spam.",
+        ]
+    );
 }

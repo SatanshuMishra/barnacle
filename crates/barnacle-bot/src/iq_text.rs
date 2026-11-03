@@ -233,22 +233,39 @@ pub fn start_announcement(
         "To score, post in {}: just the criterion name, with exactly 2 screenshots attached. A judge's reaction awards the points. Check where you stand with **/iq leaderboard**.",
         channel(submissions)
     );
-    let criteria_lines = criteria.iter().flat_map(|criterion| {
-        let heading = format!(
-            "**{}** \u{b7} {}",
-            criterion.name,
-            points_text(i64::from(criterion.points))
-        );
-        let description = criterion.description.trim();
-        [heading]
+    let criteria_blocks = criteria
+        .iter()
+        .map(|criterion| {
+            let heading = format!(
+                "> **{}** \u{b7} {}",
+                criterion.name,
+                points_text(i64::from(criterion.points))
+            );
+            let description = criterion.description.trim();
+            [heading]
+                .into_iter()
+                .chain(
+                    description
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                        .map(|line| format!("> {line}")),
+                )
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let rules_lines: Vec<String> = match crate::iq::rule_lines(rules).as_slice() {
+        [] => Vec::new(),
+        rules => ["## Rules".to_owned()]
             .into_iter()
-            .chain((!description.is_empty()).then(|| description.to_owned()))
-    });
-    let rules_lines: Vec<String> = match rules.trim() {
-        "" => Vec::new(),
-        text => ["## Rules".to_owned()]
-            .into_iter()
-            .chain(text.lines().map(|line| format!("> {line}")))
+            .chain(
+                rules
+                    .iter()
+                    .enumerate()
+                    .map(|(index, rule)| format!("{}. {rule}", index + 1)),
+            )
             .collect(),
     };
     let judges_line = match judges {
@@ -263,7 +280,7 @@ pub fn start_announcement(
     };
     [opening, how, "## Criteria".to_owned()]
         .into_iter()
-        .chain(criteria_lines)
+        .chain((!criteria_blocks.is_empty()).then_some(criteria_blocks))
         .chain(rules_lines)
         .chain(judges_line)
         .collect::<Vec<_>>()
