@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: parked
-Updated: 2026-11-03T00:34:22.478Z
+Updated: 2026-11-03T00:36:18.579Z
 Next ids: c2 D11 R1 S1
 
 ## Goal
@@ -13,13 +13,13 @@ Act on the owner's live-probe feedback: typed dates and times instead of short m
 
 ## Where things stand
 
-Integration is running: pull requests 58, 57 and 56 merged in stack order, so origin/feat/panel-inputs-and-bot-access is at 11872c2, checked out in the integration worktree ~/.mitosis/runs/barnacle/panel-inputs-and-bot-access/integration; the acceptance checks, the suite and the integration plan are running on it. Criterion 5.23 (live Discord) is unproven, for the owner's dev-bot check. with_typed_dates counts today in the server's newest-event zone, not the draft's, a defect main already has. CI clippy all-targets fails on 56 and 57 alone, since the later locked test files only compile with iq-judging.
+Integration is running: pull requests 58, 57 and 56 merged in stack order, so origin/feat/panel-inputs-and-bot-access is at 11872c2, checked out in the integration worktree ~/.mitosis/runs/barnacle/panel-inputs-and-bot-access/integration. Its suite passes (927 passed, 0 failed); the acceptance checks and integration plan are rerunning, after the record's criterion 5.23 got the empty acceptance list the parser requires (the original record is saved as scratchpad/record.before-5.23.json). Criterion 5.23 (live Discord) is unproven, for the owner's dev-bot check. with_typed_dates counts today in the server's newest-event zone, not the draft's, a defect main already has.
 
 ## Next step
 
-The owner merges 58 into mitosis/panel-inputs, then 57 into mitosis/access-roles, then 56 into feat/panel-inputs-and-bot-access; the owner starts Integration by saying the MSP pull requests merged.
+Read the rerun's checks and integration-plan results; on lighthouse skip, open the FEATURE pull request feat/panel-inputs-and-bot-access into main through pull-request render and GitHub MCP, assign it to the owner and park the thread for the owner's merge.
 
-Needs: D2, D8.
+Needs: D2.
 
 ## Decisions in force
 
