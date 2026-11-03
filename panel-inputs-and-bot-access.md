@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: parked
-Updated: 2026-11-03T00:38:11.386Z
+Updated: 2026-11-03T00:38:12.734Z
 Next ids: c2 D11 R1 S1
 
 ## Goal
@@ -17,7 +17,7 @@ The FEATURE pull request 59 (feat/panel-inputs-and-bot-access at 11872c2 into ma
 
 ## Next step
 
-Read the rerun's checks and integration-plan results; on lighthouse skip, open the FEATURE pull request feat/panel-inputs-and-bot-access into main through pull-request render and GitHub MCP, assign it to the owner and park the thread for the owner's merge.
+The owner checks criterion 5.23 on the dev bot and merges pull request 59; the owner starts Clean-up by saying the FEATURE pull request merged.
 
 Needs: D2.
 
