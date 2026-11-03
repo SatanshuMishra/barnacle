@@ -5,6 +5,7 @@ use crate::failure::join_names;
 use crate::ids::ChannelId;
 use crate::ids::RoleId;
 use crate::iq::BoardRow;
+use crate::iq::Completion;
 use crate::iq::Criterion;
 use crate::iq::Done;
 use crate::iq::JudgingMarks;
@@ -18,6 +19,7 @@ use crate::text::escape;
 
 const ANNOUNCED_LINES: usize = 5;
 const TOP_LINES: usize = 10;
+const OPTION_LABEL_LIMIT: usize = 100;
 const SHOWN_END_OFFSET: i64 = 60;
 const UNKNOWN_MEMBER: &str = "Unknown member";
 
@@ -232,22 +234,39 @@ pub fn start_announcement(
         "To score, post in {}: just the criterion name, with exactly 2 screenshots attached. A judge's reaction awards the points. Check where you stand with **/iq leaderboard**.",
         channel(submissions)
     );
-    let criteria_lines = criteria.iter().flat_map(|criterion| {
-        let heading = format!(
-            "**{}** \u{b7} {}",
-            criterion.name,
-            points_text(i64::from(criterion.points))
-        );
-        let description = criterion.description.trim();
-        [heading]
+    let criteria_blocks = criteria
+        .iter()
+        .map(|criterion| {
+            let heading = format!(
+                "> **{}** \u{b7} {}",
+                criterion.name,
+                points_text(i64::from(criterion.points))
+            );
+            let description = criterion.description.trim();
+            [heading]
+                .into_iter()
+                .chain(
+                    description
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                        .map(|line| format!("> {line}")),
+                )
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let rules_lines: Vec<String> = match crate::iq::rule_lines(rules).as_slice() {
+        [] => Vec::new(),
+        rules => ["## Rules".to_owned()]
             .into_iter()
-            .chain((!description.is_empty()).then(|| description.to_owned()))
-    });
-    let rules_lines: Vec<String> = match rules.trim() {
-        "" => Vec::new(),
-        text => ["## Rules".to_owned()]
-            .into_iter()
-            .chain(text.lines().map(|line| format!("> {line}")))
+            .chain(
+                rules
+                    .iter()
+                    .enumerate()
+                    .map(|(index, rule)| format!("{}. {rule}", index + 1)),
+            )
             .collect(),
     };
     let judges_line = match judges {
@@ -262,7 +281,7 @@ pub fn start_announcement(
     };
     [opening, how, "## Criteria".to_owned()]
         .into_iter()
-        .chain(criteria_lines)
+        .chain((!criteria_blocks.is_empty()).then_some(criteria_blocks))
         .chain(rules_lines)
         .chain(judges_line)
         .collect::<Vec<_>>()
@@ -460,16 +479,10 @@ pub fn needs_cleanup(competition: &str) -> String {
     )
 }
 
-pub fn complete_too_early(competition: &str, end_unix: i64) -> String {
-    format!(
-        "**{competition}** ends <t:{}:F>. You can complete it after that. To end it early, pause it with /iq stop.",
-        shown_end(end_unix)
-    )
-}
-
 pub fn complete_question(
     competition: &str,
     end_unix: i64,
+    completion: Completion,
     announcements: ChannelId,
     roles: &[RoleId],
     winners: &[&str],
@@ -485,11 +498,18 @@ pub fn complete_question(
                 .join(" ")
         ),
     };
-    let first = format!(
-        "**{competition}** ended on <t:{}:D>. Post the result in {}{pinging}?",
-        shown_end(end_unix),
-        channel(announcements)
-    );
+    let first = match completion {
+        Completion::AfterEnd => format!(
+            "**{competition}** ended on <t:{}:D>. Post the result in {}{pinging}?",
+            shown_end(end_unix),
+            channel(announcements)
+        ),
+        Completion::Early => format!(
+            "**{competition}** runs until <t:{}:F>. End it now and post the result in {}{pinging}? Posts after this are not judged.",
+            shown_end(end_unix),
+            channel(announcements)
+        ),
+    };
     let bold: Vec<String> = winners.iter().map(|name| format!("**{name}**")).collect();
     let bold_refs: Vec<&str> = bold.iter().map(String::as_str).collect();
     let second = match bold_refs.as_slice() {
@@ -577,9 +597,12 @@ pub const BLANK_LABEL: &str = "Start blank";
 pub const BLANK_DESCRIPTION: &str = "No criteria, rules or roles filled in";
 pub const CRITERION_PLACEHOLDER: &str = "Pick a criterion to edit or remove";
 pub const ROLES_PLACEHOLDER: &str = "Roles that can take part (pick any)";
+pub const GONE_ROLE: &str = "Deleted role";
+pub const NO_ROLES_TO_PICK: &str =
+    "This server has no roles to pick. Create a role for the players, then open /iq start again.";
 pub const JUDGES_PLACEHOLDER: &str = "Members who judge (pick any)";
 pub const SET_DATES_LABEL: &str = crate::text::SET_DATES_LABEL;
-pub const RENAME_LABEL: &str = "Rename";
+pub const RENAME_LABEL: &str = "Set name";
 pub const NEXT_CRITERIA_LABEL: &str = "Next: criteria";
 pub const NEXT_RULES_LABEL: &str = "Next: rules";
 pub const NEXT_WHO_LABEL: &str = "Next: who";
@@ -587,13 +610,16 @@ pub const NEXT_REVIEW_LABEL: &str = "Next: review";
 pub const ADD_CRITERION_LABEL: &str = "Add criterion";
 pub const EDIT_PICKED_LABEL: &str = "Edit picked";
 pub const REMOVE_PICKED_LABEL: &str = "Remove picked";
-pub const WRITE_RULES_LABEL: &str = "Write rules";
+pub const ADD_RULE_LABEL: &str = "Add rule";
+pub const RULE_PLACEHOLDER: &str = "Pick a rule to edit or remove";
 pub const START_LABEL: &str = "Start competition";
 pub const SAVE_CHANGES_LABEL: &str = "Save changes";
 pub const BACK_LABEL: &str = "Back";
 pub const CANCEL_LABEL: &str = "Cancel";
-pub const BASICS_PROMPT: &str =
+pub const NAME_PROMPT: &str = "Press Set name to name the competition.";
+pub const DATES_PROMPT: &str =
     "Press Set dates to type the first and last day. A template is optional.";
+pub const NAME_EXAMPLE: &str = "November IQ";
 pub const NO_TEMPLATES: &str =
     "No past competitions yet, so there are no templates. The last 10 are kept once you have some.";
 pub const TEMPLATES_OFFERED: &str = "Templates are the last 10 competitions. Picking one copies its criteria, rules, roles, judges and marks.";
@@ -602,7 +628,7 @@ pub const CRITERIA_INTRO: &str =
 pub const NO_CRITERIA: &str = "No criteria yet. Add at least one.";
 pub const RULES_INTRO: &str =
     "The rules are posted in the read-only announcements channel when the competition starts.";
-pub const NO_RULES: &str = "No rules written yet.";
+pub const NO_RULES: &str = "No rules yet. Press Add rule to add one.";
 pub const WHO_ROLES_INTRO: &str = "Only members with a picked role can see the competition's channels, and the start announcement pings those roles.";
 pub const WHO_JUDGES_INTRO: &str =
     "Judges get the @IQ-Judge role. Only their reaction awards points.";
@@ -620,8 +646,10 @@ pub const EDIT_CRITERION_TITLE: &str = "Edit criterion";
 pub const CRITERION_NAME_LABEL: &str = "Name players type";
 pub const CRITERION_DESCRIPTION_LABEL: &str = "What earns it";
 pub const CRITERION_POINTS_LABEL: &str = "Points, a whole number";
-pub const RULES_MODAL_TITLE: &str = "Rules";
-pub const RULES_INPUT_LABEL: &str = "Rules, up to 4000 characters";
+pub const ADD_RULE_TITLE: &str = "Add rule";
+pub const EDIT_RULE_TITLE: &str = "Edit rule";
+pub const RULE_INPUT_LABEL: &str = "Rule, up to 150 characters";
+pub const RULE_EXAMPLE: &str = "Only submit your own replays.";
 pub const DATES_MODAL_TITLE: &str = "Competition dates";
 pub const FIRST_DAY_INPUT_LABEL: &str = crate::text::FIRST_DAY_INPUT_LABEL;
 pub const LAST_DAY_INPUT_LABEL: &str = crate::text::LAST_DAY_INPUT_LABEL;
@@ -629,10 +657,15 @@ pub const FIRST_DAY_EXAMPLE: &str = "2026-11-02";
 pub const LAST_DAY_EXAMPLE: &str = "2026-11-30";
 
 pub fn setup_heading(name: &str, editing: bool) -> String {
-    match editing {
-        true => format!("**Editing {}**", escape(name)),
-        false => format!("**New IQ Competition: {}**", escape(name)),
+    match (editing, name.is_empty()) {
+        (true, _) => format!("**Editing {}**", escape(name)),
+        (false, true) => "**New IQ Competition**".to_owned(),
+        (false, false) => format!("**New IQ Competition: {}**", escape(name)),
     }
+}
+
+pub fn name_line(name: &str) -> String {
+    format!("Named **{}**.", escape(name))
 }
 
 pub fn setup_step_line(step: SetupStep) -> String {
@@ -661,10 +694,6 @@ fn step_name(step: SetupStep) -> &'static str {
         SetupStep::Who => "Who",
         SetupStep::Review => "Review",
     }
-}
-
-pub fn competition_name(first_day: Date) -> String {
-    format!("{} IQ", first_day.strftime("%B"))
 }
 
 pub fn basics_line(first_day: Date, last_day: Date) -> String {
@@ -722,10 +751,28 @@ pub fn criteria_not_shown(count: usize) -> String {
     }
 }
 
-pub fn rules_not_shown(characters: usize) -> String {
-    match characters {
-        1 => "1 more character not shown.".to_owned(),
-        more => format!("{more} more characters not shown."),
+pub fn rules_not_shown(count: usize) -> String {
+    match count {
+        1 => "1 more rule not shown.".to_owned(),
+        more => format!("{more} more rules not shown."),
+    }
+}
+
+pub fn rule_line(number: usize, rule: &str) -> String {
+    format!("{number}. {}", escape(rule))
+}
+
+pub fn rule_option_label(number: usize, rule: &str) -> String {
+    let label = format!("{number}. {rule}");
+    match label.chars().count() > OPTION_LABEL_LIMIT {
+        true => format!(
+            "{}\u{2026}",
+            label
+                .chars()
+                .take(OPTION_LABEL_LIMIT - 1)
+                .collect::<String>()
+        ),
+        false => label,
     }
 }
 
@@ -815,7 +862,10 @@ pub fn setup_refusal(refusal: &SetupRefusal) -> String {
         }
         SetupRefusal::CriterionUnknown => "Pick a criterion from the menu first.".to_owned(),
         SetupRefusal::NameFormat => "A competition name needs 1 to 60 characters.".to_owned(),
-        SetupRefusal::RulesTooLong => "The rules hold at most 4000 characters.".to_owned(),
+        SetupRefusal::RulesTooLong => "The rules hold at most 4000 characters in all.".to_owned(),
+        SetupRefusal::RuleLength => "A rule needs 1 to 150 characters.".to_owned(),
+        SetupRefusal::TooManyRules => "A competition holds at most 25 rules.".to_owned(),
+        SetupRefusal::RuleUnknown => "Pick a rule from the menu first.".to_owned(),
         SetupRefusal::TooManyRoles => "Pick at most 25 roles.".to_owned(),
         SetupRefusal::TooManyJudges => "Pick at most 25 judges.".to_owned(),
         SetupRefusal::TemplateUnknown => {
@@ -839,9 +889,9 @@ pub fn setup_refusal(refusal: &SetupRefusal) -> String {
 
 fn step_need(step: SetupStep) -> &'static str {
     match step {
-        SetupStep::Basics => "Set the first and last day first.",
+        SetupStep::Basics => "Set the name and the first and last day first.",
         SetupStep::Criteria => "Add at least one criterion first.",
-        SetupStep::Rules => "Write the rules first.",
+        SetupStep::Rules => "Add at least one rule first.",
         SetupStep::Who => "Pick at least one role and one judge first.",
         SetupStep::Review => "Check the review, then press Start.",
     }

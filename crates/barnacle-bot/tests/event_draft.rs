@@ -345,54 +345,6 @@ fn a_command_refuses_an_abbreviated_time_zone() {
 }
 
 #[test]
-fn only_running_events_lend_their_zones() {
-    let finished = event(
-        4,
-        "Ranked Warmup",
-        wednesdays("2026-10-07", "2026-10-07", "America/Denver"),
-        4_000,
-    );
-    assert_eq!(
-        finished.span.sessions().last().unwrap().remove_at_unix(),
-        1_791_430_200
-    );
-    let events = [
-        event(
-            1,
-            "Tokyo Sprint",
-            wednesdays("2026-10-14", "2026-10-18", "Asia/Tokyo"),
-            1_000,
-        ),
-        event(
-            2,
-            "Berlin Sprint",
-            wednesdays("2026-10-14", "2026-10-18", "Europe/Berlin"),
-            2_000,
-        ),
-        event(
-            3,
-            "Tokyo Relay",
-            wednesdays("2026-10-14", "2026-10-18", "Asia/Tokyo"),
-            3_000,
-        ),
-        finished,
-        Event {
-            ended_at_ms: Some(1_791_800_000_000),
-            ..event(
-                5,
-                "Paris Sprint",
-                wednesdays("2026-10-14", "2026-10-18", "Europe/Paris"),
-                5_000,
-            )
-        },
-    ];
-    assert_eq!(
-        event_draft::server_zones(&events, BEFORE_THE_SESSIONS),
-        vec!["Asia/Tokyo".to_owned(), "Europe/Berlin".to_owned()]
-    );
-}
-
-#[test]
 fn a_name_is_trimmed_and_kept() {
     let letters = "a".repeat(100);
     for (typed, kept) in [
@@ -748,25 +700,34 @@ fn no_picked_weekday_between_the_dates_holds_the_days_step() {
 }
 
 #[test]
-fn typed_dates_count_today_in_the_servers_zone() {
-    let fresh = create("Ranked Sprint", None).unwrap();
-    let edmonton = fresh.with_server_zones(strings(&["America/Edmonton", "Asia/Tokyo"]));
+fn typed_dates_count_today_in_the_members_zone() {
+    assert!(
+        create_in("Ranked Sprint", None, "America/Edmonton")
+            .unwrap()
+            .with_typed_dates("2026-11-01", "2026-11-03", EVENING_IN_EDMONTON)
+            .is_ok()
+    );
     assert_eq!(
-        fresh.with_typed_dates("2026-11-01", "2026-11-03", EVENING_IN_EDMONTON),
+        create_in("Ranked Sprint", None, "UTC")
+            .unwrap()
+            .with_typed_dates("2026-11-01", "2026-11-03", EVENING_IN_EDMONTON),
         Err(Refusal::FirstDayPast)
     );
+}
+
+#[test]
+fn a_templated_draft_counts_today_in_the_members_zone_not_utc() {
+    let season = create_in("Season", Some("Clan Battles"), "America/Edmonton").unwrap();
     assert!(
-        edmonton
-            .with_typed_dates("2026-11-01", "2026-11-03", EVENING_IN_EDMONTON)
+        season
+            .with_typed_dates("2026-11-01", "2026-11-20", EVENING_IN_EDMONTON)
             .is_ok()
     );
 }
 
 #[test]
 fn typed_dates_measure_the_window_from_the_same_day_as_create() {
-    let tokyo = create_in("Ranked Sprint", None, "Asia/Tokyo")
-        .unwrap()
-        .with_server_zones(strings(&["Asia/Tokyo"]));
+    let tokyo = create_in("Ranked Sprint", None, "Asia/Tokyo").unwrap();
     assert_eq!(
         tokyo.with_typed_dates("2027-04-26", "2027-05-02", AFTERNOON_IN_EDMONTON),
         Err(Refusal::DatesTooFar)

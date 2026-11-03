@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::num::NonZeroU64;
 
 use barnacle_guess::UserId;
@@ -14,6 +15,7 @@ use crate::event_draft::within_window;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::RoleId;
+use crate::iq;
 use crate::iq::Criterion;
 use crate::iq::JudgingMarks;
 use crate::iq::Mark;
@@ -38,7 +40,7 @@ pub const BLANK_TEMPLATE: &str = "blank";
 pub const NAME_INPUT: &str = "name";
 pub const DESCRIPTION_INPUT: &str = "description";
 pub const POINTS_INPUT: &str = "points";
-pub const RULES_INPUT: &str = "rules";
+pub const RULE_INPUT: &str = "rule";
 pub const CRITERIA_LIMIT: usize = 25;
 pub const ROLE_LIMIT: usize = 25;
 pub const JUDGE_LIMIT: usize = 25;
@@ -47,13 +49,14 @@ pub const NAME_LIMIT: usize = 60;
 pub const CRITERION_NAME_LIMIT: usize = 50;
 pub const DESCRIPTION_LIMIT: usize = 300;
 pub const RULES_LIMIT: usize = 4000;
+pub const RULE_LIMIT: usize = 150;
+pub const RULE_COUNT_LIMIT: usize = 25;
 pub const POINTS_LIMIT: u32 = 1000;
 pub const JUDGE_LOG_NAME: &str = "iq-judge-log";
 
 const CONTENT_LIMIT: usize = 2000;
 const POINTS_INPUT_MAX: usize = 4;
 const MENU_MAX: u8 = 25;
-const QUOTE_MARK: &str = "> ";
 const JUDGE_LOG_JUDGES_ALLOW: serenity::Permissions =
     serenity::Permissions::VIEW_CHANNEL.union(serenity::Permissions::READ_MESSAGE_HISTORY);
 const JUDGE_LOG_JUDGES_DENY: serenity::Permissions = serenity::Permissions::SEND_MESSAGES
@@ -84,6 +87,9 @@ pub enum SetupRefusal {
     CriterionUnknown,
     NameFormat,
     RulesTooLong,
+    RuleLength,
+    TooManyRules,
+    RuleUnknown,
     TooManyRoles,
     TooManyJudges,
     TemplateUnknown,
@@ -101,6 +107,14 @@ pub enum MarkField {
     Denied,
     Awarded,
     Confirm,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuildRole {
+    pub id: RoleId,
+    pub name: String,
+    pub position: u16,
+    pub managed: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -188,15 +202,17 @@ pub struct SetupDraft {
     today: Date,
     step: SetupStep,
     name: String,
-    renamed: bool,
     first_day: Option<Date>,
     last_day: Option<Date>,
     zone: String,
     template: Option<TemplateChoice>,
     criteria: Vec<Criterion>,
     picked: Option<usize>,
-    rules: String,
+    rules: Vec<String>,
+    picked_rule: Option<usize>,
     roles: Vec<RoleId>,
+    role_list: Vec<GuildRole>,
+    judge_role: Option<RoleId>,
     judges: Vec<UserId>,
     marks: JudgingMarks,
 }
@@ -222,16 +238,18 @@ impl SetupDraft {
             templates: templates.into_iter().take(TEMPLATE_LIMIT).collect(),
             today,
             step: SetupStep::Basics,
-            name: iq_text::competition_name(today),
-            renamed: false,
+            name: String::new(),
             first_day: None,
             last_day: None,
             zone: zone.name().to_owned(),
             template: None,
             criteria: Vec::new(),
             picked: None,
-            rules: String::new(),
+            rules: Vec::new(),
+            picked_rule: None,
             roles: Vec::new(),
+            role_list: Vec::new(),
+            judge_role: None,
             judges: Vec::new(),
             marks: JudgingMarks::default(),
         }
@@ -248,17 +266,35 @@ impl SetupDraft {
             today: competition.first_day,
             step: SetupStep::Criteria,
             name: competition.name.clone(),
-            renamed: true,
             first_day: Some(competition.first_day),
             last_day: Some(competition.last_day),
             zone: competition.zone.clone(),
             template: None,
             criteria: competition.criteria.clone(),
             picked: None,
-            rules: competition.rules.clone(),
+            rules: iq::rule_lines(&competition.rules),
+            picked_rule: None,
             roles: competition.roles.clone(),
+            role_list: Vec::new(),
+            judge_role: None,
             judges: competition.judges.clone(),
             marks: competition.marks.clone(),
+        }
+    }
+
+    pub fn with_role_list(&self, roles: &[GuildRole], judge_role: Option<RoleId>) -> SetupDraft {
+        let everyone = RoleId::new(self.guild.get());
+        let mut eligible: Vec<GuildRole> = roles
+            .iter()
+            .filter(|role| role.id != everyone && !role.managed && Some(role.id) != judge_role)
+            .cloned()
+            .collect();
+        eligible.sort_by_key(|role| (Reverse(role.position), role.id.get()));
+        SetupDraft {
+            role_list: eligible,
+            judge_role,
+            roles: without_role(&self.roles, judge_role),
+            ..self.clone()
         }
     }
 
@@ -306,8 +342,12 @@ impl SetupDraft {
         self.picked
     }
 
-    pub fn rules(&self) -> &str {
+    pub fn rules(&self) -> &[String] {
         &self.rules
+    }
+
+    pub fn picked_rule(&self) -> Option<usize> {
+        self.picked_rule
     }
 
     pub fn roles(&self) -> &[RoleId] {
@@ -329,7 +369,8 @@ impl SetupDraft {
                 template: Some(TemplateChoice::Blank),
                 criteria: Vec::new(),
                 picked: None,
-                rules: String::new(),
+                rules: Vec::new(),
+                picked_rule: None,
                 roles: Vec::new(),
                 judges: Vec::new(),
                 marks: JudgingMarks::default(),
@@ -345,8 +386,9 @@ impl SetupDraft {
             template: Some(TemplateChoice::Competition(source.id)),
             criteria: source.criteria.clone(),
             picked: None,
-            rules: source.rules.clone(),
-            roles: source.roles.clone(),
+            rules: iq::rule_lines(&source.rules),
+            picked_rule: None,
+            roles: without_role(&source.roles, self.judge_role),
             judges: source.judges.clone(),
             marks: source.marks.clone(),
             ..self.clone()
@@ -369,14 +411,9 @@ impl SetupDraft {
         if !within_window(&typed, today_unix) {
             return Err(SetupRefusal::DatesTooFar);
         }
-        let name = match self.renamed {
-            true => self.name.clone(),
-            false => iq_text::competition_name(first_day),
-        };
         Ok(SetupDraft {
             first_day: Some(first_day),
             last_day: Some(last_day),
-            name,
             ..self.clone()
         })
     }
@@ -389,7 +426,6 @@ impl SetupDraft {
         }
         Ok(SetupDraft {
             name: name.to_owned(),
-            renamed: true,
             ..self.clone()
         })
     }
@@ -466,11 +502,15 @@ impl SetupDraft {
     pub fn unpicked(&self) -> SetupDraft {
         SetupDraft {
             picked: None,
+            picked_rule: None,
             ..self.clone()
         }
     }
 
     pub fn remove_picked(&self) -> Result<SetupDraft, SetupRefusal> {
+        if self.step == SetupStep::Rules {
+            return self.remove_picked_rule();
+        }
         let position = self
             .picked
             .filter(|index| *index < self.criteria.len())
@@ -488,13 +528,72 @@ impl SetupDraft {
         })
     }
 
-    pub fn with_rules(&self, text: &str) -> Result<SetupDraft, SetupRefusal> {
-        let rules = text.trim();
-        if rules.chars().count() > RULES_LIMIT {
+    pub fn with_rule(
+        &self,
+        text: &str,
+        editing: Option<usize>,
+    ) -> Result<SetupDraft, SetupRefusal> {
+        if editing.is_some_and(|index| index >= self.rules.len()) {
+            return Err(SetupRefusal::RuleUnknown);
+        }
+        if editing.is_none() && self.rules.len() >= RULE_COUNT_LIMIT {
+            return Err(SetupRefusal::TooManyRules);
+        }
+        let rule = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !(1..=RULE_LIMIT).contains(&rule.chars().count()) {
+            return Err(SetupRefusal::RuleLength);
+        }
+        let rules: Vec<String> = match editing {
+            Some(position) => self
+                .rules
+                .iter()
+                .enumerate()
+                .map(|(index, held)| match index == position {
+                    true => rule.clone(),
+                    false => held.clone(),
+                })
+                .collect(),
+            None => self
+                .rules
+                .iter()
+                .cloned()
+                .chain(std::iter::once(rule))
+                .collect(),
+        };
+        if rules.join("\n").chars().count() > RULES_LIMIT {
             return Err(SetupRefusal::RulesTooLong);
         }
         Ok(SetupDraft {
-            rules: rules.to_owned(),
+            rules,
+            picked_rule: None,
+            ..self.clone()
+        })
+    }
+
+    pub fn with_picked_rule(&self, index: usize) -> Result<SetupDraft, SetupRefusal> {
+        if index >= self.rules.len() {
+            return Err(SetupRefusal::RuleUnknown);
+        }
+        Ok(SetupDraft {
+            picked_rule: Some(index),
+            ..self.clone()
+        })
+    }
+
+    fn remove_picked_rule(&self) -> Result<SetupDraft, SetupRefusal> {
+        let position = self
+            .picked_rule
+            .filter(|index| *index < self.rules.len())
+            .ok_or(SetupRefusal::RuleUnknown)?;
+        Ok(SetupDraft {
+            rules: self
+                .rules
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != position)
+                .map(|(_, held)| held.clone())
+                .collect(),
+            picked_rule: None,
             ..self.clone()
         })
     }
@@ -504,7 +603,7 @@ impl SetupDraft {
             return Err(SetupRefusal::TooManyRoles);
         }
         Ok(SetupDraft {
-            roles,
+            roles: without_role(&roles, self.judge_role),
             ..self.clone()
         })
     }
@@ -546,6 +645,8 @@ impl SetupDraft {
         };
         Ok(SetupDraft {
             step,
+            picked: None,
+            picked_rule: None,
             ..self.clone()
         })
     }
@@ -563,6 +664,8 @@ impl SetupDraft {
         };
         SetupDraft {
             step,
+            picked: None,
+            picked_rule: None,
             ..self.clone()
         }
     }
@@ -585,7 +688,7 @@ impl SetupDraft {
                     last_day,
                     zone: self.zone.clone(),
                     criteria: self.criteria.clone(),
-                    rules: self.rules.clone(),
+                    rules: self.rules.join("\n"),
                     roles: self.roles.clone(),
                     judges: self.judges.clone(),
                     marks: self.marks.clone(),
@@ -595,7 +698,7 @@ impl SetupDraft {
             Purpose::Edit { competition } => Ok(SetupReady::Edit(ConfigChange {
                 competition,
                 criteria: self.criteria.clone(),
-                rules: self.rules.clone(),
+                rules: self.rules.join("\n"),
                 roles: self.roles.clone(),
                 judges: self.judges.clone(),
                 marks: self.marks.clone(),
@@ -634,12 +737,15 @@ impl SetupDraft {
 
     fn step_met(&self, step: SetupStep) -> bool {
         match step {
-            SetupStep::Basics => self
-                .first_day
-                .zip(self.last_day)
-                .is_some_and(|(first, last)| last > first),
+            SetupStep::Basics => {
+                !self.name.is_empty()
+                    && self
+                        .first_day
+                        .zip(self.last_day)
+                        .is_some_and(|(first, last)| last > first)
+            }
             SetupStep::Criteria => !self.criteria.is_empty(),
-            SetupStep::Rules => !self.rules.trim().is_empty(),
+            SetupStep::Rules => !self.rules.is_empty(),
             SetupStep::Who => !self.roles.is_empty() && !self.judges.is_empty(),
             SetupStep::Review => true,
         }
@@ -659,7 +765,11 @@ impl SetupDraft {
     fn basics_content(&self) -> String {
         let dates = match self.first_day.zip(self.last_day) {
             Some((first, last)) => iq_text::basics_line(first, last),
-            None => iq_text::BASICS_PROMPT.to_owned(),
+            None => iq_text::DATES_PROMPT.to_owned(),
+        };
+        let name = match self.name.is_empty() {
+            true => iq_text::NAME_PROMPT.to_owned(),
+            false => iq_text::name_line(&self.name),
         };
         let used = match self.template {
             Some(TemplateChoice::Competition(id)) => {
@@ -673,6 +783,7 @@ impl SetupDraft {
             (false, None) => iq_text::TEMPLATES_OFFERED.to_owned(),
         };
         joined(self.top_lines().into_iter().chain([
+            name,
             dates,
             iq_text::ends_line(&self.zone),
             template,
@@ -726,29 +837,47 @@ impl SetupDraft {
             .into_iter()
             .chain([iq_text::RULES_INTRO.to_owned()])
             .collect();
-        if self.rules.trim().is_empty() {
+        if self.rules.is_empty() {
             return joined(fixed.into_iter().chain([iq_text::NO_RULES.to_owned()]));
         }
-        let whole = joined(fixed.iter().cloned().chain([quoted(&self.rules)]));
+        let lines: Vec<String> = self
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| iq_text::rule_line(index + 1, rule))
+            .collect();
+        let whole = joined(fixed.iter().cloned().chain(lines.iter().cloned()));
         if whole.chars().count() <= CONTENT_LIMIT {
             return whole;
         }
-        let total = self.rules.chars().count();
-        let worst_footer = iq_text::rules_not_shown(total);
-        let used = joined(fixed.iter().cloned().chain([String::new(), worst_footer]))
-            .chars()
-            .count();
-        let budget = CONTENT_LIMIT.saturating_sub(used);
-        let shown = quoted_prefix(&self.rules, budget);
-        let shown_count = shown.chars().count();
-        joined(fixed.into_iter().chain([
-            quoted(&shown),
-            iq_text::rules_not_shown(total - shown_count),
-        ]))
+        let shown = (0..lines.len())
+            .rev()
+            .find(|count| {
+                let footer = iq_text::rules_not_shown(lines.len() - count);
+                let candidate = joined(
+                    fixed
+                        .iter()
+                        .cloned()
+                        .chain(lines.iter().take(*count).cloned())
+                        .chain([footer]),
+                );
+                candidate.chars().count() <= CONTENT_LIMIT
+            })
+            .unwrap_or(0);
+        joined(
+            fixed
+                .into_iter()
+                .chain(lines.iter().take(shown).cloned())
+                .chain([iq_text::rules_not_shown(lines.len() - shown)]),
+        )
     }
 
     fn who_content(&self) -> String {
-        joined(self.top_lines().into_iter().chain([
+        let no_roles = self
+            .role_options()
+            .is_empty()
+            .then(|| iq_text::NO_ROLES_TO_PICK.to_owned());
+        joined(self.top_lines().into_iter().chain(no_roles).chain([
             iq_text::WHO_ROLES_INTRO.to_owned(),
             iq_text::WHO_JUDGES_INTRO.to_owned(),
             iq_text::WHO_MARKS_INTRO.to_owned(),
@@ -876,39 +1005,87 @@ impl SetupDraft {
     }
 
     fn rules_rows(&self, panel: u64) -> Vec<serenity::CreateActionRow> {
-        vec![
-            serenity::CreateActionRow::Buttons(vec![button(
+        let menu = (!self.rules.is_empty()).then(|| {
+            string_menu(
                 panel,
-                IqPanelPart::Rules,
-                iq_text::WRITE_RULES_LABEL,
-            )]),
-            serenity::CreateActionRow::Buttons(vec![
-                back_button(panel),
-                next_button(
-                    panel,
-                    iq_text::NEXT_WHO_LABEL,
-                    !self.step_met(SetupStep::Rules),
-                ),
-                cancel_button(panel),
-            ]),
-        ]
+                IqPanelPart::Rule,
+                iq_text::RULE_PLACEHOLDER,
+                self.rules
+                    .iter()
+                    .enumerate()
+                    .map(|(index, rule)| {
+                        serenity::CreateSelectMenuOption::new(
+                            iq_text::rule_option_label(index + 1, rule),
+                            index.to_string(),
+                        )
+                        .default_selection(self.picked_rule == Some(index))
+                    })
+                    .collect(),
+            )
+        });
+        let nothing_picked = self.picked_rule.is_none();
+        let editing_row = serenity::CreateActionRow::Buttons(vec![
+            button(panel, IqPanelPart::Add, iq_text::ADD_RULE_LABEL)
+                .disabled(self.rules.len() >= RULE_COUNT_LIMIT),
+            button(panel, IqPanelPart::Edit, iq_text::EDIT_PICKED_LABEL).disabled(nothing_picked),
+            button(panel, IqPanelPart::Remove, iq_text::REMOVE_PICKED_LABEL)
+                .disabled(nothing_picked),
+        ]);
+        let moving_row = serenity::CreateActionRow::Buttons(vec![
+            back_button(panel),
+            next_button(
+                panel,
+                iq_text::NEXT_WHO_LABEL,
+                !self.step_met(SetupStep::Rules),
+            ),
+            cancel_button(panel),
+        ]);
+        menu.into_iter().chain([editing_row, moving_row]).collect()
+    }
+
+    pub fn role_options(&self) -> Vec<(RoleId, String)> {
+        let chosen = |id: RoleId| self.roles.contains(&id);
+        let room = usize::from(MENU_MAX).saturating_sub(self.roles.len());
+        let unchosen: Vec<RoleId> = self
+            .role_list
+            .iter()
+            .map(|role| role.id)
+            .filter(|id| !chosen(*id))
+            .take(room)
+            .collect();
+        let listed = self
+            .role_list
+            .iter()
+            .filter(|role| chosen(role.id) || unchosen.contains(&role.id))
+            .map(|role| (role.id, role.name.clone()));
+        let gone = self
+            .roles
+            .iter()
+            .filter(|id| !self.role_list.iter().any(|role| role.id == **id))
+            .map(|id| (*id, iq_text::GONE_ROLE.to_owned()));
+        listed.chain(gone).take(usize::from(MENU_MAX)).collect()
     }
 
     fn who_rows(&self, panel: u64) -> Vec<serenity::CreateActionRow> {
-        let roles = serenity::CreateSelectMenu::new(
-            iq_panel_id(panel, IqPanelPart::Roles),
-            serenity::CreateSelectMenuKind::Role {
-                default_roles: (!self.roles.is_empty()).then(|| {
-                    self.roles
-                        .iter()
-                        .filter_map(|role| NonZeroU64::new(role.get()).map(serenity::RoleId::from))
-                        .collect()
-                }),
-            },
-        )
-        .placeholder(iq_text::ROLES_PLACEHOLDER)
-        .min_values(1)
-        .max_values(MENU_MAX);
+        let options = self.role_options();
+        let count = options.len();
+        let roles = (count > 0).then(|| {
+            serenity::CreateSelectMenu::new(
+                iq_panel_id(panel, IqPanelPart::Roles),
+                serenity::CreateSelectMenuKind::String {
+                    options: options
+                        .into_iter()
+                        .map(|(id, name)| {
+                            serenity::CreateSelectMenuOption::new(name, id.get().to_string())
+                                .default_selection(self.roles.contains(&id))
+                        })
+                        .collect(),
+                },
+            )
+            .placeholder(iq_text::ROLES_PLACEHOLDER)
+            .min_values(1)
+            .max_values(u8::try_from(count).unwrap_or(u8::MAX))
+        });
         let judges = serenity::CreateSelectMenu::new(
             iq_panel_id(panel, IqPanelPart::Judges),
             serenity::CreateSelectMenuKind::User {
@@ -935,20 +1112,23 @@ impl SetupDraft {
             .map(|(field, mark)| mark_button(panel, field, mark))
             .collect(),
         );
-        vec![
-            serenity::CreateActionRow::SelectMenu(roles),
-            serenity::CreateActionRow::SelectMenu(judges),
-            marks,
-            serenity::CreateActionRow::Buttons(vec![
-                back_button(panel),
-                next_button(
-                    panel,
-                    iq_text::NEXT_REVIEW_LABEL,
-                    !self.step_met(SetupStep::Who),
-                ),
-                cancel_button(panel),
-            ]),
-        ]
+        roles
+            .map(serenity::CreateActionRow::SelectMenu)
+            .into_iter()
+            .chain([
+                serenity::CreateActionRow::SelectMenu(judges),
+                marks,
+                serenity::CreateActionRow::Buttons(vec![
+                    back_button(panel),
+                    next_button(
+                        panel,
+                        iq_text::NEXT_REVIEW_LABEL,
+                        !self.step_met(SetupStep::Who),
+                    ),
+                    cancel_button(panel),
+                ]),
+            ])
+            .collect()
     }
 
     fn review_rows(&self, panel: u64, checks: &SetupChecks) -> Vec<serenity::CreateActionRow> {
@@ -973,13 +1153,16 @@ pub fn rename_modal(panel: u64, name: &str) -> serenity::CreateModal {
         iq_panel_id(panel, IqPanelPart::RenameModal),
         iq_text::RENAME_MODAL_TITLE,
     )
-    .components(vec![serenity::CreateActionRow::InputText(text_input(
-        serenity::InputTextStyle::Short,
-        iq_text::RENAME_INPUT_LABEL,
-        NAME_INPUT,
-        NAME_LIMIT,
-        name,
-    ))])
+    .components(vec![serenity::CreateActionRow::InputText(
+        text_input(
+            serenity::InputTextStyle::Short,
+            iq_text::RENAME_INPUT_LABEL,
+            NAME_INPUT,
+            NAME_LIMIT,
+            name,
+        )
+        .placeholder(iq_text::NAME_EXAMPLE),
+    )])
 }
 
 pub fn criterion_modal(panel: u64, editing: Option<&Criterion>) -> serenity::CreateModal {
@@ -1020,18 +1203,23 @@ pub fn criterion_modal(panel: u64, editing: Option<&Criterion>) -> serenity::Cre
     )
 }
 
-pub fn rules_modal(panel: u64, rules: &str) -> serenity::CreateModal {
-    serenity::CreateModal::new(
-        iq_panel_id(panel, IqPanelPart::RulesModal),
-        iq_text::RULES_MODAL_TITLE,
-    )
-    .components(vec![serenity::CreateActionRow::InputText(text_input(
-        serenity::InputTextStyle::Paragraph,
-        iq_text::RULES_INPUT_LABEL,
-        RULES_INPUT,
-        RULES_LIMIT,
-        rules,
-    ))])
+pub fn rule_modal(panel: u64, editing: Option<&str>) -> serenity::CreateModal {
+    let title = match editing {
+        Some(_) => iq_text::EDIT_RULE_TITLE,
+        None => iq_text::ADD_RULE_TITLE,
+    };
+    serenity::CreateModal::new(iq_panel_id(panel, IqPanelPart::RuleModal), title).components(vec![
+        serenity::CreateActionRow::InputText(
+            text_input(
+                serenity::InputTextStyle::Paragraph,
+                iq_text::RULE_INPUT_LABEL,
+                RULE_INPUT,
+                RULE_LIMIT,
+                editing.unwrap_or_default(),
+            )
+            .placeholder(iq_text::RULE_EXAMPLE),
+        ),
+    ])
 }
 
 pub fn dates_modal(panel: u64) -> serenity::CreateModal {
@@ -1165,26 +1353,12 @@ fn read_points(text: &str) -> Option<u32> {
         .filter(|points| (1..=POINTS_LIMIT).contains(points))
 }
 
-fn quoted(text: &str) -> String {
-    text.split('\n')
-        .map(|line| format!("{QUOTE_MARK}{line}"))
-        .collect::<Vec<String>>()
-        .join("\n")
-}
-
-fn quoted_prefix(text: &str, budget: usize) -> String {
-    let fitting = text
-        .chars()
-        .scan(QUOTE_MARK.len(), |size, character| {
-            *size += match character {
-                '\n' => 1 + QUOTE_MARK.len(),
-                _ => 1,
-            };
-            Some(*size)
-        })
-        .take_while(|size| *size <= budget)
-        .count();
-    text.chars().take(fitting).collect()
+fn without_role(roles: &[RoleId], dropped: Option<RoleId>) -> Vec<RoleId> {
+    roles
+        .iter()
+        .copied()
+        .filter(|role| Some(*role) != dropped)
+        .collect()
 }
 
 fn joined(lines: impl Iterator<Item = String>) -> String {

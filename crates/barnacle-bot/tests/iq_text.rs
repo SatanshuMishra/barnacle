@@ -1,5 +1,8 @@
+use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::iq::BoardRow;
+use barnacle_bot::iq::Completion;
+use barnacle_bot::iq::Criterion;
 use barnacle_bot::iq::Done;
 use barnacle_bot::iq::Problem;
 use barnacle_bot::iq::Standing;
@@ -207,4 +210,62 @@ fn a_negative_total_allows_no_removal() {
         iq_text::below_zero(UserId::new(31), -40),
         "<@31> has -40 points, so at most 0 can be removed."
     );
+}
+
+#[test]
+fn an_early_complete_says_it_ends_before_the_last_day() {
+    let question = iq_text::complete_question(
+        "November IQ",
+        1_796_104_800,
+        Completion::Early,
+        ChannelId::new(30),
+        &[],
+        &["Shrimpy"],
+        21,
+    );
+    assert_eq!(
+        question,
+        "**November IQ** runs until <t:1796104740:F>. End it now and post the result in <#30>? Posts after this are not judged.\nWinner: **Shrimpy** with 21 points."
+    );
+}
+
+#[test]
+fn the_start_announcement_quotes_each_criterion_apart_and_numbers_the_rules() {
+    let criteria = [
+        Criterion {
+            name: "Drunken Kraken".to_owned(),
+            description: "Get 5 kills. Survive the battle.".to_owned(),
+            points: 10,
+        },
+        Criterion {
+            name: "Huh? What happened?".to_owned(),
+            description: "Earn 3 million potential damage.".to_owned(),
+            points: 11,
+        },
+    ];
+    let rules = "1. Only submit your own replays.\n\n2) No subterfuge.\n- Be kind.";
+    let text = iq_text::start_announcement(
+        COMPETITION,
+        1_796_104_800,
+        &[TARGET_ROLE],
+        ChannelId::new(40),
+        &criteria,
+        rules,
+        &[UserId::new(7)],
+    );
+    let expected = [
+        "## Criteria",
+        "> **Drunken Kraken** \u{b7} 10 points",
+        "> Get 5 kills. Survive the battle.",
+        "",
+        "> **Huh? What happened?** \u{b7} 11 points",
+        "> Earn 3 million potential damage.",
+        "## Rules",
+        "1. Only submit your own replays.",
+        "2. No subterfuge.",
+        "3. Be kind.",
+        "Judges: <@7>",
+    ]
+    .join("\n");
+    assert!(text.contains(&expected), "{text}");
 }

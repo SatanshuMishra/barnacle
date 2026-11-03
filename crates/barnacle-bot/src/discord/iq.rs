@@ -5,8 +5,6 @@ use std::time::Duration;
 
 use barnacle_guess::Snowflake;
 use barnacle_guess::UserId;
-use jiff::ToSpan;
-use jiff::civil::Date;
 use poise::serenity_prelude as serenity;
 
 use super::Context;
@@ -42,6 +40,7 @@ use crate::iq::Status;
 use crate::iq_setup;
 use crate::iq_setup::CompetitionChannels;
 use crate::iq_setup::ConfigChange;
+use crate::iq_setup::GuildRole;
 use crate::iq_setup::MarkField;
 use crate::iq_setup::Purpose;
 use crate::iq_setup::SetupChecks;
@@ -375,14 +374,6 @@ pub(super) async fn iq_complete(ctx: Context<'_>) -> Result<(), Error> {
     };
     let end = end_unix(&competition)?;
     match iq::may_complete(competition.status, end, super::now_unix()) {
-        Err(CompleteRefusal::TooEarly) => {
-            refuse(
-                ctx,
-                "too_early",
-                iq_text::complete_too_early(&competition.name, end),
-            )
-            .await
-        }
         Err(CompleteRefusal::NotLive) => {
             refuse(
                 ctx,
@@ -391,7 +382,7 @@ pub(super) async fn iq_complete(ctx: Context<'_>) -> Result<(), Error> {
             )
             .await
         }
-        Ok(()) => {
+        Ok(completion) => {
             ctx.defer_ephemeral().await?;
             let standings = iq::standings(&ctx.data().iq.scores(competition.id).await?);
             let (named, points) =
@@ -400,6 +391,7 @@ pub(super) async fn iq_complete(ctx: Context<'_>) -> Result<(), Error> {
             let question = iq_text::complete_question(
                 &competition.name,
                 end,
+                completion,
                 competition.announcements,
                 &competition.roles,
                 &winner_names,
@@ -661,7 +653,7 @@ async fn open_setup(ctx: Context<'_>, guild: GuildId, typed: Option<&str>) -> Re
     }
     let now_unix = super::now_unix();
     let templates = ctx.data().iq.templates(guild).await?;
-    let Some(today) = local_today(now_unix, &zone) else {
+    let Some(today) = zone.today(now_unix) else {
         return commands::fail(ctx, Failure::from_error(&IqError::Clock)).await;
     };
     let draft = SetupDraft::new(guild, member, templates, zone, today);
@@ -674,24 +666,15 @@ async fn open_draft(ctx: Context<'_>, guild: GuildId, draft: SetupDraft) -> Resu
     };
     let scope = Scope::of_command(ctx);
     let checks = setup_checks(ctx.serenity_context(), ctx.data(), guild, &scope).await;
+    let judge_role = current_judge_role(ctx.data(), ctx.cache(), guild, &scope)
+        .await
+        .map(|role| RoleId::new(role.get()));
+    let draft = draft.with_role_list(&guild_roles(ctx.cache(), guild), judge_role);
     let panel = ctx.id();
     let view = draft.panel(panel, super::now_unix(), &checks);
     ctx.data().iq_drafts.open(panel, draft, now_ms);
     ctx.send(event_draft::panel_reply(view)).await?;
     Ok(())
-}
-
-fn local_today(now_unix: i64, zone: &Zone) -> Option<Date> {
-    let utc_today = schedule::today(now_unix)?;
-    [-1_i64, 0, 1]
-        .into_iter()
-        .filter_map(|offset| utc_today.checked_add(offset.days()).ok())
-        .find(|day| {
-            let began = day
-                .checked_sub(1.day())
-                .is_ok_and(|before| zone.midnight_after(before) <= now_unix);
-            began && now_unix < zone.midnight_after(*day)
-        })
 }
 
 async fn setup_checks(
@@ -727,6 +710,23 @@ async fn stored_judge_role(data: &Data, guild: GuildId, scope: &Scope) -> Option
             None
         }
     }
+}
+
+fn guild_roles(cache: &serenity::Cache, guild: GuildId) -> Vec<GuildRole> {
+    NonZeroU64::new(guild.get())
+        .and_then(|id| cache.guild(id))
+        .map(|held| {
+            held.roles
+                .values()
+                .map(|role| GuildRole {
+                    id: RoleId::new(role.id.get()),
+                    name: role.name.clone(),
+                    position: role.position,
+                    managed: role.managed,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn find_judge_role(
@@ -1004,7 +1004,10 @@ pub(super) async fn pressed(
                 .with(panel, user, now_ms)
                 .map(|draft| {
                     drafts.replace(panel, draft.unpicked());
-                    iq_setup::criterion_modal(panel, None)
+                    match draft.step() {
+                        SetupStep::Rules => iq_setup::rule_modal(panel, None),
+                        _ => iq_setup::criterion_modal(panel, None),
+                    }
                 })
                 .map_err(Turned::from);
             open_modal(serenity_context, component, opened, &scope).await;
@@ -1013,20 +1016,18 @@ pub(super) async fn pressed(
             let opened = drafts
                 .with(panel, user, now_ms)
                 .map_err(Turned::from)
-                .and_then(|draft| {
-                    draft
+                .and_then(|draft| match draft.step() {
+                    SetupStep::Rules => draft
+                        .picked_rule()
+                        .and_then(|index| draft.rules().get(index))
+                        .map(|rule| iq_setup::rule_modal(panel, Some(rule)))
+                        .ok_or(Turned::Setup(SetupRefusal::RuleUnknown)),
+                    _ => draft
                         .picked()
                         .and_then(|index| draft.criteria().get(index))
                         .map(|criterion| iq_setup::criterion_modal(panel, Some(criterion)))
-                        .ok_or(Turned::Setup(SetupRefusal::CriterionUnknown))
+                        .ok_or(Turned::Setup(SetupRefusal::CriterionUnknown)),
                 });
-            open_modal(serenity_context, component, opened, &scope).await;
-        }
-        IqPanelPart::Rules => {
-            let opened = drafts
-                .with(panel, user, now_ms)
-                .map(|draft| iq_setup::rules_modal(panel, draft.rules()))
-                .map_err(Turned::from);
             open_modal(serenity_context, component, opened, &scope).await;
         }
         IqPanelPart::SetDates => {
@@ -1054,6 +1055,7 @@ pub(super) async fn pressed(
         }
         IqPanelPart::Template
         | IqPanelPart::Criterion
+        | IqPanelPart::Rule
         | IqPanelPart::Remove
         | IqPanelPart::Roles
         | IqPanelPart::Judges
@@ -1161,7 +1163,7 @@ pub(super) async fn pressed(
         }
         IqPanelPart::RenameModal
         | IqPanelPart::CriterionModal
-        | IqPanelPart::RulesModal
+        | IqPanelPart::RuleModal
         | IqPanelPart::DatesModal => {
             refuse_press(
                 serenity_context,
@@ -1217,7 +1219,9 @@ pub(super) async fn submitted(
                     &typed(iq_setup::POINTS_INPUT),
                     draft.picked(),
                 ),
-                IqPanelPart::RulesModal => draft.with_rules(&typed(iq_setup::RULES_INPUT)),
+                IqPanelPart::RuleModal => {
+                    draft.with_rule(&typed(iq_setup::RULE_INPUT), draft.picked_rule())
+                }
                 IqPanelPart::DatesModal => draft.with_typed_dates(
                     &typed(event_draft::FIRST_DAY_INPUT),
                     &typed(event_draft::LAST_DAY_INPUT),
@@ -1229,7 +1233,7 @@ pub(super) async fn submitted(
                 | IqPanelPart::Add
                 | IqPanelPart::Edit
                 | IqPanelPart::Remove
-                | IqPanelPart::Rules
+                | IqPanelPart::Rule
                 | IqPanelPart::Roles
                 | IqPanelPart::Judges
                 | IqPanelPart::DeniedMark
@@ -1301,8 +1305,20 @@ fn changed(
                 .map_err(|_| SetupRefusal::CriterionUnknown)?;
             draft.with_picked_criterion(index)?
         }
-        (IqPanelPart::Roles, serenity::ComponentInteractionDataKind::RoleSelect { values }) => {
-            draft.with_roles(values.iter().map(|role| RoleId::new(role.get())).collect())?
+        (IqPanelPart::Rule, serenity::ComponentInteractionDataKind::StringSelect { .. }) => {
+            let index = single
+                .parse::<usize>()
+                .map_err(|_| SetupRefusal::RuleUnknown)?;
+            draft.with_picked_rule(index)?
+        }
+        (IqPanelPart::Roles, serenity::ComponentInteractionDataKind::StringSelect { values }) => {
+            draft.with_roles(
+                values
+                    .iter()
+                    .filter_map(|value| value.parse::<u64>().ok())
+                    .map(RoleId::new)
+                    .collect(),
+            )?
         }
         (IqPanelPart::Judges, serenity::ComponentInteractionDataKind::UserSelect { values }) => {
             draft.with_judges(values.iter().map(|user| UserId::new(user.get())).collect())?
@@ -1481,7 +1497,7 @@ async fn confirmed(
         | IqPanelPart::Add
         | IqPanelPart::Edit
         | IqPanelPart::Remove
-        | IqPanelPart::Rules
+        | IqPanelPart::Rule
         | IqPanelPart::Roles
         | IqPanelPart::Judges
         | IqPanelPart::DeniedMark
@@ -1494,7 +1510,7 @@ async fn confirmed(
         | IqPanelPart::JudgesUsers
         | IqPanelPart::RenameModal
         | IqPanelPart::CriterionModal
-        | IqPanelPart::RulesModal
+        | IqPanelPart::RuleModal
         | IqPanelPart::DatesModal => Ok(turned_text(&Turned::Panel(Refusal::PanelUnknown), scope)),
     };
     let content = match answer {
@@ -1589,12 +1605,10 @@ async fn complete(
         return Ok(iq_text::NO_COMPETITION_RUNNING.to_owned());
     };
     let end = end_unix(&competition).map_err(Unfinished::untouched)?;
-    match iq::may_complete(competition.status, end, super::now_unix()) {
-        Ok(()) => {}
-        Err(CompleteRefusal::TooEarly) => {
-            return Ok(iq_text::complete_too_early(&competition.name, end));
-        }
-        Err(CompleteRefusal::NotLive) => return Ok(iq_text::needs_cleanup(&competition.name)),
+    if let Err(CompleteRefusal::NotLive) =
+        iq::may_complete(competition.status, end, super::now_unix())
+    {
+        return Ok(iq_text::needs_cleanup(&competition.name));
     }
     let standings = iq::standings(
         &data
@@ -3497,6 +3511,9 @@ fn setup_code(refusal: &SetupRefusal) -> &'static str {
         SetupRefusal::CriterionUnknown => "criterion_unknown",
         SetupRefusal::NameFormat => "name_format",
         SetupRefusal::RulesTooLong => "rules_too_long",
+        SetupRefusal::RuleLength => "rule_length",
+        SetupRefusal::TooManyRules => "too_many_rules",
+        SetupRefusal::RuleUnknown => "rule_unknown",
         SetupRefusal::TooManyRoles => "too_many_roles",
         SetupRefusal::TooManyJudges => "too_many_judges",
         SetupRefusal::TemplateUnknown => "template_unknown",

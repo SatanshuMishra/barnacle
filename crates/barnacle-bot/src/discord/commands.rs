@@ -992,10 +992,7 @@ async fn event_create(
     };
     let now_unix = super::now_unix();
     match Draft::create(&options, place.guild, place.channel, author, now_unix) {
-        Ok(draft) => {
-            let zones = recent_zones(ctx, place.guild, now_unix).await;
-            open_panel(ctx, draft.with_server_zones(zones)).await
-        }
+        Ok(draft) => open_panel(ctx, draft).await,
         Err(refusal) => refuse(ctx, refusal).await,
     }
 }
@@ -1037,21 +1034,6 @@ pub(super) async fn remember_zone(ctx: Context<'_>, author: UserId, zone: Option
             &Failure::from_error(&error),
             &Scope::of_command(ctx),
         );
-    }
-}
-
-pub(super) async fn recent_zones(ctx: Context<'_>, guild: GuildId, now_unix: i64) -> Vec<String> {
-    match ctx.data().signups.store().events_in(guild).await {
-        Ok(events) => event_draft::server_zones(&events, now_unix),
-        Err(error) => {
-            failure::report(
-                "command.failed",
-                "the server's events could not be read, so typed dates are counted from today in UTC",
-                &Failure::from_error(&error),
-                &Scope::of_command(ctx),
-            );
-            Vec::new()
-        }
     }
 }
 
@@ -1119,13 +1101,7 @@ async fn event_edit(
         zone,
     };
     match Draft::edit(&event, &options, author, now_unix) {
-        Ok(draft) => {
-            open_panel(
-                ctx,
-                draft.with_server_zones(event_draft::server_zones(&events, now_unix)),
-            )
-            .await
-        }
+        Ok(draft) => open_panel(ctx, draft).await,
         Err(refusal) => refuse(ctx, refusal).await,
     }
 }
