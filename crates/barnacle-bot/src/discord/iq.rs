@@ -541,6 +541,7 @@ pub(super) async fn iq_points(
         "a judge changed a member's points",
         &scope,
     );
+    let replied = commands::private(ctx, iq_text::points_done(target, total)).await;
     log_judging(
         data,
         ctx.serenity_context(),
@@ -549,8 +550,7 @@ pub(super) async fn iq_points(
         &scope,
     )
     .await;
-    commands::private(ctx, iq_text::points_done(target, total)).await?;
-    Ok(())
+    replied
 }
 
 #[poise::command(slash_command, rename = "leaderboard", guild_only)]
