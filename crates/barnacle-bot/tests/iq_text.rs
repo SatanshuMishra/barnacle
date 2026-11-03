@@ -254,6 +254,12 @@ fn the_start_announcement_quotes_each_criterion_apart_and_numbers_the_rules() {
         &[UserId::new(7)],
     );
     let expected = [
+        "**November IQ** has started. It runs until <t:1796104740:F>.",
+        "",
+        "To score, post in <#40>: just the criterion name, with exactly 2 screenshots (The main rewards page and team leaderboard page) attached. A judge's reaction awards the points. Check where you stand with **/iq leaderboard**.",
+        "",
+        "<@&31>",
+        "",
         "## Criteria",
         "> **Drunken Kraken** \u{b7} 10 points",
         "> Get 5 kills. Survive the battle.",
@@ -267,5 +273,5 @@ fn the_start_announcement_quotes_each_criterion_apart_and_numbers_the_rules() {
         "Judges: <@7>",
     ]
     .join("\n");
-    assert!(text.contains(&expected), "{text}");
+    assert_eq!(text, expected);
 }

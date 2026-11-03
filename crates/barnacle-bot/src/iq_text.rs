@@ -223,17 +223,26 @@ pub fn start_announcement(
     rules: &str,
     judges: &[UserId],
 ) -> String {
-    let opening = with_mentions(
-        roles,
-        &format!(
-            "**{competition}** has started. It runs until <t:{}:F>.",
-            shown_end(end_unix)
-        ),
+    let opening = format!(
+        "**{competition}** has started. It runs until <t:{}:F>.",
+        shown_end(end_unix)
     );
     let how = format!(
-        "To score, post in {}: just the criterion name, with exactly 2 screenshots attached. A judge's reaction awards the points. Check where you stand with **/iq leaderboard**.",
+        "To score, post in {}: just the criterion name, with exactly 2 screenshots (The main rewards page and team leaderboard page) attached. A judge's reaction awards the points. Check where you stand with **/iq leaderboard**.",
         channel(submissions)
     );
+    let pings = (!roles.is_empty()).then(|| {
+        roles
+            .iter()
+            .map(|role| role_mention(*role))
+            .collect::<Vec<_>>()
+            .join(" ")
+    });
+    let intro = [opening, how]
+        .into_iter()
+        .chain(pings)
+        .collect::<Vec<_>>()
+        .join("\n\n");
     let criteria_blocks = criteria
         .iter()
         .map(|criterion| {
@@ -279,7 +288,7 @@ pub fn start_announcement(
                 .join(" ")
         )),
     };
-    [opening, how, "## Criteria".to_owned()]
+    [intro, String::new(), "## Criteria".to_owned()]
         .into_iter()
         .chain((!criteria_blocks.is_empty()).then_some(criteria_blocks))
         .chain(rules_lines)
