@@ -288,7 +288,7 @@ pub fn start_announcement(
                 .join(" ")
         )),
     };
-    [intro, "## Criteria".to_owned()]
+    [intro, String::new(), "## Criteria".to_owned()]
         .into_iter()
         .chain((!criteria_blocks.is_empty()).then_some(criteria_blocks))
         .chain(rules_lines)

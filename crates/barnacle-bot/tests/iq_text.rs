@@ -259,6 +259,7 @@ fn the_start_announcement_quotes_each_criterion_apart_and_numbers_the_rules() {
         "To score, post in <#40>: just the criterion name, with exactly 2 screenshots (The main rewards page and team leaderboard page) attached. A judge's reaction awards the points. Check where you stand with **/iq leaderboard**.",
         "",
         "<@&31>",
+        "",
         "## Criteria",
         "> **Drunken Kraken** \u{b7} 10 points",
         "> Get 5 kills. Survive the battle.",
