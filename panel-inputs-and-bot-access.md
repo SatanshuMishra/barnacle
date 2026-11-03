@@ -1,7 +1,7 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-03T00:04:14.165Z
-Next ids: c2 D8 R1 S1
+Updated: 2026-11-03T00:09:05.038Z
+Next ids: c2 D9 R1 S1
 
 ## Goal
 
@@ -29,6 +29,7 @@ Needs: D5, D7.
 - D4 Interphase hand-off: build the spec as three stacked MSPs: Build now: cut the FEATURE branch, set up the run home, run --plan-only, then build the three MSPs in order access-roles, panel-inputs, iq-judging.
 - D5 Build the three MSPs as three stacked mitosis runs: Three stacked runs in order. The first run's check-author writes all eight locked test files; later runs build from the previous MSP branch, and a fix to an earlier MSP is merged into each MSP stacked on it.
 - D7 Hand-off of iq-judging: build the third stacked run from mitosis/panel-inputs: Build iq-judging now from mitosis/panel-inputs; run panel-inputs review round 1 alongside it.
+- D8 Ship: push the three stacked MSPs and open their pull requests: Ship all three now: SHIP=1 resume of each run with its proven head, pull requests stacked access-roles into feat/panel-inputs-and-bot-access, panel-inputs into mitosis/access-roles, iq-judging into mitosis/panel-inputs, each assigned to the owner; 5.23 stays for the owner's dev-bot check.
 
 ## Open risks
 
