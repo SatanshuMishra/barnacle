@@ -165,14 +165,24 @@ fn with_criteria(draft: SetupDraft, count: usize) -> SetupDraft {
     })
 }
 
-fn at_review() -> SetupDraft {
+fn with_october_rules(draft: SetupDraft) -> SetupDraft {
+    OCTOBER_RULES
+        .lines()
+        .fold(draft, |held, rule| held.with_rule(rule, None).unwrap())
+}
+
+fn at_rules() -> SetupDraft {
     let rules = at_criteria()
         .with_criterion("Drunken Kraken", "Five kills in one battle.", "5", None)
         .unwrap()
         .next()
-        .unwrap()
-        .with_rules(OCTOBER_RULES)
         .unwrap();
+    assert_eq!(rules.step(), SetupStep::Rules);
+    rules
+}
+
+fn at_review() -> SetupDraft {
+    let rules = with_october_rules(at_rules());
     let review = rules
         .next()
         .unwrap()
@@ -244,7 +254,7 @@ fn each_step_waits_for_what_it_needs() {
     let rules = criteria.next().unwrap();
     assert_eq!(rules.step(), SetupStep::Rules);
     assert!(next_disabled(&rules));
-    let rules = rules.with_rules(OCTOBER_RULES).unwrap();
+    let rules = with_october_rules(rules);
     assert!(!next_disabled(&rules));
 
     let who = rules.next().unwrap();
@@ -275,16 +285,12 @@ fn the_panel_fits_discord_with_the_most_criteria_and_rules() {
         "{}",
         criteria_view.content.chars().count()
     );
-    let rules_text: String = (0..50)
-        .map(|line| format!("Rule {line:03}: {}", "r".repeat(88)))
-        .collect::<Vec<String>>()
-        .join("\n")
-        .chars()
-        .take(4000)
-        .collect();
-    assert_eq!(rules_text.chars().count(), 4000);
-    let rules = longest.next().unwrap().with_rules(&rules_text).unwrap();
+    let rules = (0..25).fold(longest.next().unwrap(), |held, number| {
+        held.with_rule(&format!("{number:02}{}", "r".repeat(148)), None)
+            .unwrap()
+    });
     assert_eq!(rules.step(), SetupStep::Rules);
+    assert_eq!(rules.rules().len(), 25);
     let rules_view = rules.panel(PANEL, NOW, &passing());
     assert!(
         rules_view.content.chars().count() <= 2000,
@@ -331,7 +337,10 @@ fn picking_a_template_copies_its_setup() {
     let value = template_value(&draft, "October IQ");
     let picked = draft.with_template(&value).unwrap();
     assert_eq!(picked.criteria().to_vec(), october().criteria);
-    assert_eq!(picked.rules().to_owned(), OCTOBER_RULES.to_owned());
+    assert_eq!(
+        picked.rules().to_vec(),
+        ["Post your own battles only.", "One post per battle."]
+    );
     assert_eq!(picked.roles().to_vec(), vec![TARGET_ROLE]);
     assert_eq!(picked.judges().to_vec(), vec![JUDGE, SECOND_JUDGE]);
     assert_eq!(picked.marks().awarded, Mark::parse("\u{2B50}").unwrap());
@@ -423,4 +432,94 @@ fn a_started_competition_stores_its_judge_log() {
         1_793_569_140_000,
     );
     assert_eq!(competition.judge_log, Some(ChannelId::new(43)));
+}
+
+#[test]
+fn rules_are_added_edited_and_removed_one_at_a_time() {
+    let rules = with_october_rules(at_rules());
+    assert_eq!(rules.rules().len(), 2);
+    let edited = rules
+        .with_picked_rule(1)
+        .unwrap()
+        .with_rule("  One post   per battle, please. ", Some(1))
+        .unwrap();
+    assert_eq!(
+        edited.rules().to_vec(),
+        [
+            "Post your own battles only.",
+            "One post per battle, please."
+        ]
+    );
+    assert_eq!(edited.picked_rule(), None);
+    let removed = edited.with_picked_rule(0).unwrap().remove_picked().unwrap();
+    assert_eq!(removed.rules().to_vec(), ["One post per battle, please."]);
+    assert_eq!(removed.criteria().len(), 1);
+    assert_eq!(
+        removed.with_picked_rule(1).err(),
+        Some(SetupRefusal::RuleUnknown)
+    );
+}
+
+#[test]
+fn a_rule_is_refused_when_blank_too_long_or_one_too_many() {
+    let rules = at_rules();
+    assert_eq!(
+        rules.with_rule("   ", None).err(),
+        Some(SetupRefusal::RuleLength)
+    );
+    assert_eq!(
+        rules.with_rule(&"r".repeat(151), None).err(),
+        Some(SetupRefusal::RuleLength)
+    );
+    let full = (0..25).fold(rules, |held, number| {
+        held.with_rule(&format!("Rule {number}"), None).unwrap()
+    });
+    assert_eq!(
+        full.with_rule("One more", None).err(),
+        Some(SetupRefusal::TooManyRules)
+    );
+}
+
+#[test]
+fn the_rules_step_numbers_each_rule_and_offers_it_in_the_menu() {
+    let view = with_october_rules(at_rules()).panel(PANEL, NOW, &passing());
+    assert!(
+        view.content
+            .contains("1. Post your own battles only.\n2. One post per battle."),
+        "{}",
+        view.content
+    );
+    let labels: Vec<serde_json::Value> = component(&view, IqPanelPart::Rule)["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|option| option["label"].clone())
+        .collect();
+    assert_eq!(
+        labels,
+        ["1. Post your own battles only.", "2. One post per battle."]
+    );
+}
+
+#[test]
+fn a_started_competition_stores_its_rules_one_per_line() {
+    let Ok(SetupReady::Start(plan)) = at_review().ready() else {
+        panic!("the review is ready");
+    };
+    assert_eq!(plan.rules, OCTOBER_RULES);
+}
+
+#[test]
+fn a_numbered_template_loses_its_typed_numbers() {
+    let numbered = Competition {
+        rules: "1. Post your own battles only.\n2) One post per battle.".to_owned(),
+        ..october()
+    };
+    let draft = opened(vec![numbered]);
+    let value = template_value(&draft, "October IQ");
+    let picked = draft.with_template(&value).unwrap();
+    assert_eq!(
+        picked.rules().to_vec(),
+        ["Post your own battles only.", "One post per battle."]
+    );
 }

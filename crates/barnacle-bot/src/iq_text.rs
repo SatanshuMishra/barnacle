@@ -19,6 +19,7 @@ use crate::text::escape;
 
 const ANNOUNCED_LINES: usize = 5;
 const TOP_LINES: usize = 10;
+const OPTION_LABEL_LIMIT: usize = 100;
 const SHOWN_END_OFFSET: i64 = 60;
 const UNKNOWN_MEMBER: &str = "Unknown member";
 
@@ -606,7 +607,8 @@ pub const NEXT_REVIEW_LABEL: &str = "Next: review";
 pub const ADD_CRITERION_LABEL: &str = "Add criterion";
 pub const EDIT_PICKED_LABEL: &str = "Edit picked";
 pub const REMOVE_PICKED_LABEL: &str = "Remove picked";
-pub const WRITE_RULES_LABEL: &str = "Write rules";
+pub const ADD_RULE_LABEL: &str = "Add rule";
+pub const RULE_PLACEHOLDER: &str = "Pick a rule to edit or remove";
 pub const START_LABEL: &str = "Start competition";
 pub const SAVE_CHANGES_LABEL: &str = "Save changes";
 pub const BACK_LABEL: &str = "Back";
@@ -623,7 +625,7 @@ pub const CRITERIA_INTRO: &str =
 pub const NO_CRITERIA: &str = "No criteria yet. Add at least one.";
 pub const RULES_INTRO: &str =
     "The rules are posted in the read-only announcements channel when the competition starts.";
-pub const NO_RULES: &str = "No rules written yet.";
+pub const NO_RULES: &str = "No rules yet. Press Add rule to add one.";
 pub const WHO_ROLES_INTRO: &str = "Only members with a picked role can see the competition's channels, and the start announcement pings those roles.";
 pub const WHO_JUDGES_INTRO: &str =
     "Judges get the @IQ-Judge role. Only their reaction awards points.";
@@ -641,8 +643,10 @@ pub const EDIT_CRITERION_TITLE: &str = "Edit criterion";
 pub const CRITERION_NAME_LABEL: &str = "Name players type";
 pub const CRITERION_DESCRIPTION_LABEL: &str = "What earns it";
 pub const CRITERION_POINTS_LABEL: &str = "Points, a whole number";
-pub const RULES_MODAL_TITLE: &str = "Rules";
-pub const RULES_INPUT_LABEL: &str = "Rules, up to 4000 characters";
+pub const ADD_RULE_TITLE: &str = "Add rule";
+pub const EDIT_RULE_TITLE: &str = "Edit rule";
+pub const RULE_INPUT_LABEL: &str = "Rule, up to 150 characters";
+pub const RULE_EXAMPLE: &str = "Only submit your own replays.";
 pub const DATES_MODAL_TITLE: &str = "Competition dates";
 pub const FIRST_DAY_INPUT_LABEL: &str = crate::text::FIRST_DAY_INPUT_LABEL;
 pub const LAST_DAY_INPUT_LABEL: &str = crate::text::LAST_DAY_INPUT_LABEL;
@@ -744,10 +748,28 @@ pub fn criteria_not_shown(count: usize) -> String {
     }
 }
 
-pub fn rules_not_shown(characters: usize) -> String {
-    match characters {
-        1 => "1 more character not shown.".to_owned(),
-        more => format!("{more} more characters not shown."),
+pub fn rules_not_shown(count: usize) -> String {
+    match count {
+        1 => "1 more rule not shown.".to_owned(),
+        more => format!("{more} more rules not shown."),
+    }
+}
+
+pub fn rule_line(number: usize, rule: &str) -> String {
+    format!("{number}. {}", escape(rule))
+}
+
+pub fn rule_option_label(number: usize, rule: &str) -> String {
+    let label = format!("{number}. {rule}");
+    match label.chars().count() > OPTION_LABEL_LIMIT {
+        true => format!(
+            "{}\u{2026}",
+            label
+                .chars()
+                .take(OPTION_LABEL_LIMIT - 1)
+                .collect::<String>()
+        ),
+        false => label,
     }
 }
 
@@ -837,7 +859,10 @@ pub fn setup_refusal(refusal: &SetupRefusal) -> String {
         }
         SetupRefusal::CriterionUnknown => "Pick a criterion from the menu first.".to_owned(),
         SetupRefusal::NameFormat => "A competition name needs 1 to 60 characters.".to_owned(),
-        SetupRefusal::RulesTooLong => "The rules hold at most 4000 characters.".to_owned(),
+        SetupRefusal::RulesTooLong => "The rules hold at most 4000 characters in all.".to_owned(),
+        SetupRefusal::RuleLength => "A rule needs 1 to 150 characters.".to_owned(),
+        SetupRefusal::TooManyRules => "A competition holds at most 25 rules.".to_owned(),
+        SetupRefusal::RuleUnknown => "Pick a rule from the menu first.".to_owned(),
         SetupRefusal::TooManyRoles => "Pick at most 25 roles.".to_owned(),
         SetupRefusal::TooManyJudges => "Pick at most 25 judges.".to_owned(),
         SetupRefusal::TemplateUnknown => {
@@ -863,7 +888,7 @@ fn step_need(step: SetupStep) -> &'static str {
     match step {
         SetupStep::Basics => "Set the name and the first and last day first.",
         SetupStep::Criteria => "Add at least one criterion first.",
-        SetupStep::Rules => "Write the rules first.",
+        SetupStep::Rules => "Add at least one rule first.",
         SetupStep::Who => "Pick at least one role and one judge first.",
         SetupStep::Review => "Check the review, then press Start.",
     }

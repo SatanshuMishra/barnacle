@@ -982,7 +982,10 @@ pub(super) async fn pressed(
                 .with(panel, user, now_ms)
                 .map(|draft| {
                     drafts.replace(panel, draft.unpicked());
-                    iq_setup::criterion_modal(panel, None)
+                    match draft.step() {
+                        SetupStep::Rules => iq_setup::rule_modal(panel, None),
+                        _ => iq_setup::criterion_modal(panel, None),
+                    }
                 })
                 .map_err(Turned::from);
             open_modal(serenity_context, component, opened, &scope).await;
@@ -991,20 +994,18 @@ pub(super) async fn pressed(
             let opened = drafts
                 .with(panel, user, now_ms)
                 .map_err(Turned::from)
-                .and_then(|draft| {
-                    draft
+                .and_then(|draft| match draft.step() {
+                    SetupStep::Rules => draft
+                        .picked_rule()
+                        .and_then(|index| draft.rules().get(index))
+                        .map(|rule| iq_setup::rule_modal(panel, Some(rule)))
+                        .ok_or(Turned::Setup(SetupRefusal::RuleUnknown)),
+                    _ => draft
                         .picked()
                         .and_then(|index| draft.criteria().get(index))
                         .map(|criterion| iq_setup::criterion_modal(panel, Some(criterion)))
-                        .ok_or(Turned::Setup(SetupRefusal::CriterionUnknown))
+                        .ok_or(Turned::Setup(SetupRefusal::CriterionUnknown)),
                 });
-            open_modal(serenity_context, component, opened, &scope).await;
-        }
-        IqPanelPart::Rules => {
-            let opened = drafts
-                .with(panel, user, now_ms)
-                .map(|draft| iq_setup::rules_modal(panel, draft.rules()))
-                .map_err(Turned::from);
             open_modal(serenity_context, component, opened, &scope).await;
         }
         IqPanelPart::SetDates => {
@@ -1032,6 +1033,7 @@ pub(super) async fn pressed(
         }
         IqPanelPart::Template
         | IqPanelPart::Criterion
+        | IqPanelPart::Rule
         | IqPanelPart::Remove
         | IqPanelPart::Roles
         | IqPanelPart::Judges
@@ -1139,7 +1141,7 @@ pub(super) async fn pressed(
         }
         IqPanelPart::RenameModal
         | IqPanelPart::CriterionModal
-        | IqPanelPart::RulesModal
+        | IqPanelPart::RuleModal
         | IqPanelPart::DatesModal => {
             refuse_press(
                 serenity_context,
@@ -1195,7 +1197,9 @@ pub(super) async fn submitted(
                     &typed(iq_setup::POINTS_INPUT),
                     draft.picked(),
                 ),
-                IqPanelPart::RulesModal => draft.with_rules(&typed(iq_setup::RULES_INPUT)),
+                IqPanelPart::RuleModal => {
+                    draft.with_rule(&typed(iq_setup::RULE_INPUT), draft.picked_rule())
+                }
                 IqPanelPart::DatesModal => draft.with_typed_dates(
                     &typed(event_draft::FIRST_DAY_INPUT),
                     &typed(event_draft::LAST_DAY_INPUT),
@@ -1207,7 +1211,7 @@ pub(super) async fn submitted(
                 | IqPanelPart::Add
                 | IqPanelPart::Edit
                 | IqPanelPart::Remove
-                | IqPanelPart::Rules
+                | IqPanelPart::Rule
                 | IqPanelPart::Roles
                 | IqPanelPart::Judges
                 | IqPanelPart::DeniedMark
@@ -1278,6 +1282,12 @@ fn changed(
                 .parse::<usize>()
                 .map_err(|_| SetupRefusal::CriterionUnknown)?;
             draft.with_picked_criterion(index)?
+        }
+        (IqPanelPart::Rule, serenity::ComponentInteractionDataKind::StringSelect { .. }) => {
+            let index = single
+                .parse::<usize>()
+                .map_err(|_| SetupRefusal::RuleUnknown)?;
+            draft.with_picked_rule(index)?
         }
         (IqPanelPart::Roles, serenity::ComponentInteractionDataKind::RoleSelect { values }) => {
             draft.with_roles(values.iter().map(|role| RoleId::new(role.get())).collect())?
@@ -1459,7 +1469,7 @@ async fn confirmed(
         | IqPanelPart::Add
         | IqPanelPart::Edit
         | IqPanelPart::Remove
-        | IqPanelPart::Rules
+        | IqPanelPart::Rule
         | IqPanelPart::Roles
         | IqPanelPart::Judges
         | IqPanelPart::DeniedMark
@@ -1472,7 +1482,7 @@ async fn confirmed(
         | IqPanelPart::JudgesUsers
         | IqPanelPart::RenameModal
         | IqPanelPart::CriterionModal
-        | IqPanelPart::RulesModal
+        | IqPanelPart::RuleModal
         | IqPanelPart::DatesModal => Ok(turned_text(&Turned::Panel(Refusal::PanelUnknown), scope)),
     };
     let content = match answer {
@@ -3473,6 +3483,9 @@ fn setup_code(refusal: &SetupRefusal) -> &'static str {
         SetupRefusal::CriterionUnknown => "criterion_unknown",
         SetupRefusal::NameFormat => "name_format",
         SetupRefusal::RulesTooLong => "rules_too_long",
+        SetupRefusal::RuleLength => "rule_length",
+        SetupRefusal::TooManyRules => "too_many_rules",
+        SetupRefusal::RuleUnknown => "rule_unknown",
         SetupRefusal::TooManyRoles => "too_many_roles",
         SetupRefusal::TooManyJudges => "too_many_judges",
         SetupRefusal::TemplateUnknown => "template_unknown",

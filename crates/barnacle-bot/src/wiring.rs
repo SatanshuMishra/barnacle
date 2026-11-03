@@ -322,7 +322,7 @@ pub enum IqPanelPart {
     Add,
     Edit,
     Remove,
-    Rules,
+    Rule,
     Roles,
     Judges,
     DeniedMark,
@@ -340,7 +340,7 @@ pub enum IqPanelPart {
     JudgesSave,
     RenameModal,
     CriterionModal,
-    RulesModal,
+    RuleModal,
     DatesModal,
 }
 
@@ -353,7 +353,7 @@ impl IqPanelPart {
         IqPanelPart::Add,
         IqPanelPart::Edit,
         IqPanelPart::Remove,
-        IqPanelPart::Rules,
+        IqPanelPart::Rule,
         IqPanelPart::Roles,
         IqPanelPart::Judges,
         IqPanelPart::DeniedMark,
@@ -371,7 +371,7 @@ impl IqPanelPart {
         IqPanelPart::JudgesSave,
         IqPanelPart::RenameModal,
         IqPanelPart::CriterionModal,
-        IqPanelPart::RulesModal,
+        IqPanelPart::RuleModal,
         IqPanelPart::DatesModal,
     ];
 
@@ -384,7 +384,7 @@ impl IqPanelPart {
             IqPanelPart::Add => "add",
             IqPanelPart::Edit => "edit",
             IqPanelPart::Remove => "remove",
-            IqPanelPart::Rules => "rules",
+            IqPanelPart::Rule => "rule",
             IqPanelPart::Roles => "roles",
             IqPanelPart::Judges => "judges",
             IqPanelPart::DeniedMark => "denied-mark",
@@ -402,7 +402,7 @@ impl IqPanelPart {
             IqPanelPart::JudgesSave => "judges-save",
             IqPanelPart::RenameModal => "rename-modal",
             IqPanelPart::CriterionModal => "criterion-modal",
-            IqPanelPart::RulesModal => "rules-modal",
+            IqPanelPart::RuleModal => "rule-modal",
             IqPanelPart::DatesModal => "dates-modal",
         }
     }

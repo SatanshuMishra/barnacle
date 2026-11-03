@@ -41,7 +41,7 @@ fn at_who() -> SetupDraft {
     .unwrap()
     .next()
     .unwrap()
-    .with_rules("Post your own battles only.")
+    .with_rule("Post your own battles only.", None)
     .unwrap()
     .next()
     .unwrap()
