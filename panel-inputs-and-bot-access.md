@@ -1,6 +1,6 @@
 # panel-inputs-and-bot-access: Rework /event and /iq panel inputs, IQ judging and add bot access roles
 Status: active
-Updated: 2026-11-03T00:11:27.272Z
+Updated: 2026-11-03T00:11:28.713Z
 Next ids: c2 D11 R1 S1
 
 ## Goal
@@ -17,7 +17,7 @@ access-roles is reviewed green at d1dce61 on mitosis/access-roles (base 425f25a 
 
 ## Next step
 
-Run SHIP=1 ~/.mitosis/barnacle/panel-inputs/run.zsh --resume --proven-head panel-inputs=a69fbc7, open its pull request into mitosis/access-roles with mitosis's title and body, assign it and post review/panel-inputs.comment.md; then record the iq-judging ship boundary and do the same for iq-judging (b7f625f) into mitosis/panel-inputs.
+Run SHIP=1 ~/.mitosis/barnacle/iq-judging/run.zsh --resume --proven-head iq-judging=b7f625f, open its pull request into mitosis/panel-inputs with mitosis's title and body, assign it, post review/iq-judging.comment.md, then park the thread for the owner's merge.
 
 Needs: D8.
 
