@@ -1,6 +1,6 @@
 # iq-leaderboard-and-judging-round-three: Guess leaderboard rename, IQ leaderboard rework, multi-player criteria, private rejections, /iq reject, 12-hour leaderboard
 Status: active
-Updated: 2026-11-08T23:58:41.640Z
+Updated: 2026-11-08T23:59:25.829Z
 Next ids: c9 D4 R4 S1
 
 ## Goal
@@ -37,7 +37,7 @@ The drive entered build and runs it next.
 
 - R1 How the embed heading renders and the gateway handlers behave is unproven until the bot runs on a real Discord server. Bears on c2.
 - R2 Migration 0013 must be applied before the new binary starts, or startup refuses.
-- R3 The watcher's restart of the live run is untested, and the drive's build stage resumes only because this run's run.zsh adds the resume flag itself.
+- R3 The drive's build stage resumes only because this run's run.zsh adds the resume flag itself.
 
 ## Settled, do not reopen
 
