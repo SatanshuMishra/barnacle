@@ -63,6 +63,8 @@ pub use commands::event_list_reply;
 pub use commands::private_reply;
 pub use herald::DiscordHerald;
 pub use herald::announcement_message;
+pub use iq::board_embed;
+pub use iq::board_reply;
 pub use rooms::DiscordRooms;
 
 const MEMBER_LOOKUPS_AT_ONCE: usize = 5;

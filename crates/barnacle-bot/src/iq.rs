@@ -483,6 +483,19 @@ pub fn standings(scores: &[Score]) -> Vec<Standing> {
         .collect()
 }
 
+pub fn top_rows(standings: &[Standing]) -> Vec<BoardRow> {
+    standings
+        .iter()
+        .take(BOARD_LINES)
+        .map(|standing| BoardRow {
+            rank: Some(standing.rank),
+            user: standing.user,
+            points: standing.points,
+            requester: false,
+        })
+        .collect()
+}
+
 pub fn board_rows(standings: &[Standing], requester: UserId) -> Vec<BoardRow> {
     let to_row = |standing: &Standing| BoardRow {
         rank: Some(standing.rank),

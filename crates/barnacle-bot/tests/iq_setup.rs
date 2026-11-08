@@ -486,7 +486,7 @@ fn the_rules_step_numbers_each_rule_and_offers_it_in_the_menu() {
     let view = with_october_rules(at_rules()).panel(PANEL, NOW, &passing());
     assert!(
         view.content
-            .contains("1. Post your own battles only.\n2. One post per battle."),
+            .contains("**1.** Post your own battles only.\n**2.** One post per battle."),
         "{}",
         view.content
     );

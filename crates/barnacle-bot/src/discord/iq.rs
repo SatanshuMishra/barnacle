@@ -58,6 +58,7 @@ use crate::iq_text;
 use crate::schedule;
 use crate::schedule::Zone;
 use crate::schedule::ZoneProblem;
+use crate::text;
 use crate::text::Refusal;
 use crate::text::escape;
 use crate::voice::Overwrite;
@@ -550,11 +551,11 @@ pub(super) async fn iq_leaderboard(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild) = guild_of(ctx) else {
         return Ok(());
     };
-    ctx.defer().await?;
+    ctx.defer_ephemeral().await?;
     let data = ctx.data();
     let http = &ctx.serenity_context().http;
     let requester = author(ctx);
-    let content = match data.iq.live(guild).await? {
+    let description = match data.iq.live(guild).await? {
         Some(competition) => {
             let standings = iq::standings(&data.iq.scores(competition.id).await?);
             let rows = iq::board_rows(&standings, requester);
@@ -582,13 +583,21 @@ pub(super) async fn iq_leaderboard(ctx: Context<'_>) -> Result<(), Error> {
             None => iq_text::no_competition(None),
         },
     };
-    ctx.send(
-        poise::CreateReply::default()
-            .content(content)
-            .allowed_mentions(serenity::CreateAllowedMentions::new()),
-    )
-    .await?;
+    ctx.send(board_reply(description)).await?;
     Ok(())
+}
+
+pub fn board_embed(description: String) -> serenity::CreateEmbed {
+    serenity::CreateEmbed::new()
+        .colour(text::EMBED_COLOUR)
+        .description(description)
+}
+
+pub fn board_reply(description: String) -> poise::CreateReply {
+    poise::CreateReply::default()
+        .embed(board_embed(description))
+        .ephemeral(true)
+        .allowed_mentions(serenity::CreateAllowedMentions::new())
 }
 
 fn guild_of(ctx: Context<'_>) -> Option<GuildId> {

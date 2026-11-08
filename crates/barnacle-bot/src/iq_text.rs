@@ -22,6 +22,7 @@ const TOP_LINES: usize = 10;
 const OPTION_LABEL_LIMIT: usize = 100;
 const SHOWN_END_OFFSET: i64 = 60;
 const UNKNOWN_MEMBER: &str = "Unknown member";
+const BOARD_HEADING: &str = "# IQ COMPETITION LEADERBOARD";
 
 pub const ONLY_JUDGES: &str = "Only members with @IQ-Judge can change points.";
 pub const NO_COMPETITION_RUNNING: &str =
@@ -107,13 +108,12 @@ fn problem_line(problem: &Problem) -> String {
 
 pub fn board_line(row: &BoardRow, name: &str) -> String {
     let rank = match row.rank {
-        Some(rank) => format!("{rank:02}"),
+        Some(rank) => rank.to_string(),
         None => "--".to_owned(),
     };
-    let line = format!("{rank}. {name} \u{b7} {}", row.points);
     match row.requester {
-        true => format!("**{line}**"),
-        false => line,
+        true => format!("**{rank}. {name} \u{b7} {}**", row.points),
+        false => format!("**{rank}.** {name} \u{b7} {}", row.points),
     }
 }
 
@@ -124,21 +124,20 @@ pub fn leaderboard(
     rows: &[(BoardRow, String)],
     players: usize,
 ) -> String {
-    let verb = match now_unix >= end_unix {
-        true => "ended",
-        false => "ends",
+    let relative = format!("<t:{}:R>", shown_end(end_unix));
+    let when = match now_unix >= end_unix {
+        true => format!("ended {relative}"),
+        false => relative,
     };
-    let title = format!(
-        "**{competition} leaderboard** \u{b7} {verb} <t:{}:R>",
-        shown_end(end_unix)
-    );
+    let heading = BOARD_HEADING.to_owned();
+    let subtitle = format!("{} \u{2022} {when}", escape(&competition.to_uppercase()));
     let empty = (players == 0).then(|| NO_POINTS_YET.to_owned());
     let lines = rows.iter().map(|(row, name)| board_line(row, name));
     let footer = rows
         .iter()
         .find(|(row, _)| row.requester)
         .and_then(|(row, name)| requester_footer(row, name, players));
-    [title]
+    [heading, subtitle, String::new()]
         .into_iter()
         .chain(empty)
         .chain(lines)
@@ -274,7 +273,7 @@ pub fn start_announcement(
                 rules
                     .iter()
                     .enumerate()
-                    .map(|(index, rule)| format!("{}. {rule}", index + 1)),
+                    .map(|(index, rule)| format!("{} {rule}", numbered(index + 1))),
             )
             .collect(),
     };
@@ -564,6 +563,10 @@ pub fn name_of(member: UserId, names: &[(UserId, String)]) -> &str {
         .unwrap_or(UNKNOWN_MEMBER)
 }
 
+fn numbered(number: usize) -> String {
+    format!("**{number}.**")
+}
+
 fn shown_end(end_unix: i64) -> i64 {
     end_unix - SHOWN_END_OFFSET
 }
@@ -739,7 +742,8 @@ pub fn template_description(first_day: Date, last_day: Date, criteria: usize) ->
 
 pub fn criterion_line(number: usize, criterion: &Criterion) -> String {
     let heading = format!(
-        "{number}. **{}** \u{b7} {}",
+        "{} **{}** \u{b7} {}",
+        numbered(number),
         escape(&criterion.name),
         points_text(i64::from(criterion.points))
     );
@@ -768,7 +772,7 @@ pub fn rules_not_shown(count: usize) -> String {
 }
 
 pub fn rule_line(number: usize, rule: &str) -> String {
-    format!("{number}. {}", escape(rule))
+    format!("{} {}", numbered(number), escape(rule))
 }
 
 pub fn rule_option_label(number: usize, rule: &str) -> String {

@@ -70,7 +70,7 @@ fn several_problems_are_counted_and_listed() {
 }
 
 #[test]
-fn a_leaderboard_row_is_written_with_a_two_digit_rank() {
+fn a_leaderboard_row_bolds_its_rank_and_the_whole_requester_row() {
     let halyard = BoardRow {
         rank: Some(1),
         user: UserId::new(1),
@@ -83,7 +83,7 @@ fn a_leaderboard_row_is_written_with_a_two_digit_rank() {
         points: 5,
         requester: true,
     };
-    assert_eq!(board_line(&halyard, "Halyard"), "01. Halyard \u{b7} 27");
+    assert_eq!(board_line(&halyard, "Halyard"), "**1.** Halyard \u{b7} 27");
     assert_eq!(
         board_line(&captain, "Captain_Ranger"),
         "**14. Captain_Ranger \u{b7} 5**"
@@ -267,9 +267,9 @@ fn the_start_announcement_quotes_each_criterion_apart_and_numbers_the_rules() {
         "> **Huh? What happened?** \u{b7} 11 points",
         "> Earn 3 million potential damage.",
         "## Rules",
-        "1. Only submit your own replays.",
-        "2. No subterfuge.",
-        "3. Be kind.",
+        "**1.** Only submit your own replays.",
+        "**2.** No subterfuge.",
+        "**3.** Be kind.",
         "Judges: <@7>",
     ]
     .join("\n");
