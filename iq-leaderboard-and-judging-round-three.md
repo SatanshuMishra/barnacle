@@ -1,7 +1,7 @@
 # iq-leaderboard-and-judging-round-three: Guess leaderboard rename, IQ leaderboard rework, multi-player criteria, private rejections, /iq reject, 12-hour leaderboard
 Status: active
-Updated: 2026-11-08T22:15:47.383Z
-Next ids: c9 D2 R1 S1
+Updated: 2026-11-08T22:16:55.653Z
+Next ids: c9 D3 R1 S1
 
 ## Goal
 
@@ -29,6 +29,7 @@ Invoke interphase:feature with the owner's request and Work autonomously, then b
 ## Decisions in force
 
 - D1 hand-off: build the unattended spec for the owner's eight changes and one command structure: Build the spec through the drive; every later gap is filled from the recorded intent, and a human merges.
+- D2 Rejection reasons stay a channel reply: Rejection reasons, including those from /iq reject, stay as a reply to the post in the channel, and the post gets the X.
 
 ## Open risks
 
