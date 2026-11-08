@@ -1064,6 +1064,7 @@ pub(super) async fn pressed(
         }
         IqPanelPart::Template
         | IqPanelPart::Criterion
+        | IqPanelPart::CriterionKind
         | IqPanelPart::Rule
         | IqPanelPart::Remove
         | IqPanelPart::Roles
@@ -1239,6 +1240,7 @@ pub(super) async fn submitted(
                 | IqPanelPart::SetDates
                 | IqPanelPart::Rename
                 | IqPanelPart::Criterion
+                | IqPanelPart::CriterionKind
                 | IqPanelPart::Add
                 | IqPanelPart::Edit
                 | IqPanelPart::Remove
@@ -1314,6 +1316,10 @@ fn changed(
                 .map_err(|_| SetupRefusal::CriterionUnknown)?;
             draft.with_picked_criterion(index)?
         }
+        (
+            IqPanelPart::CriterionKind,
+            serenity::ComponentInteractionDataKind::StringSelect { .. },
+        ) => draft.with_kind(single)?,
         (IqPanelPart::Rule, serenity::ComponentInteractionDataKind::StringSelect { .. }) => {
             let index = single
                 .parse::<usize>()
@@ -1503,6 +1509,7 @@ async fn confirmed(
         | IqPanelPart::SetDates
         | IqPanelPart::Rename
         | IqPanelPart::Criterion
+        | IqPanelPart::CriterionKind
         | IqPanelPart::Add
         | IqPanelPart::Edit
         | IqPanelPart::Remove
@@ -3518,6 +3525,7 @@ fn setup_code(refusal: &SetupRefusal) -> &'static str {
         SetupRefusal::CriterionName => "criterion_name",
         SetupRefusal::CriterionDescription => "criterion_description",
         SetupRefusal::CriterionUnknown => "criterion_unknown",
+        SetupRefusal::CriterionKindUnknown => "criterion_kind_unknown",
         SetupRefusal::NameFormat => "name_format",
         SetupRefusal::RulesTooLong => "rules_too_long",
         SetupRefusal::RuleLength => "rule_length",

@@ -16,6 +16,7 @@ use crate::ids::GuildId;
 use crate::ids::RoleId;
 use crate::iq;
 use crate::iq::Criterion;
+use crate::iq::CriterionKind;
 use crate::iq::JudgingMarks;
 use crate::iq::Mark;
 use crate::iq::Score;
@@ -37,6 +38,11 @@ const ANNOUNCEMENTS: &str = "iq_announcements";
 const SUBMISSIONS: &str = "iq_submissions";
 const ADJUSTMENTS: &str = "iq_adjustments";
 const SERVERS: &str = "iq_servers";
+const PARTNERS: &str = "iq_submission_partners";
+const REJECTIONS: &str = "iq_rejections";
+const BOARD_POSTS: &str = "iq_board_posts";
+const KIND_COLUMN: &str = "kind";
+const PLAYERS_TABLES: [&str; 3] = [PARTNERS, REJECTIONS, BOARD_POSTS];
 const LIVE_INDEX: &str = "iq_competitions_live";
 const CRITERION_NAME_INDEX: &str = "iq_criteria_name";
 const UNAWARDED_INDEX: &str = "iq_submissions_unawarded";
@@ -45,7 +51,7 @@ const PRE_MARKS_COLUMN: &str = "judging_reaction";
 type ColumnSpec = (&'static str, &'static str, bool, bool);
 type TableSpec = (&'static str, &'static [ColumnSpec]);
 
-const EXPECTED_COLUMNS: [TableSpec; 8] = [
+const EXPECTED_COLUMNS: [TableSpec; 11] = [
     (
         COMPETITIONS,
         &[
@@ -77,6 +83,7 @@ const EXPECTED_COLUMNS: [TableSpec; 8] = [
             ("name", "TEXT", true, false),
             ("description", "TEXT", true, false),
             ("points", "INTEGER", true, false),
+            ("kind", "TEXT", true, false),
         ],
     ),
     (
@@ -131,6 +138,33 @@ const EXPECTED_COLUMNS: [TableSpec; 8] = [
         &[
             ("guild_id", "INTEGER", false, true),
             ("judge_role_id", "INTEGER", true, false),
+        ],
+    ),
+    (
+        PARTNERS,
+        &[
+            ("message_id", "INTEGER", true, true),
+            ("user_id", "INTEGER", true, true),
+        ],
+    ),
+    (
+        REJECTIONS,
+        &[
+            ("message_id", "INTEGER", false, true),
+            ("competition_id", "INTEGER", true, false),
+            ("user_id", "INTEGER", true, false),
+            ("reason", "TEXT", true, false),
+            ("rejected_by", "INTEGER", true, false),
+            ("rejected_at_ms", "INTEGER", true, false),
+        ],
+    ),
+    (
+        BOARD_POSTS,
+        &[
+            ("competition_id", "INTEGER", false, true),
+            ("mark", "INTEGER", true, false),
+            ("digest", "TEXT", true, false),
+            ("message_id", "INTEGER", false, false),
         ],
     ),
 ];
@@ -204,6 +238,10 @@ pub enum IqStoreError {
     MissingIndex { index: &'static str },
     #[error("the IQ Competition database has no judging marks or judge log")]
     BeforeMarks,
+    #[error(
+        "the IQ Competition database has no multi-player criteria, partners, rejections or leaderboard posts"
+    )]
+    BeforePlayers,
     #[error("{value} does not fit in a SQLite integer")]
     OutOfRange { value: u128 },
     #[error("the IQ Competition database holds a negative value, {value}")]
@@ -220,6 +258,8 @@ pub enum IqStoreError {
     RepeatedMarks,
     #[error("the IQ Competition database holds {value}, which is not a criterion's points")]
     BadPoints { value: i64 },
+    #[error("the IQ Competition database holds {value}, which is not a criterion type")]
+    BadCriterionKind { value: String },
     #[error("{points} is not a points change between -1000 and 1000 other than 0")]
     BadAdjustment { points: i64 },
     #[error("a points change has no reason")]
@@ -328,8 +368,13 @@ impl IqStore {
 
     pub async fn with_pool(pool: SqlitePool) -> Result<Self, IqStoreError> {
         let mut before_marks = false;
+        let mut before_players = false;
         for (table, expected) in EXPECTED_COLUMNS {
             let found = columns(&pool, table).await?;
+            if found.is_empty() && PLAYERS_TABLES.contains(&table) {
+                before_players = true;
+                continue;
+            }
             if found.is_empty() {
                 return Err(IqStoreError::MissingTable { table });
             }
@@ -337,7 +382,12 @@ impl IqStore {
                 before_marks = true;
                 continue;
             }
-            if found != expected_columns(expected) {
+            let wanted = expected_columns(expected);
+            if table == CRITERIA && found == without_kind(&wanted) {
+                before_players = true;
+                continue;
+            }
+            if found != wanted {
                 return Err(IqStoreError::UnexpectedColumns { table, found });
             }
         }
@@ -358,6 +408,9 @@ impl IqStore {
                 .await?;
         if before_marks || unawarded.is_none() {
             return Err(IqStoreError::BeforeMarks);
+        }
+        if before_players {
+            return Err(IqStoreError::BeforePlayers);
         }
         Ok(Self { pool })
     }
@@ -814,8 +867,8 @@ impl IqStore {
 
     async fn with_config(&self, row: CompetitionRow) -> Result<Competition, IqStoreError> {
         let id = row.id;
-        let criteria: Vec<(String, String, i64)> = sqlx::query_as(
-            "SELECT name, description, points FROM iq_criteria WHERE competition_id = ? ORDER BY position",
+        let criteria: Vec<(String, String, i64, String)> = sqlx::query_as(
+            "SELECT name, description, points, kind FROM iq_criteria WHERE competition_id = ? ORDER BY position",
         )
         .bind(id)
         .fetch_all(&self.pool)
@@ -845,13 +898,14 @@ async fn insert_config(
 ) -> Result<(), IqStoreError> {
     for (position, criterion) in (0_i64..).zip(criteria) {
         sqlx::query(
-            "INSERT INTO iq_criteria (competition_id, position, name, description, points) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO iq_criteria (competition_id, position, name, description, points, kind) VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(id)
         .bind(position)
         .bind(&criterion.name)
         .bind(&criterion.description)
         .bind(i64::from(criterion.points))
+        .bind(kind_text(criterion.kind))
         .execute(&mut **transaction)
         .await?;
     }
@@ -901,9 +955,17 @@ fn expected_columns(expected: &[ColumnSpec]) -> Vec<Column> {
         .collect()
 }
 
+fn without_kind(columns: &[Column]) -> Vec<Column> {
+    columns
+        .iter()
+        .filter(|column| column.name != KIND_COLUMN)
+        .cloned()
+        .collect()
+}
+
 fn to_competition(
     row: CompetitionRow,
-    criteria: Vec<(String, String, i64)>,
+    criteria: Vec<(String, String, i64, String)>,
     roles: Vec<i64>,
     judges: Vec<i64>,
 ) -> Result<Competition, IqStoreError> {
@@ -927,11 +989,12 @@ fn to_competition(
         submissions: ChannelId::new(to_unsigned(row.submissions)?),
         criteria: criteria
             .into_iter()
-            .map(|(name, description, points)| {
+            .map(|(name, description, points, kind)| {
                 Ok(Criterion {
                     name,
                     description,
                     points: to_points(points)?,
+                    kind: parse_kind(kind)?,
                 })
             })
             .collect::<Result<_, IqStoreError>>()?,
@@ -953,6 +1016,21 @@ fn to_competition(
 
 fn parse_mark(text: String) -> Result<Mark, IqStoreError> {
     Mark::parse(&text).ok_or(IqStoreError::BadMark { value: text })
+}
+
+fn kind_text(kind: CriterionKind) -> &'static str {
+    match kind {
+        CriterionKind::Single => "single",
+        CriterionKind::Multi => "multi",
+    }
+}
+
+fn parse_kind(text: String) -> Result<CriterionKind, IqStoreError> {
+    match text.as_str() {
+        "single" => Ok(CriterionKind::Single),
+        "multi" => Ok(CriterionKind::Multi),
+        _ => Err(IqStoreError::BadCriterionKind { value: text }),
+    }
 }
 
 fn status_text(status: Status) -> &'static str {

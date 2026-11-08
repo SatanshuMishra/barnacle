@@ -169,6 +169,14 @@ pub enum StartupError {
         #[source]
         source: IqStoreError,
     },
+    #[error(
+        "the IQ multi-player tables are missing from {path}; back the file up, then add them with `sqlite3 {path} < migrations/0013_iq_players_and_rejections.sql`"
+    )]
+    IqPlayers {
+        path: PathBuf,
+        #[source]
+        source: IqStoreError,
+    },
 }
 
 fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
@@ -317,6 +325,10 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
     let iq = match IqStore::with_pool(pool.clone()).await {
         Ok(iq) => Ok(iq),
         Err(source @ IqStoreError::BeforeMarks) => Err(StartupError::IqMarks {
+            path: path.to_owned(),
+            source,
+        }),
+        Err(source @ IqStoreError::BeforePlayers) => Err(StartupError::IqPlayers {
             path: path.to_owned(),
             source,
         }),

@@ -10,6 +10,7 @@ use barnacle_bot::iq::CleanupRefusal;
 use barnacle_bot::iq::CompleteRefusal;
 use barnacle_bot::iq::Completion;
 use barnacle_bot::iq::Criterion;
+use barnacle_bot::iq::CriterionKind;
 use barnacle_bot::iq::Judged;
 use barnacle_bot::iq::Problem;
 use barnacle_bot::iq::Score;
@@ -40,6 +41,7 @@ fn criterion(name: &str, points: u32) -> Criterion {
         name: name.to_owned(),
         description: String::new(),
         points,
+        kind: CriterionKind::Single,
     }
 }
 

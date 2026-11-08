@@ -3,6 +3,7 @@ use barnacle_bot::ids::RoleId;
 use barnacle_bot::iq::BoardRow;
 use barnacle_bot::iq::Completion;
 use barnacle_bot::iq::Criterion;
+use barnacle_bot::iq::CriterionKind;
 use barnacle_bot::iq::Done;
 use barnacle_bot::iq::Problem;
 use barnacle_bot::iq::Standing;
@@ -236,11 +237,13 @@ fn the_start_announcement_quotes_each_criterion_apart_and_numbers_the_rules() {
             name: "Drunken Kraken".to_owned(),
             description: "Get 5 kills. Survive the battle.".to_owned(),
             points: 10,
+            kind: CriterionKind::Single,
         },
         Criterion {
             name: "Huh? What happened?".to_owned(),
             description: "Earn 3 million potential damage.".to_owned(),
             points: 11,
+            kind: CriterionKind::Single,
         },
     ];
     let rules = "1. Only submit your own replays.\n\n2) No subterfuge.\n- Be kind.";
@@ -274,4 +277,33 @@ fn the_start_announcement_quotes_each_criterion_apart_and_numbers_the_rules() {
     ]
     .join("\n");
     assert_eq!(text, expected);
+}
+
+#[test]
+fn a_multi_player_criterion_shows_its_player_count_in_the_setup_panel() {
+    let lockout = Criterion {
+        name: "Leaderboard Lockout".to_owned(),
+        description: String::new(),
+        points: 8,
+        kind: CriterionKind::Multi,
+    };
+    let solo = Criterion {
+        name: "Solo".to_owned(),
+        description: String::new(),
+        points: 5,
+        kind: CriterionKind::Single,
+    };
+    assert_eq!(
+        iq_text::criterion_line(1, &lockout),
+        "**1.** **Leaderboard Lockout** \u{b7} 8 points \u{b7} 2 or 3 players"
+    );
+    assert_eq!(
+        iq_text::criterion_option_description(&lockout),
+        "8 points \u{b7} 2 or 3 players"
+    );
+    assert_eq!(
+        iq_text::criterion_line(2, &solo),
+        "**2.** **Solo** \u{b7} 5 points"
+    );
+    assert_eq!(iq_text::criterion_option_description(&solo), "5 points");
 }

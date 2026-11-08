@@ -27,12 +27,21 @@ const VARIATION_SELECTOR: char = '\u{FE0F}';
 const DENIED_DEFAULT: &str = "\u{274C}";
 const AWARDED_DEFAULT: &str = "\u{1F3C6}";
 const CONFIRM_DEFAULT: &str = "\u{2705}";
+pub const MULTI_PLAYERS: &str = "2 or 3 players";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CriterionKind {
+    #[default]
+    Single,
+    Multi,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Criterion {
     pub name: String,
     pub description: String,
     pub points: u32,
+    pub kind: CriterionKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

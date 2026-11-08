@@ -1151,6 +1151,16 @@ fn the_iq_dates_parts_read_back_from_their_ids() {
 }
 
 #[test]
+fn the_iq_criterion_kind_part_reads_back_from_its_id() {
+    let id = "iq-panel:12:criterion-kind";
+    assert_eq!(
+        wiring::iq_panel_part(id),
+        Some((12, IqPanelPart::CriterionKind))
+    );
+    assert_eq!(wiring::iq_panel_id(12, IqPanelPart::CriterionKind), id);
+}
+
+#[test]
 fn the_iq_mark_parts_read_back_from_their_ids() {
     for (id, part) in [
         ("iq-panel:12:denied-mark", IqPanelPart::DeniedMark),

@@ -6,6 +6,7 @@ use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::iq::Criterion;
+use barnacle_bot::iq::CriterionKind;
 use barnacle_bot::iq::JudgingMarks;
 use barnacle_bot::iq_store::AdjustOutcome;
 use barnacle_bot::iq_store::CreateOutcome;
@@ -19,6 +20,7 @@ use sqlx::sqlite::SqlitePool;
 
 const IQ_MIGRATION: &str = "0009_iq_competition.sql";
 const MARKS_MIGRATION: &str = "0012_iq_marks_and_judge_log.sql";
+const PLAYERS_MIGRATION: &str = "0013_iq_players_and_rejections.sql";
 const CLI_DIRECTIVE: &str = ".bail on\n";
 const PLAYER: UserId = UserId::new(31);
 const JUDGE: UserId = UserId::new(21);
@@ -42,6 +44,7 @@ async fn running_competition() -> (IqStore, i64) {
     let pool = attendance_pool().await;
     apply(&pool, IQ_MIGRATION).await;
     apply(&pool, MARKS_MIGRATION).await;
+    apply(&pool, PLAYERS_MIGRATION).await;
     let store = IqStore::with_pool(pool).await.unwrap();
     let new = NewCompetition {
         guild: GuildId::new(5),
@@ -56,6 +59,7 @@ async fn running_competition() -> (IqStore, i64) {
             name: "Drunken Kraken".to_owned(),
             description: "Five kills in one battle.".to_owned(),
             points: 5,
+            kind: CriterionKind::Single,
         }],
         rules: "Post your own battles only.".to_owned(),
         roles: vec![RoleId::new(31)],

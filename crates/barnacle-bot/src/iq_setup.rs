@@ -17,6 +17,7 @@ use crate::ids::GuildId;
 use crate::ids::RoleId;
 use crate::iq;
 use crate::iq::Criterion;
+use crate::iq::CriterionKind;
 use crate::iq::JudgingMarks;
 use crate::iq::Mark;
 use crate::iq_store::Competition;
@@ -45,6 +46,8 @@ pub const NAME_INPUT: &str = "name";
 pub const DESCRIPTION_INPUT: &str = "description";
 pub const POINTS_INPUT: &str = "points";
 pub const RULE_INPUT: &str = "rule";
+pub const SINGLE_KIND: &str = "single";
+pub const MULTI_KIND: &str = "multi";
 pub const CRITERIA_LIMIT: usize = 25;
 pub const ROLE_LIMIT: usize = 25;
 pub const JUDGE_LIMIT: usize = 25;
@@ -89,6 +92,7 @@ pub enum SetupRefusal {
     CriterionName,
     CriterionDescription,
     CriterionUnknown,
+    CriterionKindUnknown,
     NameFormat,
     RulesTooLong,
     RuleLength,
@@ -212,6 +216,7 @@ pub struct SetupDraft {
     template: Option<TemplateChoice>,
     criteria: Vec<Criterion>,
     picked: Option<usize>,
+    pending_kind: CriterionKind,
     rules: Vec<String>,
     picked_rule: Option<usize>,
     roles: Vec<RoleId>,
@@ -249,6 +254,7 @@ impl SetupDraft {
             template: None,
             criteria: Vec::new(),
             picked: None,
+            pending_kind: CriterionKind::Single,
             rules: Vec::new(),
             picked_rule: None,
             roles: Vec::new(),
@@ -276,6 +282,7 @@ impl SetupDraft {
             template: None,
             criteria: competition.criteria.clone(),
             picked: None,
+            pending_kind: CriterionKind::Single,
             rules: iq::rule_lines(&competition.rules),
             picked_rule: None,
             roles: competition.roles.clone(),
@@ -344,6 +351,10 @@ impl SetupDraft {
 
     pub fn picked(&self) -> Option<usize> {
         self.picked
+    }
+
+    pub fn pending_kind(&self) -> CriterionKind {
+        self.pending_kind
     }
 
     pub fn rules(&self) -> &[String] {
@@ -464,10 +475,15 @@ impl SetupDraft {
             return Err(SetupRefusal::CriterionDescription);
         }
         let points = read_points(points_text).ok_or(SetupRefusal::CriterionPoints)?;
+        let kind = match editing {
+            Some(position) => self.criteria[position].kind,
+            None => self.pending_kind,
+        };
         let entry = Criterion {
             name: name.to_owned(),
             description: description.to_owned(),
             points,
+            kind,
         };
         let criteria = match editing {
             Some(position) => self
@@ -489,8 +505,34 @@ impl SetupDraft {
         Ok(SetupDraft {
             criteria,
             picked: None,
+            pending_kind: CriterionKind::Single,
             ..self.clone()
         })
+    }
+
+    pub fn with_kind(&self, value: &str) -> Result<SetupDraft, SetupRefusal> {
+        let kind = read_kind(value).ok_or(SetupRefusal::CriterionKindUnknown)?;
+        match self.picked.filter(|index| *index < self.criteria.len()) {
+            Some(position) => Ok(SetupDraft {
+                criteria: self
+                    .criteria
+                    .iter()
+                    .enumerate()
+                    .map(|(index, held)| match index == position {
+                        true => Criterion {
+                            kind,
+                            ..held.clone()
+                        },
+                        false => held.clone(),
+                    })
+                    .collect(),
+                ..self.clone()
+            }),
+            None => Ok(SetupDraft {
+                pending_kind: kind,
+                ..self.clone()
+            }),
+        }
     }
 
     pub fn with_picked_criterion(&self, index: usize) -> Result<SetupDraft, SetupRefusal> {
@@ -988,6 +1030,29 @@ impl SetupDraft {
                     .collect(),
             )
         });
+        let shown_kind = self
+            .picked
+            .and_then(|index| self.criteria.get(index))
+            .map_or(self.pending_kind, |criterion| criterion.kind);
+        let kind_menu = string_menu(
+            panel,
+            IqPanelPart::CriterionKind,
+            iq_text::CRITERION_KIND_PLACEHOLDER,
+            [
+                (
+                    SINGLE_KIND,
+                    iq_text::SINGLE_KIND_LABEL,
+                    CriterionKind::Single,
+                ),
+                (MULTI_KIND, iq_text::MULTI_KIND_LABEL, CriterionKind::Multi),
+            ]
+            .into_iter()
+            .map(|(value, label, kind)| {
+                serenity::CreateSelectMenuOption::new(label, value)
+                    .default_selection(kind == shown_kind)
+            })
+            .collect(),
+        );
         let nothing_picked = self.picked.is_none();
         let editing_row = serenity::CreateActionRow::Buttons(vec![
             button(panel, IqPanelPart::Add, iq_text::ADD_CRITERION_LABEL)
@@ -1005,7 +1070,9 @@ impl SetupDraft {
             ),
             cancel_button(panel),
         ]);
-        menu.into_iter().chain([editing_row, moving_row]).collect()
+        menu.into_iter()
+            .chain([kind_menu, editing_row, moving_row])
+            .collect()
     }
 
     fn rules_rows(&self, panel: u64) -> Vec<serenity::CreateActionRow> {
@@ -1345,6 +1412,14 @@ fn start_of(day: Date) -> Option<i64> {
     day.to_zoned(TimeZone::UTC)
         .ok()
         .map(|midnight| midnight.timestamp().as_second())
+}
+
+fn read_kind(value: &str) -> Option<CriterionKind> {
+    match value {
+        SINGLE_KIND => Some(CriterionKind::Single),
+        MULTI_KIND => Some(CriterionKind::Multi),
+        _ => None,
+    }
 }
 
 fn read_points(text: &str) -> Option<u32> {

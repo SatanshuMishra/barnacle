@@ -7,8 +7,10 @@ use crate::ids::RoleId;
 use crate::iq::BoardRow;
 use crate::iq::Completion;
 use crate::iq::Criterion;
+use crate::iq::CriterionKind;
 use crate::iq::Done;
 use crate::iq::JudgingMarks;
+use crate::iq::MULTI_PLAYERS;
 use crate::iq::Problem;
 use crate::iq::Standing;
 use crate::iq_setup::MarkField;
@@ -23,6 +25,7 @@ const OPTION_LABEL_LIMIT: usize = 100;
 const SHOWN_END_OFFSET: i64 = 60;
 const UNKNOWN_MEMBER: &str = "Unknown member";
 const BOARD_HEADING: &str = "# IQ COMPETITION LEADERBOARD";
+const MULTI_PLAYER_HOW: &str = "For a multi-player criterion, put the name and then ping the 1 or 2 players you played with, such as Leaderboard Lockout @Player.";
 
 pub const ONLY_JUDGES: &str = "Only members with @IQ-Judge can change points.";
 pub const NO_COMPETITION_RUNNING: &str =
@@ -226,10 +229,17 @@ pub fn start_announcement(
         "**{competition}** has started. It runs until <t:{}:F>.",
         shown_end(end_unix)
     );
-    let how = format!(
+    let single_how = format!(
         "To score, post in {}: just the criterion name, with exactly 2 screenshots (The main rewards page and team leaderboard page) attached. A judge's reaction awards the points. Check where you stand with **/iq leaderboard**.",
         channel(submissions)
     );
+    let how = match criteria
+        .iter()
+        .any(|criterion| criterion.kind == CriterionKind::Multi)
+    {
+        true => format!("{single_how} {MULTI_PLAYER_HOW}"),
+        false => single_how,
+    };
     let pings = (!roles.is_empty()).then(|| {
         roles
             .iter()
@@ -246,9 +256,10 @@ pub fn start_announcement(
         .iter()
         .map(|criterion| {
             let heading = format!(
-                "> **{}** \u{b7} {}",
+                "> **{}** \u{b7} {}{}",
                 criterion.name,
-                points_text(i64::from(criterion.points))
+                points_text(i64::from(criterion.points)),
+                kind_suffix(criterion.kind)
             );
             let description = criterion.description.trim();
             [heading]
@@ -608,6 +619,9 @@ pub const TEMPLATE_PLACEHOLDER: &str = "Start blank or pick a template";
 pub const BLANK_LABEL: &str = "Start blank";
 pub const BLANK_DESCRIPTION: &str = "No criteria, rules or roles filled in";
 pub const CRITERION_PLACEHOLDER: &str = "Pick a criterion to edit or remove";
+pub const CRITERION_KIND_PLACEHOLDER: &str = "Single or multi-player";
+pub const SINGLE_KIND_LABEL: &str = "Single player";
+pub const MULTI_KIND_LABEL: &str = "Multi-player, 2 or 3 players";
 pub const ROLES_PLACEHOLDER: &str = "Roles that can take part (pick any)";
 pub const GONE_ROLE: &str = "Deleted role";
 pub const NO_ROLES_TO_PICK: &str =
@@ -742,10 +756,11 @@ pub fn template_description(first_day: Date, last_day: Date, criteria: usize) ->
 
 pub fn criterion_line(number: usize, criterion: &Criterion) -> String {
     let heading = format!(
-        "{} **{}** \u{b7} {}",
+        "{} **{}** \u{b7} {}{}",
         numbered(number),
         escape(&criterion.name),
-        points_text(i64::from(criterion.points))
+        points_text(i64::from(criterion.points)),
+        kind_suffix(criterion.kind)
     );
     match criterion.description.is_empty() {
         true => heading,
@@ -754,7 +769,18 @@ pub fn criterion_line(number: usize, criterion: &Criterion) -> String {
 }
 
 pub fn criterion_option_description(criterion: &Criterion) -> String {
-    points_text(i64::from(criterion.points))
+    format!(
+        "{}{}",
+        points_text(i64::from(criterion.points)),
+        kind_suffix(criterion.kind)
+    )
+}
+
+fn kind_suffix(kind: CriterionKind) -> String {
+    match kind {
+        CriterionKind::Single => String::new(),
+        CriterionKind::Multi => format!(" \u{b7} {MULTI_PLAYERS}"),
+    }
 }
 
 pub fn criteria_not_shown(count: usize) -> String {
@@ -874,6 +900,9 @@ pub fn setup_refusal(refusal: &SetupRefusal) -> String {
             "A criterion's description holds at most 300 characters.".to_owned()
         }
         SetupRefusal::CriterionUnknown => "Pick a criterion from the menu first.".to_owned(),
+        SetupRefusal::CriterionKindUnknown => {
+            "Pick single player or multi-player from the menu.".to_owned()
+        }
         SetupRefusal::NameFormat => "A competition name needs 1 to 60 characters.".to_owned(),
         SetupRefusal::RulesTooLong => "The rules hold at most 4000 characters in all.".to_owned(),
         SetupRefusal::RuleLength => "A rule needs 1 to 150 characters.".to_owned(),

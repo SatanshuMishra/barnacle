@@ -319,6 +319,7 @@ pub enum IqPanelPart {
     SetDates,
     Rename,
     Criterion,
+    CriterionKind,
     Add,
     Edit,
     Remove,
@@ -345,11 +346,12 @@ pub enum IqPanelPart {
 }
 
 impl IqPanelPart {
-    const ALL: [IqPanelPart; 27] = [
+    const ALL: [IqPanelPart; 28] = [
         IqPanelPart::Template,
         IqPanelPart::SetDates,
         IqPanelPart::Rename,
         IqPanelPart::Criterion,
+        IqPanelPart::CriterionKind,
         IqPanelPart::Add,
         IqPanelPart::Edit,
         IqPanelPart::Remove,
@@ -381,6 +383,7 @@ impl IqPanelPart {
             IqPanelPart::SetDates => "set-dates",
             IqPanelPart::Rename => "rename",
             IqPanelPart::Criterion => "criterion",
+            IqPanelPart::CriterionKind => "criterion-kind",
             IqPanelPart::Add => "add",
             IqPanelPart::Edit => "edit",
             IqPanelPart::Remove => "remove",
