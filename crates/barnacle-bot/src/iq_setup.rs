@@ -36,6 +36,10 @@ use crate::wiring::same_name;
 
 pub type Drafts = panels::Drafts<SetupDraft>;
 
+pub fn drafts() -> Drafts {
+    Drafts::without_expiry()
+}
+
 pub const BLANK_TEMPLATE: &str = "blank";
 pub const NAME_INPUT: &str = "name";
 pub const DESCRIPTION_INPUT: &str = "description";

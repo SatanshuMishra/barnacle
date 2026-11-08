@@ -288,7 +288,7 @@ pub async fn run(
                     updates,
                     drafts: Arc::new(Drafts::default()),
                     iq,
-                    iq_drafts: Arc::new(iq_setup::Drafts::default()),
+                    iq_drafts: Arc::new(iq_setup::drafts()),
                     iq_caught_up: Arc::new(crate::iq::CaughtUp::default()),
                     iq_unsettled: Arc::new(crate::iq::Unsettled::default()),
                     access,
