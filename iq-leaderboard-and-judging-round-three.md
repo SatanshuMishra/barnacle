@@ -1,6 +1,6 @@
 # iq-leaderboard-and-judging-round-three: Guess leaderboard rename, IQ leaderboard rework, multi-player criteria, private rejections, /iq reject, 12-hour leaderboard
 Status: active
-Updated: 2026-11-08T23:34:23.134Z
+Updated: 2026-11-08T23:58:41.640Z
 Next ids: c9 D4 R4 S1
 
 ## Goal
@@ -20,7 +20,7 @@ Ship the owner's eight changes (a to h) to the barnacle Discord bot: /guess lead
 
 ## Where things stand
 
-The spec is handed off and `pipeline drive` is building it unattended on feat/iq-leaderboard-and-judging-round-three as one MSP, iq-round-three. Two of 7 Steps are committed on the build branch and iq-board-view is building; no pull request is open.
+The spec is handed off and `pipeline drive` is building it unattended on feat/iq-leaderboard-and-judging-round-three as one MSP, iq-round-three. Three of 7 Steps are committed on the build branch and iq-criterion-kinds is building; no pull request is open.
 
 ## Next step
 
