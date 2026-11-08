@@ -1,7 +1,7 @@
 # iq-leaderboard-and-judging-round-three: Guess leaderboard rename, IQ leaderboard rework, multi-player criteria, private rejections, /iq reject, 12-hour leaderboard
 Status: active
-Updated: 2026-11-08T22:17:00.295Z
-Next ids: c9 D3 R1 S1
+Updated: 2026-11-08T22:18:03.517Z
+Next ids: c9 D4 R3 S1
 
 ## Goal
 
@@ -20,7 +20,7 @@ Ship the owner's eight changes (a to h) to the barnacle Discord bot: /guess lead
 
 ## Where things stand
 
-Not started.
+The spec is handed off and `pipeline drive` is building it unattended on feat/iq-leaderboard-and-judging-round-three as one MSP, iq-round-three. No code is built yet and no pull request is open.
 
 ## Next step
 
@@ -31,8 +31,16 @@ The drive entered build and runs it next.
 - D1 hand-off: build the unattended spec for the owner's eight changes and one command structure: Build the spec through the drive; every later gap is filled from the recorded intent, and a human merges.
 - D2 Rejection reasons stay a channel reply: Rejection reasons, including those from /iq reject, stay as a reply to the post in the channel, and the post gets the X.
 
+- D3 One command structure: every feature has one root command and each action is a subcommand, as the owner asked; /about stays top-level because /barnacle is hidden from non-administrators.
+
 ## Open risks
+
+- R1 How the embed heading renders and the gateway handlers behave is unproven until the bot runs on a real Discord server. Bears on c2.
+- R2 Migration 0013 must be applied before the new binary starts, or startup refuses.
 
 ## Settled, do not reopen
 
 ## Where the details live
+
+- docs/specs/iq-leaderboard-and-judging-round-three.md: the spec, with its decisions and record beside it under the same name.
+- ~/.mitosis/barnacle/iq-leaderboard-and-judging-round-three/: the run home, with CHARTER.md, run.zsh and the review rounds.
