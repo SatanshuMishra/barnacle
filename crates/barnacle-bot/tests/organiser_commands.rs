@@ -4,7 +4,7 @@ use barnacle_bot::discord::Error;
 use barnacle_bot::text;
 use poise::serenity_prelude as serenity;
 
-const ORGANISER_COMMANDS: [&str; 5] = ["event", "rehearse", "updates", "announce", "voice"];
+const ORGANISER_COMMANDS: [&str; 4] = ["event", "rehearse", "updates", "voice"];
 const ORGANISER_IQ_SUBCOMMANDS: [&str; 6] =
     ["start", "edit", "stop", "complete", "cleanup", "judges"];
 
@@ -29,6 +29,14 @@ fn organiser_commands_carry_the_organiser_check() {
             command.default_member_permissions
         );
         assert!(!command.checks.is_empty(), "{name} has no checks");
+    }
+    let updates = named(&commands, "updates");
+    for name in ["setup", "announce"] {
+        let subcommand = named(&updates.subcommands, name);
+        assert!(
+            !subcommand.checks.is_empty(),
+            "updates {name} has no checks"
+        );
     }
     let iq = named(&commands, "iq");
     assert!(

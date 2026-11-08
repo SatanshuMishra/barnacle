@@ -2,7 +2,7 @@
 
 Barnacle's players are Discord members with no technical background. Every
 version they can notice comes with notes in plain language, which the bot owner
-posts to a server with `/announce`. The notes live in
+posts to a server with `/updates announce`. The notes live in
 `crates/barnacle-bot/release-notes.toml` and are built into the bot, and the
 test suite refuses a build whose version has no notes or whose notes break the
 rules below.
@@ -21,7 +21,7 @@ needs neither.
 2. Add a `[[release]]` entry for the new version to
    `crates/barnacle-bot/release-notes.toml`. Keep the older entries.
 
-`/announce` only ever posts the running version's notes, so an entry must stand
+`/updates announce` only ever posts the running version's notes, so an entry must stand
 on its own: a player who missed every earlier post still has to understand it.
 
 ## The pattern: tell the story
@@ -97,7 +97,7 @@ TOML cannot return to a table once a sub-table has started.
 
 ## How the post looks
 
-`/announce` sends the notes as a normal Discord message, not an embed. Any role
+`/updates announce` sends the notes as a normal Discord message, not an embed. Any role
 ping comes first on its own line, then:
 
 ```text
@@ -137,7 +137,7 @@ followed by "**Before:**" and "**Now:**" lines, and fixes render under
 
 Write for a player, not for a developer. One short sentence per line. Never
 name code, files, error messages or anything a player cannot see; name a
-command only as a player types it, such as /guess-series.
+command only as a player types it, such as /guess series.
 
 A `title` is the feature's short name as a player would say it, such as
 Silhouette series: 1 to 40 characters, with no ".", "!" or "?" at the end. An
@@ -178,7 +178,7 @@ Split, so a reader sees three features where there is one:
 [[release.feature]]
 title = "Guess series"
 story = ["You can now play several rounds in a row."]
-steps = ["Type /guess-series."]
+steps = ["Type /guess series."]
 
 [[release.feature]]
 title = "Series standings"
@@ -193,7 +193,7 @@ expect while playing a series:
 [[release.feature]]
 title = "Silhouette series"
 story = ["A series plays up to 20 rounds back to back and keeps score for everyone taking part."]
-steps = ["Type /guess-series in any channel where /guess works."]
+steps = ["Type /guess series in any channel where /guess works."]
 expect = ["After each round, the standings show who has won the most rounds and who was fastest so far."]
 ```
 

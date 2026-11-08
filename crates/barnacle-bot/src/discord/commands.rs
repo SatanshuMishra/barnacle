@@ -86,12 +86,27 @@ const MENTION_GRANT: serenity::Permissions =
 pub fn all() -> Vec<poise::Command<Data, Error>> {
     vec![
         poise::Command {
-            description: Some("Start a round: name the ship from its silhouette".into()),
+            description: Some("Play the ship silhouette game".into()),
+            subcommands: vec![
+                poise::Command {
+                    description: Some("Start a round: name the ship from its silhouette".into()),
+                    ..guess_start()
+                },
+                poise::Command {
+                    description: Some("Play several silhouette rounds in a row".into()),
+                    ..guess_series()
+                },
+                poise::Command {
+                    description: Some("List the top players in this server".into()),
+                    ..guess_leaderboard()
+                },
+                poise::Command {
+                    description: Some("Show rounds won and best time in this server".into()),
+                    ..guess_profile()
+                },
+            ],
+            subcommand_required: true,
             ..guess()
-        },
-        poise::Command {
-            description: Some("Play several silhouette rounds in a row".into()),
-            ..guess_series()
         },
         poise::Command {
             description: Some("Look up ships".into()),
@@ -101,14 +116,6 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
             }],
             subcommand_required: true,
             ..ship()
-        },
-        poise::Command {
-            description: Some("Show rounds won and best time in this server".into()),
-            ..profile()
-        },
-        poise::Command {
-            description: Some("List the top players in this server".into()),
-            ..leaderboard()
         },
         poise::Command {
             description: Some("About Barnacle and its ship data".into()),
@@ -183,21 +190,23 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
         },
         poise::Command {
             description: Some("Barnacle update news for this server".into()),
-            subcommands: vec![poise::Command {
-                description: Some(
-                    "Choose where Barnacle posts its update news and who it pings".into(),
-                ),
-                ..updates_setup()
-            }],
+            subcommands: vec![
+                poise::Command {
+                    description: Some(
+                        "Choose where Barnacle posts its update news and who it pings".into(),
+                    ),
+                    ..updates_setup()
+                },
+                poise::Command {
+                    description: Some(
+                        "Post the notes for this version of Barnacle to this server's updates channel"
+                            .into(),
+                    ),
+                    ..updates_announce()
+                },
+            ],
             subcommand_required: true,
             ..updates()
-        },
-        poise::Command {
-            description: Some(
-                "Post the notes for this version of Barnacle to this server's updates channel"
-                    .into(),
-            ),
-            ..announce()
         },
         poise::Command {
             description: Some("Run the IQ Competition".into()),
@@ -618,7 +627,12 @@ async fn answer_start(
 }
 
 #[poise::command(slash_command, guild_only)]
-async fn guess(
+async fn guess(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
+}
+
+#[poise::command(slash_command, guild_only, rename = "start")]
+async fn guess_start(
     ctx: Context<'_>,
     #[description = "Lowest tier, 1 to 11 (default 6)"]
     #[min = 1]
@@ -654,7 +668,7 @@ async fn guess(
     answer_start(ctx, outcome, options).await
 }
 
-#[poise::command(slash_command, guild_only, rename = "guess-series")]
+#[poise::command(slash_command, guild_only, rename = "series")]
 async fn guess_series(
     ctx: Context<'_>,
     #[description = "Lowest tier, 1 to 11 (default 6)"]
@@ -747,8 +761,8 @@ async fn ship_info(
     Ok(())
 }
 
-#[poise::command(slash_command, guild_only)]
-async fn profile(
+#[poise::command(slash_command, guild_only, rename = "profile")]
+async fn guess_profile(
     ctx: Context<'_>,
     #[description = "Whose profile to show (default: you)"] user: Option<serenity::User>,
 ) -> Result<(), Error> {
@@ -811,8 +825,8 @@ async fn member_names(
         .collect()
 }
 
-#[poise::command(slash_command, guild_only)]
-async fn leaderboard(
+#[poise::command(slash_command, guild_only, rename = "leaderboard")]
+async fn guess_leaderboard(
     ctx: Context<'_>,
     #[description = "Order by most wins or fastest time (default: most wins)"] sort: Option<
         SortChoice,
@@ -1535,8 +1549,14 @@ async fn updates_setup(
     private(ctx, text::updates_setup_reply(place.channel, ping, verdict)).await
 }
 
-#[poise::command(slash_command, guild_only, owners_only, check = "organiser_check")]
-async fn announce(ctx: Context<'_>) -> Result<(), Error> {
+#[poise::command(
+    slash_command,
+    rename = "announce",
+    guild_only,
+    owners_only,
+    check = "organiser_check"
+)]
+async fn updates_announce(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild) = ctx.guild_id() else {
         return Ok(());
     };

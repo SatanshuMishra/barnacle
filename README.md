@@ -153,7 +153,7 @@ For the IQ Competition, the same database stores each competition's name, dates,
 
 For update announcements, the same database stores each server's updates channel, ping role and last announced version, with no names.
 
-- `migrations/0007_bot_updates.down.sql` removes the table. Every server has to choose its updates channel again, and the next `/announce` there posts the running version's notes again.
+- `migrations/0007_bot_updates.down.sql` removes the table. Every server has to choose its updates channel again, and the next `/updates announce` there posts the running version's notes again.
 
 ## Event sign-ups
 

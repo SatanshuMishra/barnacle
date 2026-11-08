@@ -726,7 +726,7 @@ fn announcement_replies_name_the_version_and_what_to_do() {
     );
     assert_eq!(
         text::announce_version_changed("0.2.1"),
-        "Barnacle has been updated to 0.2.1 since this preview, so nothing was posted. Run /announce again."
+        "Barnacle has been updated to 0.2.1 since this preview, so nothing was posted. Run /updates announce again."
     );
     assert_eq!(
         text::announce_posted(ChannelId::new(123)),
