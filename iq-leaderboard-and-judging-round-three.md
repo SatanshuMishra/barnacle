@@ -1,6 +1,6 @@
 # iq-leaderboard-and-judging-round-three: Guess leaderboard rename, IQ leaderboard rework, multi-player criteria, private rejections, /iq reject, 12-hour leaderboard
 Status: active
-Updated: 2026-11-08T22:16:55.653Z
+Updated: 2026-11-08T22:16:57.435Z
 Next ids: c9 D3 R1 S1
 
 ## Goal
@@ -13,7 +13,7 @@ Ship the owner's eight changes (a to h) to the barnacle Discord bot: /guess lead
 - [ ] c2 /iq leaderboard renders in a container like the guess leaderboard, with the new header, no indented rows, the caller's row highlighted, and only the caller can see it
 - [ ] c3 No /iq setup or edit flow times out at 15 minutes
 - [ ] c4 A criterion can be single or multi-player, chosen at creation and defaulting to single; multi-player submissions credit the poster and pinged players and are rejected when pings are missing
-- [ ] c5 Rejection reasons are visible only to the poster; everyone else sees only the X
+- [ ] c5 Rejection reasons follow D2: a reply to the post in the channel, and the post gets the X
 - [ ] c6 /iq reject takes a message id and mandatory reason, adds the X, blocks later awards and writes a companion log
 - [ ] c7 The bot prints the leaderboard every 12 hours and skips the print when no scores changed
 - [ ] c8 Reviewed independently and opened as pull requests that a human merges
