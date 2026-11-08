@@ -1,6 +1,6 @@
 # iq-leaderboard-and-judging-round-three: Guess leaderboard rename, IQ leaderboard rework, multi-player criteria, private rejections, /iq reject, 12-hour leaderboard
 Status: active
-Updated: 2026-11-08T23:59:25.829Z
+Updated: 2026-11-08T23:59:27.994Z
 Next ids: c9 D4 R4 S1
 
 ## Goal
@@ -44,5 +44,4 @@ The drive entered build and runs it next.
 ## Where the details live
 
 - docs/specs/iq-leaderboard-and-judging-round-three.md: the spec, with its decisions and record beside it under the same name.
-- ~/.mitosis/barnacle/iq-leaderboard-and-judging-round-three/: the run home, with CHARTER.md, run.zsh, the review rounds, and watch/ holding the watcher's log and status.
-- ~/.mitosis/barnacle/watch-drive.py: the token-free watcher that notifies on progress and restarts a stalled or dead drive.
+- ~/.mitosis/barnacle/iq-leaderboard-and-judging-round-three/: the run home, with CHARTER.md, run.zsh, and the review rounds.
