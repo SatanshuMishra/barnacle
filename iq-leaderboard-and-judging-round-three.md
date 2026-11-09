@@ -1,6 +1,6 @@
 # iq-leaderboard-and-judging-round-three: Guess leaderboard rename, IQ leaderboard rework, multi-player criteria, private rejections, /iq reject, 12-hour leaderboard
 Status: parked
-Updated: 2026-11-09T01:25:57.744Z
+Updated: 2026-11-09T01:54:35.473Z
 Next ids: c9 D4 R4 S1
 
 ## Goal
@@ -9,14 +9,14 @@ Ship the owner's eight changes (a to h) to the barnacle Discord bot: /guess lead
 
 ## Done when
 
-- [ ] c1 /leaderboard is replaced by /guess leaderboard
-- [ ] c2 /iq leaderboard renders in a container like the guess leaderboard, with the new header, no indented rows, the caller's row highlighted, and only the caller can see it
-- [ ] c3 No /iq setup or edit flow times out at 15 minutes
-- [ ] c4 A criterion can be single or multi-player, chosen at creation and defaulting to single; multi-player submissions credit the poster and pinged players and are rejected when pings are missing
-- [ ] c5 Rejection reasons follow D2: a reply to the post in the channel, and the post gets the X
-- [ ] c6 /iq reject takes a message id and mandatory reason, adds the X, blocks later awards and writes a companion log
-- [ ] c7 The bot prints the leaderboard every 12 hours and skips the print when no scores changed
-- [ ] c8 Reviewed independently and opened as pull requests that a human merges
+- [x] c1 /leaderboard is replaced by /guess leaderboard evidence: pull requests 62 and 63 merged to main; acceptance tests pass with the work and fail without it
+- [x] c2 /iq leaderboard renders in a container like the guess leaderboard, with the new header, no indented rows, the caller's row highlighted, and only the caller can see it evidence: owner checked the embed, header, rows and private reply on the dev bot and approved
+- [x] c3 No /iq setup or edit flow times out at 15 minutes evidence: acceptance tests for panel lifetime pass on merged code
+- [x] c4 A criterion can be single or multi-player, chosen at creation and defaulting to single; multi-player submissions credit the poster and pinged players and are rejected when pings are missing evidence: 12 multi-player acceptance tests pass and the owner exercised rejection on the dev bot
+- [x] c5 Rejection reasons follow D2: a reply to the post in the channel, and the post gets the X evidence: owner saw the channel reply and the X on the dev bot
+- [x] c6 /iq reject takes a message id and mandatory reason, adds the X, blocks later awards and writes a companion log evidence: 10 /iq reject acceptance tests pass on merged code
+- [x] c7 The bot prints the leaderboard every 12 hours and skips the print when no scores changed evidence: 8 schedule acceptance tests pass; the real 12-hour timer was not observed live
+- [x] c8 Reviewed independently and opened as pull requests that a human merges evidence: code, security and standards review had no blockers; the owner merged pull requests 62 and 63
 
 ## Where things stand
 
