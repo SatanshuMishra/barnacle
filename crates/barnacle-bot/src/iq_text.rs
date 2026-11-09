@@ -33,6 +33,15 @@ pub const NO_COMPETITION_RUNNING: &str =
 pub const NEVER_RAN: &str = "No IQ Competition has run in this server yet.";
 pub const REASON_MISSING: &str = "Give a reason for the points change.";
 pub const REASON_TOO_LONG: &str = "Keep the reason to 200 characters or fewer.";
+pub const ONLY_JUDGES_REJECT: &str = "Only members with @IQ-Judge can reject posts.";
+pub const REJECT_REASON_MISSING: &str = "Give a reason for the rejection.";
+pub const NOT_A_MESSAGE_ID: &str =
+    "That is not a message ID. Right-click the post and choose Copy Message ID.";
+pub const NOT_A_POST: &str = "That message is not a player's post, so there is nothing to reject.";
+pub const ALREADY_REJECTED: &str = "That post is already rejected.";
+pub const REJECT_ALREADY_AWARDED: &str =
+    "That post already has its points. Take them back with /iq points.";
+pub const REJECTED: &str = "Rejected. That post can never earn points.";
 pub const RESUMED: &str =
     "Resumed. Posts made from now on are checked. Posts from the pause stay unmarked.";
 pub const COMPLETED: &str = "Posted. Run /iq cleanup when you are ready to remove the channels.";
@@ -435,6 +444,26 @@ pub fn judge_log_points(
     format!(
         "{} {action}: {}. New total: {total}.",
         user(judge),
+        plain_text(reason)
+    )
+}
+
+pub fn post_not_found(submissions: ChannelId) -> String {
+    format!("There is no post with that ID in {}.", channel(submissions))
+}
+
+pub fn rejection_reply(reason: &str) -> String {
+    format!(
+        "**Not counted.** {}\nPost it again as a new message. Edits are not re-checked.",
+        plain_text(reason)
+    )
+}
+
+pub fn judge_log_reject(judge: UserId, player: UserId, reason: &str, link: &str) -> String {
+    format!(
+        "{} rejected {}'s post: {}. {link}",
+        user(judge),
+        user(player),
         plain_text(reason)
     )
 }

@@ -244,6 +244,12 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
                     ..iq::iq_points()
                 },
                 poise::Command {
+                    description: Some(
+                        "Reject a post so it can never earn points, as a judge".into(),
+                    ),
+                    ..iq::iq_reject()
+                },
+                poise::Command {
                     description: Some("Show the competition's leaderboard".into()),
                     ..iq::iq_leaderboard()
                 },

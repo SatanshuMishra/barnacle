@@ -54,6 +54,7 @@ use crate::iq_store::AwardOutcome;
 use crate::iq_store::Competition;
 use crate::iq_store::CreateOutcome;
 use crate::iq_store::IqStoreError;
+use crate::iq_store::RejectOutcome;
 use crate::iq_text;
 use crate::schedule;
 use crate::schedule::Zone;
@@ -486,16 +487,10 @@ pub(super) async fn iq_points(
     let Some(guild) = guild_of(ctx) else {
         return Ok(());
     };
-    let data = ctx.data();
-    let judge_role =
-        current_judge_role(data, ctx.cache(), guild, &Scope::default().guild(guild)).await;
-    let holds = match (judge_role, ctx.author_member().await) {
-        (Some(role), Some(held)) => held.roles.iter().any(|id| id.get() == role.get()),
-        _ => false,
-    };
-    if !holds {
+    if !caller_is_judge(ctx, guild).await {
         return refuse(ctx, "not_a_judge", iq_text::ONLY_JUDGES).await;
     }
+    let data = ctx.data();
     let Some(points) = iq::adjustment(points) else {
         return refuse(ctx, "zero_points", ZERO_POINTS).await;
     };
@@ -544,6 +539,124 @@ pub(super) async fn iq_points(
     )
     .await;
     replied
+}
+
+#[poise::command(slash_command, rename = "reject", guild_only)]
+pub(super) async fn iq_reject(
+    ctx: Context<'_>,
+    #[description = "The ID of the post to reject"] message_id: String,
+    #[description = "Why the post does not count, shown to the player"]
+    #[max_length = 200]
+    reason: String,
+) -> Result<(), Error> {
+    let Some(guild) = guild_of(ctx) else {
+        return Ok(());
+    };
+    if !caller_is_judge(ctx, guild).await {
+        return refuse(ctx, "not_a_judge", iq_text::ONLY_JUDGES_REJECT).await;
+    }
+    let data = ctx.data();
+    let competition = match data.iq.live(guild).await? {
+        Some(competition) if matches!(competition.status, Status::Running | Status::Stopped) => {
+            competition
+        }
+        _ => return refuse(ctx, "no_competition", iq_text::NO_COMPETITION_RUNNING).await,
+    };
+    ctx.defer_ephemeral().await?;
+    let Some(message) = iq::message_id(&message_id) else {
+        return refuse(ctx, "not_a_message_id", iq_text::NOT_A_MESSAGE_ID).await;
+    };
+    let http = &ctx.serenity_context().http;
+    let channel = discord_channel(competition.submissions)?;
+    let message_id = serenity::MessageId::from(nonzero(message)?);
+    let post = match bounded(channel.message(http, message_id)).await {
+        Ok(post) if checkable(&post) => post,
+        Ok(_) => return refuse(ctx, "not_a_post", iq_text::NOT_A_POST).await,
+        Err(error) if is_kind(&error, Kind::UnknownMessage) => {
+            return refuse(
+                ctx,
+                "post_not_found",
+                iq_text::post_not_found(competition.submissions),
+            )
+            .await;
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let Some(now_ms) = super::now_ms().and_then(|now_ms| i64::try_from(now_ms).ok()) else {
+        return commands::fail(ctx, Failure::from_error(&IqError::Clock)).await;
+    };
+    let poster = UserId::new(post.author.id.get());
+    let judge = author(ctx);
+    match data
+        .iq
+        .reject(competition.id, message, poster, &reason, judge, now_ms)
+        .await
+    {
+        Ok(RejectOutcome::Rejected) => {}
+        Ok(RejectOutcome::AlreadyRejected) => {
+            return refuse(ctx, "already_rejected", iq_text::ALREADY_REJECTED).await;
+        }
+        Ok(RejectOutcome::AlreadyAwarded) => {
+            return refuse(ctx, "already_awarded", iq_text::REJECT_ALREADY_AWARDED).await;
+        }
+        Err(IqStoreError::ReasonMissing) => {
+            return refuse(ctx, "reason_missing", iq_text::REJECT_REASON_MISSING).await;
+        }
+        Err(IqStoreError::ReasonTooLong) => {
+            return refuse(ctx, "reason_too_long", iq_text::REASON_TOO_LONG).await;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let scope = Scope::of_command(ctx).message(Snowflake::new(message));
+    mark(
+        http,
+        post.channel_id,
+        post.id,
+        &competition.marks.denied,
+        &scope,
+    )
+    .await;
+    let reply = serenity::CreateMessage::new()
+        .content(iq_text::rejection_reply(&reason))
+        .reference_message(&post)
+        .allowed_mentions(serenity::CreateAllowedMentions::new().replied_user(true));
+    if let Err(error) = bounded(post.channel_id.send_message(http, reply)).await {
+        failure::report(
+            "iq.submission.reply_failed",
+            "the reply to a rejected submission could not be sent",
+            &Failure::from_error(&error),
+            &scope,
+        );
+    }
+    let replied = commands::private(ctx, iq_text::REJECTED).await;
+    failure::record(
+        "iq.submission.rejected",
+        "a judge rejected a submission",
+        &scope,
+    );
+    log_judging(
+        data,
+        ctx.serenity_context(),
+        &competition,
+        &iq_text::judge_log_reject(judge, poster, &reason, &message_link(&competition, message)),
+        &scope,
+    )
+    .await;
+    replied
+}
+
+async fn caller_is_judge(ctx: Context<'_>, guild: GuildId) -> bool {
+    let judge_role = current_judge_role(
+        ctx.data(),
+        ctx.cache(),
+        guild,
+        &Scope::default().guild(guild),
+    )
+    .await;
+    match (judge_role, ctx.author_member().await) {
+        (Some(role), Some(held)) => held.roles.iter().any(|id| id.get() == role.get()),
+        _ => false,
+    }
 }
 
 #[poise::command(slash_command, rename = "leaderboard", guild_only)]
@@ -2691,6 +2804,12 @@ async fn award(
             "closed",
             scope,
         ),
+        Ok(AwardOutcome::Rejected) => failure::refused(
+            "iq.award.refused",
+            "a judging reaction came on a submission a judge rejected",
+            "rejected",
+            scope,
+        ),
         Err(error) => failure::report(
             "iq.award.failed",
             "a judging reaction could not be saved",
@@ -2738,13 +2857,17 @@ async fn awarded(
             UNREAD_CRITERION.to_owned()
         }
     };
-    let link = format!(
+    let link = message_link(competition, message);
+    let line = iq_text::judge_log_award(judge, players, &criterion, i64::from(points), &link);
+    log_judging(data, serenity_context, competition, &line, scope).await;
+}
+
+fn message_link(competition: &Competition, message: u64) -> String {
+    format!(
         "{MESSAGE_LINK}/{}/{}/{message}",
         competition.guild.get(),
         competition.submissions.get()
-    );
-    let line = iq_text::judge_log_award(judge, players, &criterion, i64::from(points), &link);
-    log_judging(data, serenity_context, competition, &line, scope).await;
+    )
 }
 
 async fn log_judging(

@@ -380,6 +380,7 @@ fn the_commands_outside_events_keep_their_options() {
         ("iq cleanup", &[]),
         ("iq judges", &[]),
         ("iq points", &["member", "points", "reason"]),
+        ("iq reject", &["message_id", "reason"]),
         ("iq leaderboard", &[]),
         ("barnacle access", &[]),
     ]

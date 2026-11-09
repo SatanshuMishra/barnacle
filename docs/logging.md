@@ -80,6 +80,7 @@ libraries it uses, such as serenity, carry no `event.name`.
 | Silhouette game | `guess.round.started`, `guess.round.ended`, `guess.series.started`, `guess.series.ended`, `guess.post.failed`, `guess.solve.failed` |
 | Update announcements | `updates.configured`, `updates.announced` |
 | Join to Create voice | `voice.room.opened`, `voice.room.refused`, `voice.room.open_failed`, `voice.room.abandoned`, `voice.room.closed`, `voice.room.close_failed`, `voice.room.forgotten`, `voice.hub.forgotten`, `voice.notice.failed`, `voice.state.failed`, `voice.sweep.completed`, `voice.sweep.failed` |
+| IQ Competition rejections | `iq.submission.rejected`, `iq.submission.reply_failed`, `iq.submission.mark_failed`, `iq.award.refused`, `iq.judge_log.posted`, `iq.judge_log.failed` |
 | Container entrypoint | `entrypoint.config.written`, `entrypoint.config.found`, `entrypoint.database.backed_up`, `entrypoint.migration.applying`, `entrypoint.schema.current`, `entrypoint.failed` |
 
 `startup.failed` means Barnacle stopped before connecting to Discord, for example
@@ -176,6 +177,22 @@ A context field that is not known is left out of the line, never written as
 | `barnacle.failures` | number |
 | `barnacle.cleared` | number |
 | `barnacle.guilds` | number |
+
+### On `/iq reject`
+
+`/iq reject` writes one `INFO` `iq.submission.rejected` line with outcome
+`success` when a judge has rejected a post, carrying the command's context with
+`discord.message.id` set to the rejected post. It then writes
+`iq.judge_log.posted` or `iq.judge_log.failed` for the judge log line, and
+`iq.submission.reply_failed` or `iq.submission.mark_failed` when the reply to
+the post or its Denied mark could not be sent. A refused `/iq reject` writes
+`command.refused` with one of these `barnacle.refusal.reason` values:
+`not_a_judge`, `no_competition`, `not_a_message_id`, `post_not_found`,
+`not_a_post`, `already_rejected`, `already_awarded`, `reason_missing` or
+`reason_too_long`.
+
+A judging reaction on a rejected post awards nothing and writes
+`iq.award.refused` with `barnacle.refusal.reason` set to `rejected`.
 
 ### On `signup.ping.checked`
 

@@ -687,6 +687,18 @@ pub fn adjustment(points: i64) -> Option<i64> {
     (points != 0 && (-ADJUSTMENT_LIMIT..=ADJUSTMENT_LIMIT).contains(&points)).then_some(points)
 }
 
+pub fn message_id(text: &str) -> Option<u64> {
+    let digits = text.trim();
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits
+        .parse::<i64>()
+        .ok()
+        .filter(|id| *id > 0)
+        .and_then(|id| u64::try_from(id).ok())
+}
+
 pub fn rule_lines(text: &str) -> Vec<String> {
     text.lines()
         .map(without_list_marker)

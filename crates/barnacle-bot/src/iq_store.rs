@@ -268,9 +268,9 @@ pub enum IqStoreError {
     BadCriterionKind { value: String },
     #[error("{points} is not a points change between -1000 and 1000 other than 0")]
     BadAdjustment { points: i64 },
-    #[error("a points change has no reason")]
+    #[error("a points change or rejection has no reason")]
     ReasonMissing,
-    #[error("a points change reason is longer than {REASON_LIMIT} characters")]
+    #[error("a points change or rejection reason is longer than {REASON_LIMIT} characters")]
     ReasonTooLong,
     #[error("{at_unix} is outside the moments a Discord message ID can hold")]
     NotASnowflakeMoment { at_unix: i64 },
@@ -352,6 +352,14 @@ pub enum AwardOutcome {
     AlreadyAwarded,
     NotASubmission,
     Closed,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RejectOutcome {
+    Rejected,
+    AlreadyRejected,
+    AlreadyAwarded,
 }
 
 #[derive(Debug, Clone)]
@@ -703,7 +711,7 @@ impl IqStore {
         let message = to_integer(message.into())?;
         let mut transaction = self.pool.begin().await?;
         let awarded: Option<(i64, i64)> = sqlx::query_as(
-            "UPDATE iq_submissions SET awarded_by = ?, awarded_at_ms = ? WHERE message_id = ? AND awarded_by IS NULL AND competition_id IN (SELECT id FROM iq_competitions WHERE status IN ('running', 'stopped')) RETURNING user_id, points",
+            "UPDATE iq_submissions SET awarded_by = ?, awarded_at_ms = ? WHERE message_id = ? AND awarded_by IS NULL AND message_id NOT IN (SELECT message_id FROM iq_rejections) AND competition_id IN (SELECT id FROM iq_competitions WHERE status IN ('running', 'stopped')) RETURNING user_id, points",
         )
         .bind(to_integer(judge.get().into())?)
         .bind(at_ms)
@@ -728,6 +736,14 @@ impl IqStore {
             });
         }
         transaction.rollback().await?;
+        let rejected: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM iq_rejections WHERE message_id = ?")
+                .bind(message)
+                .fetch_optional(&self.pool)
+                .await?;
+        if rejected.is_some() {
+            return Ok(AwardOutcome::Rejected);
+        }
         let found: Option<String> = sqlx::query_scalar(
             "SELECT c.status FROM iq_submissions s JOIN iq_competitions c ON c.id = s.competition_id WHERE s.message_id = ?",
         )
@@ -745,7 +761,7 @@ impl IqStore {
 
     pub async fn unawarded(&self, competition: i64, limit: u32) -> Result<Vec<u64>, IqStoreError> {
         let rows: Vec<i64> = sqlx::query_scalar(
-            "SELECT message_id FROM iq_submissions WHERE competition_id = ? AND awarded_by IS NULL ORDER BY message_id DESC LIMIT ?",
+            "SELECT message_id FROM iq_submissions WHERE competition_id = ? AND awarded_by IS NULL AND message_id NOT IN (SELECT message_id FROM iq_rejections) ORDER BY message_id DESC LIMIT ?",
         )
         .bind(competition)
         .bind(i64::from(limit))
@@ -764,11 +780,14 @@ impl IqStore {
     }
 
     pub async fn recorded(&self, competition: i64, message: u64) -> Result<bool, IqStoreError> {
+        let message = to_integer(message.into())?;
         let found: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM iq_submissions WHERE competition_id = ? AND message_id = ?",
+            "SELECT 1 FROM iq_submissions WHERE competition_id = ? AND message_id = ? UNION ALL SELECT 1 FROM iq_rejections WHERE competition_id = ? AND message_id = ? LIMIT 1",
         )
         .bind(competition)
-        .bind(to_integer(message.into())?)
+        .bind(message)
+        .bind(competition)
+        .bind(message)
         .fetch_optional(&self.pool)
         .await?;
         Ok(found.is_some())
@@ -805,13 +824,7 @@ impl IqStore {
         at_ms: i64,
     ) -> Result<AdjustOutcome, IqStoreError> {
         let points = iq::adjustment(points).ok_or(IqStoreError::BadAdjustment { points })?;
-        let reason = reason.trim();
-        if reason.is_empty() {
-            return Err(IqStoreError::ReasonMissing);
-        }
-        if reason.chars().count() > REASON_LIMIT {
-            return Err(IqStoreError::ReasonTooLong);
-        }
+        let reason = checked_reason(reason)?;
         let user = to_integer(user.get().into())?;
         let judge = to_integer(judge.get().into())?;
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
@@ -844,6 +857,49 @@ impl IqStore {
         .await?;
         transaction.commit().await?;
         Ok(AdjustOutcome::Adjusted { total })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn reject(
+        &self,
+        competition: i64,
+        message: u64,
+        poster: UserId,
+        reason: &str,
+        judge: UserId,
+        at_ms: i64,
+    ) -> Result<RejectOutcome, IqStoreError> {
+        let reason = checked_reason(reason)?;
+        let message = to_integer(message.into())?;
+        let poster = to_integer(poster.get().into())?;
+        let judge = to_integer(judge.get().into())?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let awarded: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM iq_submissions WHERE message_id = ? AND awarded_by IS NOT NULL",
+        )
+        .bind(message)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if awarded.is_some() {
+            transaction.rollback().await?;
+            return Ok(RejectOutcome::AlreadyAwarded);
+        }
+        let inserted = sqlx::query(
+            "INSERT INTO iq_rejections (message_id, competition_id, user_id, reason, rejected_by, rejected_at_ms) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (message_id) DO NOTHING",
+        )
+        .bind(message)
+        .bind(competition)
+        .bind(poster)
+        .bind(reason)
+        .bind(judge)
+        .bind(at_ms)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(match inserted.rows_affected() {
+            0 => RejectOutcome::AlreadyRejected,
+            _ => RejectOutcome::Rejected,
+        })
     }
 
     pub async fn scores(&self, id: i64) -> Result<Vec<Score>, IqStoreError> {
@@ -942,6 +998,17 @@ impl IqStore {
         .await?;
         to_competition(row, criteria, roles, judges)
     }
+}
+
+fn checked_reason(reason: &str) -> Result<&str, IqStoreError> {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(IqStoreError::ReasonMissing);
+    }
+    if reason.chars().count() > REASON_LIMIT {
+        return Err(IqStoreError::ReasonTooLong);
+    }
+    Ok(reason)
 }
 
 async fn insert_config(

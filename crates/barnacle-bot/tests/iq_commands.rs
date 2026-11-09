@@ -2,7 +2,7 @@ use barnacle_bot::discord::command_list;
 use poise::serenity_prelude as serenity;
 
 const ORGANISER_SUBCOMMANDS: [&str; 6] = ["start", "edit", "stop", "complete", "cleanup", "judges"];
-const OPEN_SUBCOMMANDS: [&str; 2] = ["points", "leaderboard"];
+const OPEN_SUBCOMMANDS: [&str; 3] = ["points", "reject", "leaderboard"];
 
 struct Subcommand {
     name: String,
@@ -54,6 +54,7 @@ fn the_iq_command_has_every_subcommand() {
             "cleanup",
             "judges",
             "points",
+            "reject",
             "leaderboard",
         ]
     );
