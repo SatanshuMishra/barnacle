@@ -1,6 +1,6 @@
 # iq-leaderboard-and-judging-round-three: Guess leaderboard rename, IQ leaderboard rework, multi-player criteria, private rejections, /iq reject, 12-hour leaderboard
 Status: active
-Updated: 2026-11-09T01:24:30.651Z
+Updated: 2026-11-09T01:25:54.004Z
 Next ids: c9 D4 R4 S1
 
 ## Goal
@@ -20,7 +20,7 @@ Ship the owner's eight changes (a to h) to the barnacle Discord bot: /guess lead
 
 ## Where things stand
 
-The spec is handed off and `pipeline drive` is building it unattended on feat/iq-leaderboard-and-judging-round-three as one MSP, iq-round-three. The build is committed and its first review round is at validation, with 1 medium and 4 low candidate findings; no pull request is open. A token-free watcher runs detached over the drive, notifies the owner on each stage or lane change, and restarts a dead drive through its safe resume.
+The spec is handed off and `pipeline drive` is building it unattended on feat/iq-leaderboard-and-judging-round-three as one MSP, iq-round-three. Review came back green in one round and pull request 62 (mitosis/iq-round-three into the FEATURE branch) is open and waiting for a human merge. The one confirmed advisory, C3 (iq_reject repeats judge_message's deny-and-reply block), shipped unfixed. A token-free watcher runs detached over the drive, notifies the owner on each stage or lane change, and restarts a dead drive through its safe resume.
 
 ## Next step
 
