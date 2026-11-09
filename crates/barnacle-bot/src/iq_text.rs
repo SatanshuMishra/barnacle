@@ -7,8 +7,10 @@ use crate::ids::RoleId;
 use crate::iq::BoardRow;
 use crate::iq::Completion;
 use crate::iq::Criterion;
+use crate::iq::CriterionKind;
 use crate::iq::Done;
 use crate::iq::JudgingMarks;
+use crate::iq::MULTI_PLAYERS;
 use crate::iq::Problem;
 use crate::iq::Standing;
 use crate::iq_setup::MarkField;
@@ -22,6 +24,8 @@ const TOP_LINES: usize = 10;
 const OPTION_LABEL_LIMIT: usize = 100;
 const SHOWN_END_OFFSET: i64 = 60;
 const UNKNOWN_MEMBER: &str = "Unknown member";
+const BOARD_HEADING: &str = "# IQ COMPETITION LEADERBOARD";
+const MULTI_PLAYER_HOW: &str = "For a multi-player criterion, put the name and then ping the 1 or 2 players you played with, such as Leaderboard Lockout @Player.";
 
 pub const ONLY_JUDGES: &str = "Only members with @IQ-Judge can change points.";
 pub const NO_COMPETITION_RUNNING: &str =
@@ -29,6 +33,15 @@ pub const NO_COMPETITION_RUNNING: &str =
 pub const NEVER_RAN: &str = "No IQ Competition has run in this server yet.";
 pub const REASON_MISSING: &str = "Give a reason for the points change.";
 pub const REASON_TOO_LONG: &str = "Keep the reason to 200 characters or fewer.";
+pub const ONLY_JUDGES_REJECT: &str = "Only members with @IQ-Judge can reject posts.";
+pub const REJECT_REASON_MISSING: &str = "Give a reason for the rejection.";
+pub const NOT_A_MESSAGE_ID: &str =
+    "That is not a message ID. Right-click the post and choose Copy Message ID.";
+pub const NOT_A_POST: &str = "That message is not a player's post, so there is nothing to reject.";
+pub const ALREADY_REJECTED: &str = "That post is already rejected.";
+pub const REJECT_ALREADY_AWARDED: &str =
+    "That post already has its points. Take them back with /iq points.";
+pub const REJECTED: &str = "Rejected. That post can never earn points.";
 pub const RESUMED: &str =
     "Resumed. Posts made from now on are checked. Posts from the pause stay unmarked.";
 pub const COMPLETED: &str = "Posted. Run /iq cleanup when you are ready to remove the channels.";
@@ -102,18 +115,29 @@ fn problem_line(problem: &Problem) -> String {
         Problem::NotAnImage => {
             "Only images count as screenshots. Leave other files out.".to_owned()
         }
+        Problem::NoPartners { criterion } => format!(
+            "{} is a multi-player criterion. Ping the 1 or 2 players you played with after the name.",
+            escape(criterion)
+        ),
+        Problem::TooManyPlayers { criterion } => format!(
+            "{} counts {MULTI_PLAYERS}, so ping at most 2 others.",
+            escape(criterion)
+        ),
+        Problem::SinglePlayerPing { criterion } => format!(
+            "{} is a single-player criterion. Write just the name, with no pings.",
+            escape(criterion)
+        ),
     }
 }
 
 pub fn board_line(row: &BoardRow, name: &str) -> String {
     let rank = match row.rank {
-        Some(rank) => format!("{rank:02}"),
+        Some(rank) => rank.to_string(),
         None => "--".to_owned(),
     };
-    let line = format!("{rank}. {name} \u{b7} {}", row.points);
     match row.requester {
-        true => format!("**{line}**"),
-        false => line,
+        true => format!("**{rank}. {name} \u{b7} {}**", row.points),
+        false => format!("**{rank}.** {name} \u{b7} {}", row.points),
     }
 }
 
@@ -124,21 +148,20 @@ pub fn leaderboard(
     rows: &[(BoardRow, String)],
     players: usize,
 ) -> String {
-    let verb = match now_unix >= end_unix {
-        true => "ended",
-        false => "ends",
+    let relative = format!("<t:{}:R>", shown_end(end_unix));
+    let when = match now_unix >= end_unix {
+        true => format!("ended {relative}"),
+        false => relative,
     };
-    let title = format!(
-        "**{competition} leaderboard** \u{b7} {verb} <t:{}:R>",
-        shown_end(end_unix)
-    );
+    let heading = BOARD_HEADING.to_owned();
+    let subtitle = format!("{} \u{2022} {when}", escape(&competition.to_uppercase()));
     let empty = (players == 0).then(|| NO_POINTS_YET.to_owned());
     let lines = rows.iter().map(|(row, name)| board_line(row, name));
     let footer = rows
         .iter()
         .find(|(row, _)| row.requester)
         .and_then(|(row, name)| requester_footer(row, name, players));
-    [title]
+    [heading, subtitle, String::new()]
         .into_iter()
         .chain(empty)
         .chain(lines)
@@ -227,10 +250,17 @@ pub fn start_announcement(
         "**{competition}** has started. It runs until <t:{}:F>.",
         shown_end(end_unix)
     );
-    let how = format!(
+    let single_how = format!(
         "To score, post in {}: just the criterion name, with exactly 2 screenshots (The main rewards page and team leaderboard page) attached. A judge's reaction awards the points. Check where you stand with **/iq leaderboard**.",
         channel(submissions)
     );
+    let how = match criteria
+        .iter()
+        .any(|criterion| criterion.kind == CriterionKind::Multi)
+    {
+        true => format!("{single_how} {MULTI_PLAYER_HOW}"),
+        false => single_how,
+    };
     let pings = (!roles.is_empty()).then(|| {
         roles
             .iter()
@@ -247,9 +277,10 @@ pub fn start_announcement(
         .iter()
         .map(|criterion| {
             let heading = format!(
-                "> **{}** \u{b7} {}",
+                "> **{}** \u{b7} {}{}",
                 criterion.name,
-                points_text(i64::from(criterion.points))
+                points_text(i64::from(criterion.points)),
+                kind_suffix(criterion.kind)
             );
             let description = criterion.description.trim();
             [heading]
@@ -274,7 +305,7 @@ pub fn start_announcement(
                 rules
                     .iter()
                     .enumerate()
-                    .map(|(index, rule)| format!("{}. {rule}", index + 1)),
+                    .map(|(index, rule)| format!("{} {rule}", numbered(index + 1))),
             )
             .collect(),
     };
@@ -375,15 +406,21 @@ pub fn points_done(member: UserId, total: i64) -> String {
 
 pub fn judge_log_award(
     judge: UserId,
-    player: UserId,
+    players: &[UserId],
     criterion: &str,
     points: i64,
     link: &str,
 ) -> String {
+    let mentions: Vec<String> = players.iter().map(|player| user(*player)).collect();
+    let mention_refs: Vec<&str> = mentions.iter().map(String::as_str).collect();
+    let each = match players.len() {
+        0 | 1 => "",
+        _ => " each",
+    };
     format!(
-        "{} awarded {} {} for {}: {link}",
+        "{} awarded {} {}{each} for {}: {link}",
         user(judge),
-        user(player),
+        join_names(&mention_refs),
         points_text(points),
         escape(criterion)
     )
@@ -407,6 +444,26 @@ pub fn judge_log_points(
     format!(
         "{} {action}: {}. New total: {total}.",
         user(judge),
+        plain_text(reason)
+    )
+}
+
+pub fn post_not_found(submissions: ChannelId) -> String {
+    format!("There is no post with that ID in {}.", channel(submissions))
+}
+
+pub fn rejection_reply(reason: &str) -> String {
+    format!(
+        "**Not counted.** {}\nPost it again as a new message. Edits are not re-checked.",
+        plain_text(reason)
+    )
+}
+
+pub fn judge_log_reject(judge: UserId, player: UserId, reason: &str, link: &str) -> String {
+    format!(
+        "{} rejected {}'s post: {}. {link}",
+        user(judge),
+        user(player),
         plain_text(reason)
     )
 }
@@ -564,6 +621,10 @@ pub fn name_of(member: UserId, names: &[(UserId, String)]) -> &str {
         .unwrap_or(UNKNOWN_MEMBER)
 }
 
+fn numbered(number: usize) -> String {
+    format!("**{number}.**")
+}
+
 fn shown_end(end_unix: i64) -> i64 {
     end_unix - SHOWN_END_OFFSET
 }
@@ -605,6 +666,9 @@ pub const TEMPLATE_PLACEHOLDER: &str = "Start blank or pick a template";
 pub const BLANK_LABEL: &str = "Start blank";
 pub const BLANK_DESCRIPTION: &str = "No criteria, rules or roles filled in";
 pub const CRITERION_PLACEHOLDER: &str = "Pick a criterion to edit or remove";
+pub const CRITERION_KIND_PLACEHOLDER: &str = "Single or multi-player";
+pub const SINGLE_KIND_LABEL: &str = "Single player";
+pub const MULTI_KIND_LABEL: &str = "Multi-player, 2 or 3 players";
 pub const ROLES_PLACEHOLDER: &str = "Roles that can take part (pick any)";
 pub const GONE_ROLE: &str = "Deleted role";
 pub const NO_ROLES_TO_PICK: &str =
@@ -739,9 +803,11 @@ pub fn template_description(first_day: Date, last_day: Date, criteria: usize) ->
 
 pub fn criterion_line(number: usize, criterion: &Criterion) -> String {
     let heading = format!(
-        "{number}. **{}** \u{b7} {}",
+        "{} **{}** \u{b7} {}{}",
+        numbered(number),
         escape(&criterion.name),
-        points_text(i64::from(criterion.points))
+        points_text(i64::from(criterion.points)),
+        kind_suffix(criterion.kind)
     );
     match criterion.description.is_empty() {
         true => heading,
@@ -750,7 +816,18 @@ pub fn criterion_line(number: usize, criterion: &Criterion) -> String {
 }
 
 pub fn criterion_option_description(criterion: &Criterion) -> String {
-    points_text(i64::from(criterion.points))
+    format!(
+        "{}{}",
+        points_text(i64::from(criterion.points)),
+        kind_suffix(criterion.kind)
+    )
+}
+
+fn kind_suffix(kind: CriterionKind) -> String {
+    match kind {
+        CriterionKind::Single => String::new(),
+        CriterionKind::Multi => format!(" \u{b7} {MULTI_PLAYERS}"),
+    }
 }
 
 pub fn criteria_not_shown(count: usize) -> String {
@@ -768,7 +845,7 @@ pub fn rules_not_shown(count: usize) -> String {
 }
 
 pub fn rule_line(number: usize, rule: &str) -> String {
-    format!("{number}. {}", escape(rule))
+    format!("{} {}", numbered(number), escape(rule))
 }
 
 pub fn rule_option_label(number: usize, rule: &str) -> String {
@@ -870,6 +947,9 @@ pub fn setup_refusal(refusal: &SetupRefusal) -> String {
             "A criterion's description holds at most 300 characters.".to_owned()
         }
         SetupRefusal::CriterionUnknown => "Pick a criterion from the menu first.".to_owned(),
+        SetupRefusal::CriterionKindUnknown => {
+            "Pick single player or multi-player from the menu.".to_owned()
+        }
         SetupRefusal::NameFormat => "A competition name needs 1 to 60 characters.".to_owned(),
         SetupRefusal::RulesTooLong => "The rules hold at most 4000 characters in all.".to_owned(),
         SetupRefusal::RuleLength => "A rule needs 1 to 150 characters.".to_owned(),

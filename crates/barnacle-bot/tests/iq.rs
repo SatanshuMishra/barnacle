@@ -10,7 +10,9 @@ use barnacle_bot::iq::CleanupRefusal;
 use barnacle_bot::iq::CompleteRefusal;
 use barnacle_bot::iq::Completion;
 use barnacle_bot::iq::Criterion;
+use barnacle_bot::iq::CriterionKind;
 use barnacle_bot::iq::Judged;
+use barnacle_bot::iq::Post;
 use barnacle_bot::iq::Problem;
 use barnacle_bot::iq::Score;
 use barnacle_bot::iq::StartChoice;
@@ -40,6 +42,7 @@ fn criterion(name: &str, points: u32) -> Criterion {
         name: name.to_owned(),
         description: String::new(),
         points,
+        kind: CriterionKind::Single,
     }
 }
 
@@ -57,8 +60,17 @@ fn two_images() -> Vec<Attachment> {
     vec![attachment("image/png"), attachment("image/jpeg")]
 }
 
+fn post<'a>(text: &'a str, attachments: &'a [Attachment]) -> Post<'a> {
+    Post {
+        text,
+        attachments,
+        author: REQUESTER,
+        bots: &[],
+    }
+}
+
 fn check(text: &str, attachments: &[Attachment]) -> Checked {
-    check_submission(text, attachments, &criteria())
+    check_submission(&post(text, attachments), &criteria())
 }
 
 fn player(number: u64) -> UserId {
@@ -107,6 +119,7 @@ fn a_name_in_any_capitals_with_two_images_is_valid() {
         Checked::Valid {
             criterion: "Drunken Kraken".to_owned(),
             points: 5,
+            partners: vec![],
         }
     );
 }
@@ -204,7 +217,7 @@ fn extra_words_around_the_name_are_an_unknown_name() {
 fn a_long_unknown_text_is_cut_in_the_problem() {
     let tied_criteria = vec![criterion("Double Down", 2), criterion("Torpedo Soup", 3)];
     assert_eq!(
-        check_submission(&"a".repeat(300), &two_images(), &tied_criteria),
+        check_submission(&post(&"a".repeat(300), &two_images()), &tied_criteria),
         Checked::Invalid(vec![Problem::UnknownName {
             typed: format!("{}\u{2026}", "a".repeat(100)),
             closest: "Double Down".to_owned(),

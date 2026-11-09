@@ -1215,7 +1215,7 @@ pub fn updates_already_sent(version: &str) -> String {
 
 pub fn announce_version_changed(running: &str) -> String {
     format!(
-        "Barnacle has been updated to {running} since this preview, so nothing was posted. Run /announce again."
+        "Barnacle has been updated to {running} since this preview, so nothing was posted. Run /updates announce again."
     )
 }
 

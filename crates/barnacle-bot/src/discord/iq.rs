@@ -25,6 +25,7 @@ use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::RoleId;
 use crate::iq;
+use crate::iq::BoardDue;
 use crate::iq::CheckPath;
 use crate::iq::Checked;
 use crate::iq::CleanupRefusal;
@@ -53,11 +54,14 @@ use crate::iq_store::AdjustOutcome;
 use crate::iq_store::AwardOutcome;
 use crate::iq_store::Competition;
 use crate::iq_store::CreateOutcome;
+use crate::iq_store::IqStore;
 use crate::iq_store::IqStoreError;
+use crate::iq_store::RejectOutcome;
 use crate::iq_text;
 use crate::schedule;
 use crate::schedule::Zone;
 use crate::schedule::ZoneProblem;
+use crate::text;
 use crate::text::Refusal;
 use crate::text::escape;
 use crate::voice::Overwrite;
@@ -83,7 +87,7 @@ const MENU_MAX: u8 = 25;
 const PAGE_SIZE: u8 = 100;
 const CATCH_UP_PAGES: usize = 500;
 const SHOWN_END_OFFSET: i64 = 60;
-const MILLIS_PER_SECOND: u64 = 1_000;
+const MILLIS_PER_SECOND: u32 = 1_000;
 const DISCORD_WAIT: Duration = Duration::from_secs(30);
 const MARK_WAIT: Duration = Duration::from_secs(120);
 const RESCAN_LIMIT: u32 = 500;
@@ -485,16 +489,10 @@ pub(super) async fn iq_points(
     let Some(guild) = guild_of(ctx) else {
         return Ok(());
     };
-    let data = ctx.data();
-    let judge_role =
-        current_judge_role(data, ctx.cache(), guild, &Scope::default().guild(guild)).await;
-    let holds = match (judge_role, ctx.author_member().await) {
-        (Some(role), Some(held)) => held.roles.iter().any(|id| id.get() == role.get()),
-        _ => false,
-    };
-    if !holds {
+    if !caller_is_judge(ctx, guild).await {
         return refuse(ctx, "not_a_judge", iq_text::ONLY_JUDGES).await;
     }
+    let data = ctx.data();
     let Some(points) = iq::adjustment(points) else {
         return refuse(ctx, "zero_points", ZERO_POINTS).await;
     };
@@ -545,16 +543,123 @@ pub(super) async fn iq_points(
     replied
 }
 
+#[poise::command(slash_command, rename = "reject", guild_only)]
+pub(super) async fn iq_reject(
+    ctx: Context<'_>,
+    #[description = "The ID of the post to reject"] message_id: String,
+    #[description = "Why the post does not count, shown to the player"]
+    #[max_length = 200]
+    reason: String,
+) -> Result<(), Error> {
+    let Some(guild) = guild_of(ctx) else {
+        return Ok(());
+    };
+    if !caller_is_judge(ctx, guild).await {
+        return refuse(ctx, "not_a_judge", iq_text::ONLY_JUDGES_REJECT).await;
+    }
+    let data = ctx.data();
+    let competition = match data.iq.live(guild).await? {
+        Some(competition) if matches!(competition.status, Status::Running | Status::Stopped) => {
+            competition
+        }
+        _ => return refuse(ctx, "no_competition", iq_text::NO_COMPETITION_RUNNING).await,
+    };
+    ctx.defer_ephemeral().await?;
+    let Some(message) = iq::message_id(&message_id) else {
+        return refuse(ctx, "not_a_message_id", iq_text::NOT_A_MESSAGE_ID).await;
+    };
+    let http = &ctx.serenity_context().http;
+    let channel = discord_channel(competition.submissions)?;
+    let message_id = serenity::MessageId::from(nonzero(message)?);
+    let post = match bounded(channel.message(http, message_id)).await {
+        Ok(post) if checkable(&post) => post,
+        Ok(_) => return refuse(ctx, "not_a_post", iq_text::NOT_A_POST).await,
+        Err(error) if is_kind(&error, Kind::UnknownMessage) => {
+            return refuse(
+                ctx,
+                "post_not_found",
+                iq_text::post_not_found(competition.submissions),
+            )
+            .await;
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let Some(now_ms) = super::now_ms().and_then(|now_ms| i64::try_from(now_ms).ok()) else {
+        return commands::fail(ctx, Failure::from_error(&IqError::Clock)).await;
+    };
+    let poster = UserId::new(post.author.id.get());
+    let judge = author(ctx);
+    match data
+        .iq
+        .reject(competition.id, message, poster, &reason, judge, now_ms)
+        .await
+    {
+        Ok(RejectOutcome::Rejected) => {}
+        Ok(RejectOutcome::AlreadyRejected) => {
+            return refuse(ctx, "already_rejected", iq_text::ALREADY_REJECTED).await;
+        }
+        Ok(RejectOutcome::AlreadyAwarded) => {
+            return refuse(ctx, "already_awarded", iq_text::REJECT_ALREADY_AWARDED).await;
+        }
+        Err(IqStoreError::ReasonMissing) => {
+            return refuse(ctx, "reason_missing", iq_text::REJECT_REASON_MISSING).await;
+        }
+        Err(IqStoreError::ReasonTooLong) => {
+            return refuse(ctx, "reason_too_long", iq_text::REASON_TOO_LONG).await;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let scope = Scope::of_command(ctx).message(Snowflake::new(message));
+    deny_post(
+        http,
+        &post,
+        &competition.marks.denied,
+        iq_text::rejection_reply(&reason),
+        "the reply to a rejected submission could not be sent",
+        &scope,
+    )
+    .await;
+    let replied = commands::private(ctx, iq_text::REJECTED).await;
+    failure::record(
+        "iq.submission.rejected",
+        "a judge rejected a submission",
+        &scope,
+    );
+    log_judging(
+        data,
+        ctx.serenity_context(),
+        &competition,
+        &iq_text::judge_log_reject(judge, poster, &reason, &message_link(&competition, message)),
+        &scope,
+    )
+    .await;
+    replied
+}
+
+async fn caller_is_judge(ctx: Context<'_>, guild: GuildId) -> bool {
+    let judge_role = current_judge_role(
+        ctx.data(),
+        ctx.cache(),
+        guild,
+        &Scope::default().guild(guild),
+    )
+    .await;
+    match (judge_role, ctx.author_member().await) {
+        (Some(role), Some(held)) => held.roles.iter().any(|id| id.get() == role.get()),
+        _ => false,
+    }
+}
+
 #[poise::command(slash_command, rename = "leaderboard", guild_only)]
 pub(super) async fn iq_leaderboard(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild) = guild_of(ctx) else {
         return Ok(());
     };
-    ctx.defer().await?;
+    ctx.defer_ephemeral().await?;
     let data = ctx.data();
     let http = &ctx.serenity_context().http;
     let requester = author(ctx);
-    let content = match data.iq.live(guild).await? {
+    let description = match data.iq.live(guild).await? {
         Some(competition) => {
             let standings = iq::standings(&data.iq.scores(competition.id).await?);
             let rows = iq::board_rows(&standings, requester);
@@ -582,13 +687,152 @@ pub(super) async fn iq_leaderboard(ctx: Context<'_>) -> Result<(), Error> {
             None => iq_text::no_competition(None),
         },
     };
-    ctx.send(
-        poise::CreateReply::default()
-            .content(content)
-            .allowed_mentions(serenity::CreateAllowedMentions::new()),
-    )
-    .await?;
+    ctx.send(board_reply(description)).await?;
     Ok(())
+}
+
+pub async fn print_boards(iq: &IqStore, http: &serenity::Http, now_ms: i64) {
+    let running = match iq.running().await {
+        Ok(running) => running,
+        Err(error) => {
+            failure::report(
+                "iq.board.failed",
+                "the running IQ Competitions could not be read, so no leaderboard was printed",
+                &Failure::from_error(&error),
+                &Scope::default(),
+            );
+            return;
+        }
+    };
+    for competition in running {
+        let scope = Scope::default()
+            .guild(competition.guild)
+            .channel(competition.announcements);
+        if let Err(error) = print_board(iq, http, &competition, now_ms, &scope).await {
+            failure::report(
+                "iq.board.failed",
+                "a 12-hour IQ leaderboard could not be printed, so the next mark will try again",
+                &Failure::from_error(&error),
+                &scope,
+            );
+        }
+    }
+}
+
+async fn print_board(
+    iq: &IqStore,
+    http: &serenity::Http,
+    competition: &Competition,
+    now_ms: i64,
+    scope: &Scope,
+) -> Result<(), IqError> {
+    let mark = iq::board_mark(competition.created_at_ms, now_ms);
+    let last = iq.board_post(competition.id).await?;
+    let standings = iq::standings(&iq.scores(competition.id).await?);
+    let digest = iq::board_digest(&standings);
+    let due = iq::board_due(
+        mark,
+        last.as_ref().map(|post| post.mark),
+        last.as_ref().map(|post| post.digest.as_str()),
+        &digest,
+    );
+    match due {
+        BoardDue::NotYet => Ok(()),
+        BoardDue::Unchanged => {
+            if iq.claim_board_mark(competition.id, mark).await? {
+                failure::record(
+                    "iq.board.skipped",
+                    "the scores have not changed since the last 12-hour IQ leaderboard",
+                    scope,
+                );
+            }
+            Ok(())
+        }
+        BoardDue::Print => {
+            if !iq.claim_board_mark(competition.id, mark).await? {
+                return Ok(());
+            }
+            let rows = iq::top_rows(&standings);
+            let users: Vec<UserId> = rows.iter().map(|row| row.user).collect();
+            let names = names_of(http, competition.guild, &users).await;
+            let named: Vec<(iq::BoardRow, String)> = rows
+                .iter()
+                .map(|row| (*row, iq_text::name_of(row.user, &names).to_owned()))
+                .collect();
+            let description = iq_text::leaderboard(
+                &competition.name,
+                end_unix(competition)?,
+                now_ms.div_euclid(i64::from(MILLIS_PER_SECOND)),
+                &named,
+                standings.len(),
+            );
+            let channel = discord_channel(competition.announcements)?;
+            let sent = bounded(
+                channel.send_message(
+                    http,
+                    serenity::CreateMessage::new()
+                        .embed(board_embed(description))
+                        .allowed_mentions(serenity::CreateAllowedMentions::new()),
+                ),
+            )
+            .await?;
+            iq.record_board_post(competition.id, &digest, sent.id.get())
+                .await?;
+            failure::record(
+                "iq.board.printed",
+                "a 12-hour IQ leaderboard was printed",
+                &scope.clone().message(Snowflake::new(sent.id.get())),
+            );
+            if let Some(previous) = last.and_then(|post| post.message) {
+                remove_board(http, channel, previous, scope).await;
+            }
+            Ok(())
+        }
+    }
+}
+
+async fn remove_board(
+    http: &serenity::Http,
+    channel: serenity::ChannelId,
+    previous: u64,
+    scope: &Scope,
+) {
+    let scope = scope.clone().message(Snowflake::new(previous));
+    let message = match nonzero(previous) {
+        Ok(message) => serenity::MessageId::from(message),
+        Err(error) => {
+            failure::report(
+                "iq.board.delete_failed",
+                "the previous 12-hour IQ leaderboard has a stored ID of 0, so it was left",
+                &Failure::from_error(&error),
+                &scope,
+            );
+            return;
+        }
+    };
+    match bounded(channel.delete_message(http, message)).await {
+        Ok(()) => {}
+        Err(error) if is_kind(&error, Kind::UnknownMessage) => {}
+        Err(error) => failure::report(
+            "iq.board.delete_failed",
+            "the previous 12-hour IQ leaderboard could not be deleted",
+            &Failure::from_error(&error),
+            &scope,
+        ),
+    }
+}
+
+pub fn board_embed(description: String) -> serenity::CreateEmbed {
+    serenity::CreateEmbed::new()
+        .colour(text::EMBED_COLOUR)
+        .description(description)
+}
+
+pub fn board_reply(description: String) -> poise::CreateReply {
+    poise::CreateReply::default()
+        .embed(board_embed(description))
+        .ephemeral(true)
+        .allowed_mentions(serenity::CreateAllowedMentions::new())
 }
 
 fn guild_of(ctx: Context<'_>) -> Option<GuildId> {
@@ -1055,6 +1299,7 @@ pub(super) async fn pressed(
         }
         IqPanelPart::Template
         | IqPanelPart::Criterion
+        | IqPanelPart::CriterionKind
         | IqPanelPart::Rule
         | IqPanelPart::Remove
         | IqPanelPart::Roles
@@ -1230,6 +1475,7 @@ pub(super) async fn submitted(
                 | IqPanelPart::SetDates
                 | IqPanelPart::Rename
                 | IqPanelPart::Criterion
+                | IqPanelPart::CriterionKind
                 | IqPanelPart::Add
                 | IqPanelPart::Edit
                 | IqPanelPart::Remove
@@ -1305,6 +1551,10 @@ fn changed(
                 .map_err(|_| SetupRefusal::CriterionUnknown)?;
             draft.with_picked_criterion(index)?
         }
+        (
+            IqPanelPart::CriterionKind,
+            serenity::ComponentInteractionDataKind::StringSelect { .. },
+        ) => draft.with_kind(single)?,
         (IqPanelPart::Rule, serenity::ComponentInteractionDataKind::StringSelect { .. }) => {
             let index = single
                 .parse::<usize>()
@@ -1494,6 +1744,7 @@ async fn confirmed(
         | IqPanelPart::SetDates
         | IqPanelPart::Rename
         | IqPanelPart::Criterion
+        | IqPanelPart::CriterionKind
         | IqPanelPart::Add
         | IqPanelPart::Edit
         | IqPanelPart::Remove
@@ -2386,7 +2637,7 @@ async fn judge_message(
     scope: &Scope,
 ) -> Judged {
     let sent_ms = Snowflake::new(message.id.get()).unix_millis();
-    let sent_unix = i64::try_from(sent_ms / MILLIS_PER_SECOND).unwrap_or(i64::MAX);
+    let sent_unix = i64::try_from(sent_ms / u64::from(MILLIS_PER_SECOND)).unwrap_or(i64::MAX);
     let end = match end_unix(competition) {
         Ok(end) => end,
         Err(error) => {
@@ -2409,14 +2660,31 @@ async fn judge_message(
             content_type: attachment.content_type.clone(),
         })
         .collect();
-    match iq::check_submission(&message.content, &attachments, &competition.criteria) {
-        Checked::Valid { criterion, points } => {
+    let bots: Vec<UserId> = message
+        .mentions
+        .iter()
+        .filter(|mentioned| mentioned.bot)
+        .map(|mentioned| UserId::new(mentioned.id.get()))
+        .collect();
+    let post = iq::Post {
+        text: &message.content,
+        attachments: &attachments,
+        author: UserId::new(message.author.id.get()),
+        bots: &bots,
+    };
+    match iq::check_submission(&post, &competition.criteria) {
+        Checked::Valid {
+            criterion,
+            points,
+            partners,
+        } => {
             let recorded = data
                 .iq
                 .record_submission(
                     competition.id,
                     message.id.get(),
-                    UserId::new(message.author.id.get()),
+                    post.author,
+                    &partners,
                     &criterion,
                     points,
                     i64::try_from(sent_ms).unwrap_or(i64::MAX),
@@ -2435,29 +2703,41 @@ async fn judge_message(
             Judged::Valid
         }
         Checked::Invalid(problems) => {
-            mark(
+            deny_post(
                 http,
-                message.channel_id,
-                message.id,
+                message,
                 &competition.marks.denied,
+                iq_text::submission_reply(&problems),
+                "the reply to an invalid submission could not be sent",
                 scope,
             )
             .await;
-            let reply = serenity::CreateMessage::new()
-                .content(iq_text::submission_reply(&problems))
-                .reference_message(message)
-                .allowed_mentions(serenity::CreateAllowedMentions::new().replied_user(true));
-            if let Err(error) = bounded(message.channel_id.send_message(http, reply)).await {
-                failure::report(
-                    "iq.submission.reply_failed",
-                    "the reply to an invalid submission could not be sent",
-                    &Failure::from_error(&error),
-                    scope,
-                );
-            }
             failure::record("iq.submission.invalid", "a submission was invalid", scope);
             Judged::Invalid
         }
+    }
+}
+
+async fn deny_post(
+    http: &serenity::Http,
+    post: &serenity::Message,
+    denied: &Mark,
+    reply: String,
+    reply_failed: &'static str,
+    scope: &Scope,
+) {
+    mark(http, post.channel_id, post.id, denied, scope).await;
+    let reply = serenity::CreateMessage::new()
+        .content(reply)
+        .reference_message(post)
+        .allowed_mentions(serenity::CreateAllowedMentions::new().replied_user(true));
+    if let Err(error) = bounded(post.channel_id.send_message(http, reply)).await {
+        failure::report(
+            "iq.submission.reply_failed",
+            reply_failed,
+            &Failure::from_error(&error),
+            scope,
+        );
     }
 }
 
@@ -2624,7 +2904,7 @@ async fn award(
         return;
     };
     match data.iq.award(message, judge, now_ms).await {
-        Ok(AwardOutcome::Awarded { user, points }) => {
+        Ok(AwardOutcome::Awarded { players, points }) => {
             failure::record(
                 "iq.award.given",
                 "a judge's reaction awarded a submission's points",
@@ -2635,7 +2915,7 @@ async fn award(
                 serenity_context,
                 competition,
                 message,
-                (judge, user, points),
+                (judge, &players, points),
                 scope,
             )
             .await;
@@ -2658,6 +2938,12 @@ async fn award(
             "closed",
             scope,
         ),
+        Ok(AwardOutcome::Rejected) => failure::refused(
+            "iq.award.refused",
+            "a judging reaction came on a submission a judge rejected",
+            "rejected",
+            scope,
+        ),
         Err(error) => failure::report(
             "iq.award.failed",
             "a judging reaction could not be saved",
@@ -2672,7 +2958,7 @@ async fn awarded(
     serenity_context: &serenity::Context,
     competition: &Competition,
     message: u64,
-    (judge, player, points): (UserId, UserId, u32),
+    (judge, players, points): (UserId, &[UserId], u32),
     scope: &Scope,
 ) {
     let http = &serenity_context.http;
@@ -2705,13 +2991,17 @@ async fn awarded(
             UNREAD_CRITERION.to_owned()
         }
     };
-    let link = format!(
+    let link = message_link(competition, message);
+    let line = iq_text::judge_log_award(judge, players, &criterion, i64::from(points), &link);
+    log_judging(data, serenity_context, competition, &line, scope).await;
+}
+
+fn message_link(competition: &Competition, message: u64) -> String {
+    format!(
         "{MESSAGE_LINK}/{}/{}/{message}",
         competition.guild.get(),
         competition.submissions.get()
-    );
-    let line = iq_text::judge_log_award(judge, player, &criterion, i64::from(points), &link);
-    log_judging(data, serenity_context, competition, &line, scope).await;
+    )
 }
 
 async fn log_judging(
@@ -3509,6 +3799,7 @@ fn setup_code(refusal: &SetupRefusal) -> &'static str {
         SetupRefusal::CriterionName => "criterion_name",
         SetupRefusal::CriterionDescription => "criterion_description",
         SetupRefusal::CriterionUnknown => "criterion_unknown",
+        SetupRefusal::CriterionKindUnknown => "criterion_kind_unknown",
         SetupRefusal::NameFormat => "name_format",
         SetupRefusal::RulesTooLong => "rules_too_long",
         SetupRefusal::RuleLength => "rule_length",

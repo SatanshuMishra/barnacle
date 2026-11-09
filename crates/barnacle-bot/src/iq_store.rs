@@ -16,6 +16,7 @@ use crate::ids::GuildId;
 use crate::ids::RoleId;
 use crate::iq;
 use crate::iq::Criterion;
+use crate::iq::CriterionKind;
 use crate::iq::JudgingMarks;
 use crate::iq::Mark;
 use crate::iq::Score;
@@ -27,6 +28,12 @@ const DISCORD_EPOCH_MS: i64 = 1_420_070_400_000;
 const SNOWFLAKE_TIME_SHIFT: u32 = 22;
 const SNOWFLAKE_TIME_LIMIT: u64 = 1 << 41;
 const TEMPLATE_LIMIT: i64 = 10;
+
+macro_rules! player_points {
+    () => {
+        "SELECT user_id, points FROM iq_submissions WHERE competition_id = ? AND awarded_by IS NOT NULL UNION ALL SELECT p.user_id, s.points FROM iq_submission_partners p JOIN iq_submissions s ON s.message_id = p.message_id WHERE s.competition_id = ? AND s.awarded_by IS NOT NULL UNION ALL SELECT user_id, points FROM iq_adjustments WHERE competition_id = ?"
+    };
+}
 pub const REASON_LIMIT: usize = 200;
 
 const COMPETITIONS: &str = "iq_competitions";
@@ -37,6 +44,11 @@ const ANNOUNCEMENTS: &str = "iq_announcements";
 const SUBMISSIONS: &str = "iq_submissions";
 const ADJUSTMENTS: &str = "iq_adjustments";
 const SERVERS: &str = "iq_servers";
+const PARTNERS: &str = "iq_submission_partners";
+const REJECTIONS: &str = "iq_rejections";
+const BOARD_POSTS: &str = "iq_board_posts";
+const KIND_COLUMN: &str = "kind";
+const PLAYERS_TABLES: [&str; 3] = [PARTNERS, REJECTIONS, BOARD_POSTS];
 const LIVE_INDEX: &str = "iq_competitions_live";
 const CRITERION_NAME_INDEX: &str = "iq_criteria_name";
 const UNAWARDED_INDEX: &str = "iq_submissions_unawarded";
@@ -45,7 +57,7 @@ const PRE_MARKS_COLUMN: &str = "judging_reaction";
 type ColumnSpec = (&'static str, &'static str, bool, bool);
 type TableSpec = (&'static str, &'static [ColumnSpec]);
 
-const EXPECTED_COLUMNS: [TableSpec; 8] = [
+const EXPECTED_COLUMNS: [TableSpec; 11] = [
     (
         COMPETITIONS,
         &[
@@ -77,6 +89,7 @@ const EXPECTED_COLUMNS: [TableSpec; 8] = [
             ("name", "TEXT", true, false),
             ("description", "TEXT", true, false),
             ("points", "INTEGER", true, false),
+            ("kind", "TEXT", true, false),
         ],
     ),
     (
@@ -133,6 +146,33 @@ const EXPECTED_COLUMNS: [TableSpec; 8] = [
             ("judge_role_id", "INTEGER", true, false),
         ],
     ),
+    (
+        PARTNERS,
+        &[
+            ("message_id", "INTEGER", true, true),
+            ("user_id", "INTEGER", true, true),
+        ],
+    ),
+    (
+        REJECTIONS,
+        &[
+            ("message_id", "INTEGER", false, true),
+            ("competition_id", "INTEGER", true, false),
+            ("user_id", "INTEGER", true, false),
+            ("reason", "TEXT", true, false),
+            ("rejected_by", "INTEGER", true, false),
+            ("rejected_at_ms", "INTEGER", true, false),
+        ],
+    ),
+    (
+        BOARD_POSTS,
+        &[
+            ("competition_id", "INTEGER", false, true),
+            ("mark", "INTEGER", true, false),
+            ("digest", "TEXT", true, false),
+            ("message_id", "INTEGER", false, false),
+        ],
+    ),
 ];
 
 const EXPECTED_INDEXES: [&str; 2] = [LIVE_INDEX, CRITERION_NAME_INDEX];
@@ -141,6 +181,7 @@ const LIVE_IN_GUILD: &str = "SELECT id, guild_id, name, first_day, last_day, tim
 const LIVE_BY_SUBMISSIONS: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE submissions_id = ? AND status <> 'archived' ORDER BY id DESC LIMIT 1";
 const BY_ID: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE id = ?";
 const LAST_ARCHIVED: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE guild_id = ? AND status = 'archived' ORDER BY created_at_ms DESC, id DESC LIMIT 1";
+const RUNNING: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE status = 'running' ORDER BY id";
 const NEWEST_IN_GUILD: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE guild_id = ? ORDER BY created_at_ms DESC, id DESC LIMIT ?";
 
 struct CompetitionRow {
@@ -204,6 +245,10 @@ pub enum IqStoreError {
     MissingIndex { index: &'static str },
     #[error("the IQ Competition database has no judging marks or judge log")]
     BeforeMarks,
+    #[error(
+        "the IQ Competition database has no multi-player criteria, partners, rejections or leaderboard posts"
+    )]
+    BeforePlayers,
     #[error("{value} does not fit in a SQLite integer")]
     OutOfRange { value: u128 },
     #[error("the IQ Competition database holds a negative value, {value}")]
@@ -220,11 +265,13 @@ pub enum IqStoreError {
     RepeatedMarks,
     #[error("the IQ Competition database holds {value}, which is not a criterion's points")]
     BadPoints { value: i64 },
+    #[error("the IQ Competition database holds {value}, which is not a criterion type")]
+    BadCriterionKind { value: String },
     #[error("{points} is not a points change between -1000 and 1000 other than 0")]
     BadAdjustment { points: i64 },
-    #[error("a points change has no reason")]
+    #[error("a points change or rejection has no reason")]
     ReasonMissing,
-    #[error("a points change reason is longer than {REASON_LIMIT} characters")]
+    #[error("a points change or rejection reason is longer than {REASON_LIMIT} characters")]
     ReasonTooLong,
     #[error("{at_unix} is outside the moments a Discord message ID can hold")]
     NotASnowflakeMoment { at_unix: i64 },
@@ -232,6 +279,8 @@ pub enum IqStoreError {
     UnknownCompetition { id: i64 },
     #[error("IQ Competition {id} is completed or archived, so it cannot resume")]
     NotResumable { id: i64 },
+    #[error("IQ Competition {id} has no claimed leaderboard mark to record a print against")]
+    UnclaimedBoard { id: i64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -300,12 +349,27 @@ pub enum AdjustOutcome {
     BelowZero { total: i64 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AwardOutcome {
-    Awarded { user: UserId, points: u32 },
+    Awarded { players: Vec<UserId>, points: u32 },
     AlreadyAwarded,
     NotASubmission,
     Closed,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RejectOutcome {
+    Rejected,
+    AlreadyRejected,
+    AlreadyAwarded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoardPost {
+    pub mark: i64,
+    pub digest: String,
+    pub message: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -328,8 +392,13 @@ impl IqStore {
 
     pub async fn with_pool(pool: SqlitePool) -> Result<Self, IqStoreError> {
         let mut before_marks = false;
+        let mut before_players = false;
         for (table, expected) in EXPECTED_COLUMNS {
             let found = columns(&pool, table).await?;
+            if found.is_empty() && PLAYERS_TABLES.contains(&table) {
+                before_players = true;
+                continue;
+            }
             if found.is_empty() {
                 return Err(IqStoreError::MissingTable { table });
             }
@@ -337,7 +406,12 @@ impl IqStore {
                 before_marks = true;
                 continue;
             }
-            if found != expected_columns(expected) {
+            let wanted = expected_columns(expected);
+            if table == CRITERIA && found == without_kind(&wanted) {
+                before_players = true;
+                continue;
+            }
+            if found != wanted {
                 return Err(IqStoreError::UnexpectedColumns { table, found });
             }
         }
@@ -358,6 +432,9 @@ impl IqStore {
                 .await?;
         if before_marks || unawarded.is_none() {
             return Err(IqStoreError::BeforeMarks);
+        }
+        if before_players {
+            return Err(IqStoreError::BeforePlayers);
         }
         Ok(Self { pool })
     }
@@ -434,6 +511,63 @@ impl IqStore {
             .fetch_optional(&self.pool)
             .await?;
         self.complete(row).await
+    }
+
+    pub async fn running(&self) -> Result<Vec<Competition>, IqStoreError> {
+        let rows = sqlx::query(RUNNING).fetch_all(&self.pool).await?;
+        let mut running = Vec::with_capacity(rows.len());
+        for row in rows {
+            running.push(self.with_config(CompetitionRow::read(&row)?).await?);
+        }
+        Ok(running)
+    }
+
+    pub async fn board_post(&self, id: i64) -> Result<Option<BoardPost>, IqStoreError> {
+        let row: Option<(i64, String, Option<i64>)> = sqlx::query_as(
+            "SELECT mark, digest, message_id FROM iq_board_posts WHERE competition_id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|(mark, digest, message)| {
+            Ok(BoardPost {
+                mark,
+                digest,
+                message: message.map(to_unsigned).transpose()?,
+            })
+        })
+        .transpose()
+    }
+
+    pub async fn claim_board_mark(&self, id: i64, mark: i64) -> Result<bool, IqStoreError> {
+        let claimed = sqlx::query(
+            "INSERT INTO iq_board_posts (competition_id, mark) VALUES (?, ?) ON CONFLICT (competition_id) DO UPDATE SET mark = excluded.mark WHERE excluded.mark > iq_board_posts.mark",
+        )
+        .bind(id)
+        .bind(mark)
+        .execute(&self.pool)
+        .await?;
+        Ok(claimed.rows_affected() == 1)
+    }
+
+    pub async fn record_board_post(
+        &self,
+        id: i64,
+        digest: &str,
+        message: u64,
+    ) -> Result<(), IqStoreError> {
+        let recorded = sqlx::query(
+            "UPDATE iq_board_posts SET digest = ?, message_id = ? WHERE competition_id = ?",
+        )
+        .bind(digest)
+        .bind(to_integer(message.into())?)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        match recorded.rows_affected() {
+            1 => Ok(()),
+            _ => Err(IqStoreError::UnclaimedBoard { id }),
+        }
     }
 
     pub async fn revert_completed(&self, id: i64, to: Status) -> Result<bool, IqStoreError> {
@@ -591,27 +725,48 @@ impl IqStore {
         rows.into_iter().map(to_unsigned).collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_submission(
         &self,
         id: i64,
         message: u64,
         user: UserId,
+        partners: &[UserId],
         criterion: &str,
         points: u32,
         at_ms: i64,
     ) -> Result<bool, IqStoreError> {
+        let message = to_integer(message.into())?;
+        let partners = partners
+            .iter()
+            .map(|partner| to_integer(partner.get().into()))
+            .collect::<Result<Vec<i64>, IqStoreError>>()?;
+        let mut transaction = self.pool.begin().await?;
         let recorded = sqlx::query(
             "INSERT INTO iq_submissions (message_id, competition_id, user_id, criterion, points, posted_at_ms, awarded_by, awarded_at_ms) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL) ON CONFLICT (message_id) DO NOTHING",
         )
-        .bind(to_integer(message.into())?)
+        .bind(message)
         .bind(id)
         .bind(to_integer(user.get().into())?)
         .bind(criterion)
         .bind(i64::from(points))
         .bind(at_ms)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
-        Ok(recorded.rows_affected() == 1)
+        let inserted = recorded.rows_affected() == 1;
+        if inserted {
+            for partner in partners {
+                sqlx::query(
+                    "INSERT INTO iq_submission_partners (message_id, user_id) VALUES (?, ?) ON CONFLICT (message_id, user_id) DO NOTHING",
+                )
+                .bind(message)
+                .bind(partner)
+                .execute(&mut *transaction)
+                .await?;
+            }
+        }
+        transaction.commit().await?;
+        Ok(inserted)
     }
 
     pub async fn award(
@@ -621,19 +776,40 @@ impl IqStore {
         at_ms: i64,
     ) -> Result<AwardOutcome, IqStoreError> {
         let message = to_integer(message.into())?;
+        let mut transaction = self.pool.begin().await?;
         let awarded: Option<(i64, i64)> = sqlx::query_as(
-            "UPDATE iq_submissions SET awarded_by = ?, awarded_at_ms = ? WHERE message_id = ? AND awarded_by IS NULL AND competition_id IN (SELECT id FROM iq_competitions WHERE status IN ('running', 'stopped')) RETURNING user_id, points",
+            "UPDATE iq_submissions SET awarded_by = ?, awarded_at_ms = ? WHERE message_id = ? AND awarded_by IS NULL AND message_id NOT IN (SELECT message_id FROM iq_rejections) AND competition_id IN (SELECT id FROM iq_competitions WHERE status IN ('running', 'stopped')) RETURNING user_id, points",
         )
         .bind(to_integer(judge.get().into())?)
         .bind(at_ms)
         .bind(message)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *transaction)
         .await?;
         if let Some((user, points)) = awarded {
+            let partners: Vec<i64> = sqlx::query_scalar(
+                "SELECT user_id FROM iq_submission_partners WHERE message_id = ? ORDER BY rowid",
+            )
+            .bind(message)
+            .fetch_all(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+            let players = std::iter::once(user)
+                .chain(partners)
+                .map(to_user)
+                .collect::<Result<Vec<UserId>, IqStoreError>>()?;
             return Ok(AwardOutcome::Awarded {
-                user: to_user(user)?,
+                players,
                 points: to_points(points)?,
             });
+        }
+        transaction.rollback().await?;
+        let rejected: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM iq_rejections WHERE message_id = ?")
+                .bind(message)
+                .fetch_optional(&self.pool)
+                .await?;
+        if rejected.is_some() {
+            return Ok(AwardOutcome::Rejected);
         }
         let found: Option<String> = sqlx::query_scalar(
             "SELECT c.status FROM iq_submissions s JOIN iq_competitions c ON c.id = s.competition_id WHERE s.message_id = ?",
@@ -652,7 +828,7 @@ impl IqStore {
 
     pub async fn unawarded(&self, competition: i64, limit: u32) -> Result<Vec<u64>, IqStoreError> {
         let rows: Vec<i64> = sqlx::query_scalar(
-            "SELECT message_id FROM iq_submissions WHERE competition_id = ? AND awarded_by IS NULL ORDER BY message_id DESC LIMIT ?",
+            "SELECT message_id FROM iq_submissions WHERE competition_id = ? AND awarded_by IS NULL AND message_id NOT IN (SELECT message_id FROM iq_rejections) ORDER BY message_id DESC LIMIT ?",
         )
         .bind(competition)
         .bind(i64::from(limit))
@@ -671,24 +847,37 @@ impl IqStore {
     }
 
     pub async fn recorded(&self, competition: i64, message: u64) -> Result<bool, IqStoreError> {
+        let message = to_integer(message.into())?;
         let found: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM iq_submissions WHERE competition_id = ? AND message_id = ?",
+            "SELECT 1 FROM iq_submissions WHERE competition_id = ? AND message_id = ? UNION ALL SELECT 1 FROM iq_rejections WHERE competition_id = ? AND message_id = ? LIMIT 1",
         )
         .bind(competition)
-        .bind(to_integer(message.into())?)
+        .bind(message)
+        .bind(competition)
+        .bind(message)
         .fetch_optional(&self.pool)
         .await?;
         Ok(found.is_some())
     }
 
     pub async fn forget(&self, competition: i64, message: u64) -> Result<(), IqStoreError> {
+        let message = to_integer(message.into())?;
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query(
+            "DELETE FROM iq_submission_partners WHERE message_id IN (SELECT message_id FROM iq_submissions WHERE competition_id = ? AND message_id = ? AND awarded_by IS NULL)",
+        )
+        .bind(competition)
+        .bind(message)
+        .execute(&mut *transaction)
+        .await?;
         sqlx::query(
             "DELETE FROM iq_submissions WHERE competition_id = ? AND message_id = ? AND awarded_by IS NULL",
         )
         .bind(competition)
-        .bind(to_integer(message.into())?)
-        .execute(&self.pool)
+        .bind(message)
+        .execute(&mut *transaction)
         .await?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -702,21 +891,17 @@ impl IqStore {
         at_ms: i64,
     ) -> Result<AdjustOutcome, IqStoreError> {
         let points = iq::adjustment(points).ok_or(IqStoreError::BadAdjustment { points })?;
-        let reason = reason.trim();
-        if reason.is_empty() {
-            return Err(IqStoreError::ReasonMissing);
-        }
-        if reason.chars().count() > REASON_LIMIT {
-            return Err(IqStoreError::ReasonTooLong);
-        }
+        let reason = checked_reason(reason)?;
         let user = to_integer(user.get().into())?;
         let judge = to_integer(judge.get().into())?;
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let current: i64 = sqlx::query_scalar(
-            "SELECT coalesce(sum(points), 0) FROM (SELECT points FROM iq_submissions WHERE competition_id = ? AND user_id = ? AND awarded_by IS NOT NULL UNION ALL SELECT points FROM iq_adjustments WHERE competition_id = ? AND user_id = ?)",
-        )
+        let current: i64 = sqlx::query_scalar(concat!(
+            "SELECT coalesce(sum(points), 0) FROM (",
+            player_points!(),
+            ") WHERE user_id = ?"
+        ))
         .bind(id)
-        .bind(user)
+        .bind(id)
         .bind(id)
         .bind(user)
         .fetch_one(&mut *transaction)
@@ -741,10 +926,56 @@ impl IqStore {
         Ok(AdjustOutcome::Adjusted { total })
     }
 
-    pub async fn scores(&self, id: i64) -> Result<Vec<Score>, IqStoreError> {
-        let rows: Vec<(i64, i64)> = sqlx::query_as(
-            "SELECT user_id, SUM(points) FROM (SELECT user_id, points FROM iq_submissions WHERE competition_id = ? AND awarded_by IS NOT NULL UNION ALL SELECT user_id, points FROM iq_adjustments WHERE competition_id = ?) GROUP BY user_id ORDER BY user_id",
+    #[allow(clippy::too_many_arguments)]
+    pub async fn reject(
+        &self,
+        competition: i64,
+        message: u64,
+        poster: UserId,
+        reason: &str,
+        judge: UserId,
+        at_ms: i64,
+    ) -> Result<RejectOutcome, IqStoreError> {
+        let reason = checked_reason(reason)?;
+        let message = to_integer(message.into())?;
+        let poster = to_integer(poster.get().into())?;
+        let judge = to_integer(judge.get().into())?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let awarded: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM iq_submissions WHERE message_id = ? AND awarded_by IS NOT NULL",
         )
+        .bind(message)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if awarded.is_some() {
+            transaction.rollback().await?;
+            return Ok(RejectOutcome::AlreadyAwarded);
+        }
+        let inserted = sqlx::query(
+            "INSERT INTO iq_rejections (message_id, competition_id, user_id, reason, rejected_by, rejected_at_ms) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (message_id) DO NOTHING",
+        )
+        .bind(message)
+        .bind(competition)
+        .bind(poster)
+        .bind(reason)
+        .bind(judge)
+        .bind(at_ms)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(match inserted.rows_affected() {
+            0 => RejectOutcome::AlreadyRejected,
+            _ => RejectOutcome::Rejected,
+        })
+    }
+
+    pub async fn scores(&self, id: i64) -> Result<Vec<Score>, IqStoreError> {
+        let rows: Vec<(i64, i64)> = sqlx::query_as(concat!(
+            "SELECT user_id, SUM(points) FROM (",
+            player_points!(),
+            ") GROUP BY user_id ORDER BY user_id"
+        ))
+        .bind(id)
         .bind(id)
         .bind(id)
         .fetch_all(&self.pool)
@@ -814,8 +1045,8 @@ impl IqStore {
 
     async fn with_config(&self, row: CompetitionRow) -> Result<Competition, IqStoreError> {
         let id = row.id;
-        let criteria: Vec<(String, String, i64)> = sqlx::query_as(
-            "SELECT name, description, points FROM iq_criteria WHERE competition_id = ? ORDER BY position",
+        let criteria: Vec<(String, String, i64, String)> = sqlx::query_as(
+            "SELECT name, description, points, kind FROM iq_criteria WHERE competition_id = ? ORDER BY position",
         )
         .bind(id)
         .fetch_all(&self.pool)
@@ -836,6 +1067,17 @@ impl IqStore {
     }
 }
 
+fn checked_reason(reason: &str) -> Result<&str, IqStoreError> {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(IqStoreError::ReasonMissing);
+    }
+    if reason.chars().count() > REASON_LIMIT {
+        return Err(IqStoreError::ReasonTooLong);
+    }
+    Ok(reason)
+}
+
 async fn insert_config(
     transaction: &mut Transaction<'_, Sqlite>,
     id: i64,
@@ -845,13 +1087,14 @@ async fn insert_config(
 ) -> Result<(), IqStoreError> {
     for (position, criterion) in (0_i64..).zip(criteria) {
         sqlx::query(
-            "INSERT INTO iq_criteria (competition_id, position, name, description, points) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO iq_criteria (competition_id, position, name, description, points, kind) VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(id)
         .bind(position)
         .bind(&criterion.name)
         .bind(&criterion.description)
         .bind(i64::from(criterion.points))
+        .bind(kind_text(criterion.kind))
         .execute(&mut **transaction)
         .await?;
     }
@@ -901,9 +1144,17 @@ fn expected_columns(expected: &[ColumnSpec]) -> Vec<Column> {
         .collect()
 }
 
+fn without_kind(columns: &[Column]) -> Vec<Column> {
+    columns
+        .iter()
+        .filter(|column| column.name != KIND_COLUMN)
+        .cloned()
+        .collect()
+}
+
 fn to_competition(
     row: CompetitionRow,
-    criteria: Vec<(String, String, i64)>,
+    criteria: Vec<(String, String, i64, String)>,
     roles: Vec<i64>,
     judges: Vec<i64>,
 ) -> Result<Competition, IqStoreError> {
@@ -927,11 +1178,12 @@ fn to_competition(
         submissions: ChannelId::new(to_unsigned(row.submissions)?),
         criteria: criteria
             .into_iter()
-            .map(|(name, description, points)| {
+            .map(|(name, description, points, kind)| {
                 Ok(Criterion {
                     name,
                     description,
                     points: to_points(points)?,
+                    kind: parse_kind(kind)?,
                 })
             })
             .collect::<Result<_, IqStoreError>>()?,
@@ -953,6 +1205,21 @@ fn to_competition(
 
 fn parse_mark(text: String) -> Result<Mark, IqStoreError> {
     Mark::parse(&text).ok_or(IqStoreError::BadMark { value: text })
+}
+
+fn kind_text(kind: CriterionKind) -> &'static str {
+    match kind {
+        CriterionKind::Single => "single",
+        CriterionKind::Multi => "multi",
+    }
+}
+
+fn parse_kind(text: String) -> Result<CriterionKind, IqStoreError> {
+    match text.as_str() {
+        "single" => Ok(CriterionKind::Single),
+        "multi" => Ok(CriterionKind::Multi),
+        _ => Err(IqStoreError::BadCriterionKind { value: text }),
+    }
 }
 
 fn status_text(status: Status) -> &'static str {
