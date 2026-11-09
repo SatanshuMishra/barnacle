@@ -6,6 +6,7 @@ use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::iq::Criterion;
+use barnacle_bot::iq::CriterionKind;
 use barnacle_bot::iq::JudgingMarks;
 use barnacle_bot::iq::Mark;
 use barnacle_bot::iq::Score;
@@ -16,6 +17,7 @@ use barnacle_bot::iq_store::Competition;
 use barnacle_bot::iq_store::ConfigChange;
 use barnacle_bot::iq_store::CreateOutcome;
 use barnacle_bot::iq_store::IqStore;
+use barnacle_bot::iq_store::IqStoreError;
 use barnacle_bot::iq_store::NewCompetition;
 use barnacle_guess::UserId;
 use common::attendance_pool;
@@ -24,6 +26,8 @@ use sqlx::sqlite::SqlitePool;
 
 const IQ_MIGRATION: &str = "0009_iq_competition.sql";
 const MARKS_MIGRATION: &str = "0012_iq_marks_and_judge_log.sql";
+const PLAYERS_MIGRATION: &str = "0013_iq_players_and_rejections.sql";
+const PLAYERS_MIGRATION_DOWN: &str = "0013_iq_players_and_rejections.down.sql";
 const MARKS_MIGRATION_DOWN: &str = "0012_iq_marks_and_judge_log.down.sql";
 const RED_X: &str = "\u{274C}";
 const GREEN_CHECK: &str = "\u{2705}";
@@ -58,6 +62,7 @@ async fn iq_pool() -> SqlitePool {
     let pool = attendance_pool().await;
     apply(&pool, IQ_MIGRATION).await;
     apply(&pool, MARKS_MIGRATION).await;
+    apply(&pool, PLAYERS_MIGRATION).await;
     pool
 }
 
@@ -70,6 +75,7 @@ fn criterion(name: &str, description: &str, points: u32) -> Criterion {
         name: name.to_owned(),
         description: description.to_owned(),
         points,
+        kind: CriterionKind::Single,
     }
 }
 
@@ -151,7 +157,7 @@ async fn running(store: &IqStore) -> Competition {
 
 async fn kraken_posted(store: &IqStore, id: i64, message: u64, user: UserId) {
     store
-        .record_submission(id, message, user, "Drunken Kraken", 5, POSTED_AT_MS)
+        .record_submission(id, message, user, &[], "Drunken Kraken", 5, POSTED_AT_MS)
         .await
         .unwrap();
 }
@@ -172,7 +178,7 @@ async fn the_first_judge_reaction_awards_the_points() {
     assert_eq!(
         store.award(900, JUDGE, AWARDED_AT_MS).await.unwrap(),
         AwardOutcome::Awarded {
-            user: PLAYER,
+            players: vec![PLAYER],
             points: 5,
         }
     );
@@ -206,13 +212,13 @@ async fn a_judge_may_award_their_own_post() {
     let store = store().await;
     let november = running(&store).await;
     store
-        .record_submission(november.id, 901, JUDGE, "Double Down", 2, POSTED_AT_MS)
+        .record_submission(november.id, 901, JUDGE, &[], "Double Down", 2, POSTED_AT_MS)
         .await
         .unwrap();
     assert_eq!(
         store.award(901, JUDGE, AWARDED_AT_MS).await.unwrap(),
         AwardOutcome::Awarded {
-            user: JUDGE,
+            players: vec![JUDGE],
             points: 2,
         }
     );
@@ -260,6 +266,7 @@ async fn recording_a_submission_twice_keeps_the_first() {
             november.id,
             903,
             THIRD_PLAYER,
+            &[],
             "Double Down",
             2,
             POSTED_AT_MS,
@@ -271,6 +278,7 @@ async fn recording_a_submission_twice_keeps_the_first() {
             november.id,
             903,
             THIRD_PLAYER,
+            &[],
             "Drunken Kraken",
             5,
             POSTED_AT_MS + 1_000,
@@ -280,7 +288,7 @@ async fn recording_a_submission_twice_keeps_the_first() {
     assert_eq!(
         store.award(903, JUDGE, AWARDED_AT_MS).await.unwrap(),
         AwardOutcome::Awarded {
-            user: THIRD_PLAYER,
+            players: vec![THIRD_PLAYER],
             points: 2,
         }
     );
@@ -309,7 +317,7 @@ async fn points_are_kept_as_they_were_when_posted() {
     assert_eq!(
         store.award(900, JUDGE, AWARDED_AT_MS).await.unwrap(),
         AwardOutcome::Awarded {
-            user: PLAYER,
+            players: vec![PLAYER],
             points: 5,
         }
     );
@@ -496,6 +504,7 @@ async fn rolling_back_the_marks_keeps_each_standard_judging_emoji() {
         let made = created(&store, &numbered(number)).await;
         store.archive(made.id).await.unwrap();
     }
+    apply(&pool, PLAYERS_MIGRATION_DOWN).await;
     apply(&pool, MARKS_MIGRATION_DOWN).await;
     let kept: Vec<(String, String)> =
         sqlx::query_as("SELECT name, judging_reaction FROM iq_competitions ORDER BY id")
@@ -512,6 +521,7 @@ async fn rolling_back_the_marks_keeps_each_standard_judging_emoji() {
         ]
     );
     apply(&pool, MARKS_MIGRATION).await;
+    apply(&pool, PLAYERS_MIGRATION).await;
     let store = IqStore::with_pool(pool).await.unwrap();
     let awarded: Vec<(String, Mark)> = store
         .templates(GUILD)
@@ -594,4 +604,77 @@ async fn an_awarded_post_keeps_the_criterion_it_was_recorded_with() {
         Some("Drunken Kraken".to_owned())
     );
     assert_eq!(store.criterion(902).await.unwrap(), None);
+}
+
+fn multi_player(new: NewCompetition) -> NewCompetition {
+    NewCompetition {
+        criteria: vec![Criterion {
+            name: "Leaderboard Lockout".to_owned(),
+            description: String::new(),
+            points: 8,
+            kind: CriterionKind::Multi,
+        }],
+        ..new
+    }
+}
+
+#[tokio::test]
+async fn a_database_before_0013_is_refused_as_before_players() {
+    let pool = attendance_pool().await;
+    apply(&pool, IQ_MIGRATION).await;
+    apply(&pool, MARKS_MIGRATION).await;
+    assert!(matches!(
+        IqStore::with_pool(pool).await,
+        Err(IqStoreError::BeforePlayers)
+    ));
+}
+
+#[tokio::test]
+async fn a_database_before_0012_is_still_refused_as_before_marks() {
+    let pool = attendance_pool().await;
+    apply(&pool, IQ_MIGRATION).await;
+    assert!(matches!(
+        IqStore::with_pool(pool).await,
+        Err(IqStoreError::BeforeMarks)
+    ));
+}
+
+#[tokio::test]
+async fn rolling_back_the_players_keeps_each_criterion_as_single_player() {
+    let pool = iq_pool().await;
+    let store = IqStore::with_pool(pool.clone()).await.unwrap();
+    let made = created(
+        &store,
+        &multi_player(competition("November IQ", CREATED_AT_MS)),
+    )
+    .await;
+    assert_eq!(made.criteria[0].kind, CriterionKind::Multi);
+    apply(&pool, PLAYERS_MIGRATION_DOWN).await;
+    assert!(matches!(
+        IqStore::with_pool(pool.clone()).await,
+        Err(IqStoreError::BeforePlayers)
+    ));
+    apply(&pool, PLAYERS_MIGRATION).await;
+    let store = IqStore::with_pool(pool).await.unwrap();
+    let kept = store.competition(made.id).await.unwrap().unwrap();
+    assert_eq!(kept.criteria.len(), 1);
+    assert_eq!(kept.criteria[0].name, "Leaderboard Lockout");
+    assert_eq!(kept.criteria[0].kind, CriterionKind::Single);
+}
+
+#[tokio::test]
+async fn a_stored_criterion_type_that_is_not_known_is_refused() {
+    let pool = iq_pool().await;
+    let store = IqStore::with_pool(pool.clone()).await.unwrap();
+    let made = created(&store, &competition("November IQ", CREATED_AT_MS)).await;
+    sqlx::raw_sql(
+        "PRAGMA ignore_check_constraints = ON; UPDATE iq_criteria SET kind = 'team' WHERE position = 0; PRAGMA ignore_check_constraints = OFF;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(matches!(
+        store.competition(made.id).await,
+        Err(IqStoreError::BadCriterionKind { value }) if value == "team"
+    ));
 }

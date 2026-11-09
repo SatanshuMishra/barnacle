@@ -27,6 +27,9 @@ const MEMBER_ZONES: &str = include_str!("../../../migrations/0011_member_zones.s
 const IQ_MARKS: &str = include_str!("../../../migrations/0012_iq_marks_and_judge_log.sql");
 const IQ_MARKS_DOWN: &str =
     include_str!("../../../migrations/0012_iq_marks_and_judge_log.down.sql");
+const IQ_PLAYERS: &str = include_str!("../../../migrations/0013_iq_players_and_rejections.sql");
+const IQ_PLAYERS_DOWN: &str =
+    include_str!("../../../migrations/0013_iq_players_and_rejections.down.sql");
 
 struct Layout {
     _dir: tempfile::TempDir,
@@ -509,6 +512,8 @@ async fn a_database_rolled_back_from_0009_is_told_to_apply_it_again() {
             ORGANISER_ROLES,
             MEMBER_ZONES,
             IQ_MARKS,
+            IQ_PLAYERS,
+            IQ_PLAYERS_DOWN,
             IQ_MARKS_DOWN,
             IQ_COMPETITION_DOWN,
         ])
@@ -519,7 +524,7 @@ async fn a_database_rolled_back_from_0009_is_told_to_apply_it_again() {
         .err()
         .unwrap();
     assert!(matches!(error, StartupError::Iq { .. }));
-    migrated(&layout, &[IQ_COMPETITION, IQ_MARKS], "").await;
+    migrated(&layout, &[IQ_COMPETITION, IQ_MARKS, IQ_PLAYERS], "").await;
     assert!(startup::open_stores(&layout.config.database).await.is_ok());
 }
 
@@ -607,7 +612,7 @@ async fn a_database_before_0012_is_told_to_apply_it() {
 }
 
 #[tokio::test]
-async fn a_database_at_0012_opens() {
+async fn a_database_at_0012_is_told_to_apply_0013() {
     let layout = layout(
         &yamato_catalog(),
         &["PJSB018", "PJSB019"],
@@ -624,6 +629,39 @@ async fn a_database_at_0012_opens() {
         ])
         .collect();
     migrated(&layout, &through_0012, "").await;
+    let error = startup::open_stores(&layout.config.database)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, StartupError::IqPlayers { .. }));
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "the IQ multi-player tables are missing from {path}; back the file up, then add them with `sqlite3 {path} < migrations/0013_iq_players_and_rejections.sql`",
+            path = layout.config.database.display()
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_database_at_0013_opens() {
+    let layout = layout(
+        &yamato_catalog(),
+        &["PJSB018", "PJSB019"],
+        &curation_text(""),
+    );
+    let through_0013: Vec<&str> = THROUGH_0007
+        .into_iter()
+        .chain([
+            common::CB_EVENTS,
+            IQ_COMPETITION,
+            ORGANISER_ROLES,
+            MEMBER_ZONES,
+            IQ_MARKS,
+            IQ_PLAYERS,
+        ])
+        .collect();
+    migrated(&layout, &through_0013, "").await;
     assert!(startup::open_stores(&layout.config.database).await.is_ok());
 }
 
@@ -642,6 +680,7 @@ async fn a_database_rolled_back_from_0010_is_told_to_apply_it_again() {
             ORGANISER_ROLES,
             MEMBER_ZONES,
             IQ_MARKS,
+            IQ_PLAYERS,
             ORGANISER_ROLES_DOWN,
         ])
         .collect();

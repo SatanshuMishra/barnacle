@@ -351,28 +351,18 @@ fn the_commands_outside_events_keep_their_options() {
     assert_eq!(
         names(&commands),
         [
-            "guess",
-            "guess-series",
-            "ship",
-            "profile",
-            "leaderboard",
-            "about",
-            "voice",
-            "updates",
-            "announce",
-            "iq",
-            "barnacle"
+            "guess", "ship", "about", "voice", "updates", "iq", "barnacle"
         ]
     );
     let expected: Vec<(String, Vec<String>)> = [
-        ("guess", &["min_tier", "max_tier", "historical"][..]),
+        ("guess start", &["min_tier", "max_tier", "historical"][..]),
         (
-            "guess-series",
+            "guess series",
             &["min_tier", "max_tier", "historical", "rounds"],
         ),
+        ("guess leaderboard", &["sort", "limit"]),
+        ("guess profile", &["user"]),
         ("ship info", &["ship"]),
-        ("profile", &["user"]),
-        ("leaderboard", &["sort", "limit"]),
         ("about", &[]),
         ("voice hub create", &["room_name", "name", "category"]),
         (
@@ -382,7 +372,7 @@ fn the_commands_outside_events_keep_their_options() {
         ("voice hub remove", &["hub"]),
         ("voice hub list", &[]),
         ("updates setup", &["channel", "role"]),
-        ("announce", &[]),
+        ("updates announce", &[]),
         ("iq start", &["time_zone"]),
         ("iq edit", &[]),
         ("iq stop", &[]),
@@ -390,6 +380,7 @@ fn the_commands_outside_events_keep_their_options() {
         ("iq cleanup", &[]),
         ("iq judges", &[]),
         ("iq points", &["member", "points", "reason"]),
+        ("iq reject", &["message_id", "reason"]),
         ("iq leaderboard", &[]),
         ("barnacle access", &[]),
     ]
@@ -598,11 +589,18 @@ fn only_a_first_post_asks_discord_to_ping_everyone() {
 
 #[test]
 fn every_server_is_sent_guess_series_with_its_rounds_bounds() {
-    let commands = command_list(false);
-    let series = commands
-        .iter()
-        .find(|command| command.name == "guess-series")
-        .expect("guess-series is registered");
+    let series_of = |commands: Vec<poise::Command<Data, Error>>| {
+        commands
+            .into_iter()
+            .find(|command| command.name == "guess")
+            .and_then(|guess| {
+                guess
+                    .subcommands
+                    .into_iter()
+                    .find(|command| command.name == "series")
+            })
+    };
+    let series = series_of(command_list(false)).expect("guess series is registered");
     assert_eq!(
         series
             .parameters
@@ -621,23 +619,21 @@ fn every_server_is_sent_guess_series_with_its_rounds_bounds() {
     assert_eq!(rounds["min_value"], 2.0);
     assert_eq!(rounds["max_value"], 20.0);
     assert_eq!(rounds["required"], false);
-    assert!(
-        names(&command_list(true))
-            .iter()
-            .any(|name| name == "guess-series")
-    );
+    assert!(series_of(command_list(true)).is_some());
 }
 
 #[test]
 fn announce_is_owner_only_and_updates_setup_is_for_organisers() {
     let commands = command_list(false);
-    let named = |name: &str| {
-        commands
-            .iter()
-            .find(|command| command.name == name)
-            .unwrap_or_else(|| panic!("{name} is registered"))
-    };
-    let announce = named("announce");
+    let updates = commands
+        .iter()
+        .find(|command| command.name == "updates")
+        .expect("updates is registered");
+    let announce = updates
+        .subcommands
+        .iter()
+        .find(|command| command.name == "announce")
+        .expect("updates announce is registered");
     assert!(announce.owners_only);
     assert!(announce.guild_only);
     assert_eq!(
@@ -645,7 +641,6 @@ fn announce_is_owner_only_and_updates_setup_is_for_organisers() {
         serenity::Permissions::empty()
     );
     assert_eq!(announce.checks.len(), 1);
-    let updates = named("updates");
     assert!(updates.guild_only);
     assert!(updates.subcommand_required);
     assert_eq!(
@@ -655,7 +650,7 @@ fn announce_is_owner_only_and_updates_setup_is_for_organisers() {
     assert_eq!(updates.required_permissions, serenity::Permissions::empty());
     assert_eq!(updates.checks.len(), 1);
     assert_eq!(updates.subcommands[0].checks.len(), 1);
-    assert_eq!(names(&updates.subcommands), ["setup"]);
+    assert_eq!(names(&updates.subcommands), ["setup", "announce"]);
     assert_eq!(
         updates.subcommands[0]
             .parameters

@@ -3,6 +3,7 @@ use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::iq::Criterion;
+use barnacle_bot::iq::CriterionKind;
 use barnacle_bot::iq::JudgingMarks;
 use barnacle_bot::iq::Mark;
 use barnacle_bot::iq::Status;
@@ -53,6 +54,7 @@ fn criterion(name: &str, description: &str, points: u32) -> Criterion {
         name: name.to_owned(),
         description: description.to_owned(),
         points,
+        kind: CriterionKind::Single,
     }
 }
 
@@ -486,7 +488,7 @@ fn the_rules_step_numbers_each_rule_and_offers_it_in_the_menu() {
     let view = with_october_rules(at_rules()).panel(PANEL, NOW, &passing());
     assert!(
         view.content
-            .contains("1. Post your own battles only.\n2. One post per battle."),
+            .contains("**1.** Post your own battles only.\n**2.** One post per battle."),
         "{}",
         view.content
     );
@@ -597,4 +599,45 @@ fn the_roles_menu_keeps_picked_roles_when_the_server_has_more_than_it_shows() {
     assert!(options.contains(&(RoleId::new(139), "Role 39".to_owned())));
     assert!(options.contains(&(RoleId::new(4242), "Deleted role".to_owned())));
     assert_eq!(options[0], (RoleId::new(100), "Role 0".to_owned()));
+}
+
+fn kind_defaults(draft: &SetupDraft) -> Vec<String> {
+    component(
+        &draft.panel(PANEL, NOW, &passing()),
+        IqPanelPart::CriterionKind,
+    )["options"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter(|option| option["default"] == true)
+        .filter_map(|option| option["value"].as_str().map(str::to_owned))
+        .collect()
+}
+
+#[test]
+fn editing_a_multi_player_criterion_keeps_it_multi_player() {
+    let draft = at_criteria()
+        .with_kind("multi")
+        .unwrap()
+        .with_criterion("Leaderboard Lockout", "", "8", None)
+        .unwrap()
+        .with_picked_criterion(0)
+        .unwrap();
+    assert_eq!(kind_defaults(&draft), ["multi"]);
+    let edited = draft
+        .with_criterion("Leaderboard Lockout", "Hold first place.", "9", Some(0))
+        .unwrap();
+    assert_eq!(edited.criteria()[0].kind, CriterionKind::Multi);
+    assert_eq!(edited.criteria()[0].points, 9);
+    assert_eq!(edited.pending_kind(), CriterionKind::Single);
+    assert_eq!(kind_defaults(&edited), ["single"]);
+}
+
+#[test]
+fn the_kind_menu_shows_the_pending_type_when_nothing_is_picked() {
+    let draft = with_criteria(at_criteria(), 1).with_kind("multi").unwrap();
+    assert_eq!(draft.criteria()[0].kind, CriterionKind::Single);
+    assert_eq!(draft.pending_kind(), CriterionKind::Multi);
+    assert_eq!(kind_defaults(&draft), ["multi"]);
 }

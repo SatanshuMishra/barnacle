@@ -10,7 +10,9 @@ use barnacle_bot::iq::CleanupRefusal;
 use barnacle_bot::iq::CompleteRefusal;
 use barnacle_bot::iq::Completion;
 use barnacle_bot::iq::Criterion;
+use barnacle_bot::iq::CriterionKind;
 use barnacle_bot::iq::Judged;
+use barnacle_bot::iq::Post;
 use barnacle_bot::iq::Problem;
 use barnacle_bot::iq::Score;
 use barnacle_bot::iq::StartChoice;
@@ -40,6 +42,7 @@ fn criterion(name: &str, points: u32) -> Criterion {
         name: name.to_owned(),
         description: String::new(),
         points,
+        kind: CriterionKind::Single,
     }
 }
 
@@ -57,8 +60,17 @@ fn two_images() -> Vec<Attachment> {
     vec![attachment("image/png"), attachment("image/jpeg")]
 }
 
+fn post<'a>(text: &'a str, attachments: &'a [Attachment]) -> Post<'a> {
+    Post {
+        text,
+        attachments,
+        author: REQUESTER,
+        bots: &[],
+    }
+}
+
 fn check(text: &str, attachments: &[Attachment]) -> Checked {
-    check_submission(text, attachments, &criteria())
+    check_submission(&post(text, attachments), &criteria())
 }
 
 fn player(number: u64) -> UserId {
@@ -107,6 +119,7 @@ fn a_name_in_any_capitals_with_two_images_is_valid() {
         Checked::Valid {
             criterion: "Drunken Kraken".to_owned(),
             points: 5,
+            partners: vec![],
         }
     );
 }
@@ -204,7 +217,7 @@ fn extra_words_around_the_name_are_an_unknown_name() {
 fn a_long_unknown_text_is_cut_in_the_problem() {
     let tied_criteria = vec![criterion("Double Down", 2), criterion("Torpedo Soup", 3)];
     assert_eq!(
-        check_submission(&"a".repeat(300), &two_images(), &tied_criteria),
+        check_submission(&post(&"a".repeat(300), &two_images()), &tied_criteria),
         Checked::Invalid(vec![Problem::UnknownName {
             typed: format!("{}\u{2026}", "a".repeat(100)),
             closest: "Double Down".to_owned(),
@@ -466,4 +479,87 @@ fn rule_lines_drop_blank_lines_and_typed_list_markers() {
             "-1 point for spam.",
         ]
     );
+}
+
+fn standing(rank: usize, user: u64, points: i64) -> barnacle_bot::iq::Standing {
+    barnacle_bot::iq::Standing {
+        rank,
+        user: UserId::new(user),
+        points,
+    }
+}
+
+fn named(user: u64, name: &str) -> (UserId, String) {
+    (UserId::new(user), name.to_owned())
+}
+
+#[test]
+fn tied_players_take_separate_numbers_in_name_order_on_the_board() {
+    let standings = [standing(1, 1, 10), standing(1, 2, 10), standing(3, 3, 4)];
+    let names = [named(1, "zed"), named(2, "Ana"), named(3, "Mo")];
+    assert_eq!(
+        barnacle_bot::iq::board_order(&standings, &names),
+        vec![standing(1, 2, 10), standing(2, 1, 10), standing(3, 3, 4)]
+    );
+}
+
+#[test]
+fn escaped_markdown_does_not_change_the_name_order() {
+    let standings = [standing(1, 1, 10), standing(1, 2, 10)];
+    let names = [named(1, "ab"), named(2, "a\\_a")];
+    assert_eq!(
+        barnacle_bot::iq::board_order(&standings, &names),
+        vec![standing(1, 2, 10), standing(2, 1, 10)]
+    );
+}
+
+#[test]
+fn a_player_with_no_name_sorts_after_named_players_in_a_tie() {
+    let standings = [standing(1, 1, 10), standing(1, 2, 10)];
+    let names = [named(2, "Zed")];
+    assert_eq!(
+        barnacle_bot::iq::board_order(&standings, &names),
+        vec![standing(1, 2, 10), standing(2, 1, 10)]
+    );
+}
+
+#[test]
+fn board_numbers_leave_joint_winners_on_raw_points() {
+    let scores = [
+        Score {
+            user: UserId::new(1),
+            points: 10,
+        },
+        Score {
+            user: UserId::new(2),
+            points: 10,
+        },
+    ];
+    let standings = barnacle_bot::iq::standings(&scores);
+    let names = [named(1, "Zed"), named(2, "Ana")];
+    let shown = barnacle_bot::iq::board_order(&standings, &names);
+    assert_eq!(shown[1].rank, 2);
+    assert!(standings.iter().all(|standing| standing.rank == 1));
+}
+
+#[test]
+fn names_are_read_for_a_whole_tie_that_reaches_the_board() {
+    let standings: Vec<_> = (1..=12)
+        .map(|user| standing(1, user, 10))
+        .chain([standing(13, 13, 1)])
+        .collect();
+    let wanted = barnacle_bot::iq::players_to_name(&standings, None);
+    assert_eq!(wanted.len(), 12);
+    assert!(!wanted.contains(&UserId::new(13)));
+}
+
+#[test]
+fn names_cover_a_requester_far_down_the_board_and_one_with_no_points() {
+    let standings: Vec<_> = (1..=12)
+        .map(|user| standing(user as usize, user, 100 - user as i64))
+        .collect();
+    let far = barnacle_bot::iq::players_to_name(&standings, Some(UserId::new(12)));
+    assert!(far.contains(&UserId::new(12)));
+    let absent = barnacle_bot::iq::players_to_name(&standings, Some(UserId::new(99)));
+    assert!(absent.contains(&UserId::new(99)));
 }

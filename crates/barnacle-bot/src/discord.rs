@@ -63,6 +63,8 @@ pub use commands::event_list_reply;
 pub use commands::private_reply;
 pub use herald::DiscordHerald;
 pub use herald::announcement_message;
+pub use iq::board_embed;
+pub use iq::board_reply;
 pub use rooms::DiscordRooms;
 
 const MEMBER_LOOKUPS_AT_ONCE: usize = 5;
@@ -228,6 +230,44 @@ pub async fn run(
                         }
                     }
                 });
+                let boards = iq.clone();
+                let board_http = Arc::clone(&ctx.http);
+                tokio::spawn(async move {
+                    let mut beat = tokio::time::interval(TICK);
+                    beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        beat.tick().await;
+                        let Some(now_ms) = now_ms().and_then(|now_ms| i64::try_from(now_ms).ok())
+                        else {
+                            failure::report(
+                                "iq.tick.failed",
+                                "the clock reads before 1970, so this leaderboard beat was skipped",
+                                &Failure::internal("the clock reads before 1970"),
+                                &Scope::default(),
+                            );
+                            continue;
+                        };
+                        let printing = boards.clone();
+                        let http = Arc::clone(&board_http);
+                        let beat_result = tokio::spawn(async move {
+                            iq::print_boards(&printing, &http, now_ms).await
+                        })
+                        .await;
+                        match beat_result {
+                            Ok(()) => tracing::debug!(
+                                "event.name" = "iq.tick.completed",
+                                "event.outcome" = "success",
+                                "a leaderboard beat ran"
+                            ),
+                            Err(error) => failure::report(
+                                "iq.tick.failed",
+                                "a leaderboard beat died; the next beat will be attempted",
+                                &Failure::from_error(&error),
+                                &Scope::default(),
+                            ),
+                        }
+                    }
+                });
                 let voice = VoiceRooms::new(
                     DiscordRooms::new(Arc::clone(&ctx.http), ready.user.id),
                     voice,
@@ -288,7 +328,7 @@ pub async fn run(
                     updates,
                     drafts: Arc::new(Drafts::default()),
                     iq,
-                    iq_drafts: Arc::new(iq_setup::Drafts::default()),
+                    iq_drafts: Arc::new(iq_setup::drafts()),
                     iq_caught_up: Arc::new(crate::iq::CaughtUp::default()),
                     iq_unsettled: Arc::new(crate::iq::Unsettled::default()),
                     access,

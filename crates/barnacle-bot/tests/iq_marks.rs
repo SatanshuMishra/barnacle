@@ -7,6 +7,7 @@ use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::iq;
 use barnacle_bot::iq::Criterion;
+use barnacle_bot::iq::CriterionKind;
 use barnacle_bot::iq::JudgingMarks;
 use barnacle_bot::iq::Mark;
 use barnacle_bot::iq::MarksRefusal;
@@ -22,6 +23,7 @@ use sqlx::sqlite::SqlitePool;
 
 const IQ_MIGRATION: &str = "0009_iq_competition.sql";
 const MARKS_MIGRATION: &str = "0012_iq_marks_and_judge_log.sql";
+const PLAYERS_MIGRATION: &str = "0013_iq_players_and_rejections.sql";
 const CLI_DIRECTIVE: &str = ".bail on\n";
 const RED_X: &str = "\u{274C}";
 const TROPHY: &str = "\u{1F3C6}";
@@ -53,6 +55,7 @@ async fn marks_pool() -> SqlitePool {
     let pool = attendance_pool().await;
     apply(&pool, IQ_MIGRATION).await;
     apply(&pool, MARKS_MIGRATION).await;
+    apply(&pool, PLAYERS_MIGRATION).await;
     pool
 }
 
@@ -70,6 +73,7 @@ fn november(marks: JudgingMarks, judge_log: Option<ChannelId>) -> NewCompetition
             name: "Drunken Kraken".to_owned(),
             description: "Five kills in one battle.".to_owned(),
             points: 5,
+            kind: CriterionKind::Single,
         }],
         rules: "Post your own battles only.".to_owned(),
         roles: vec![RoleId::new(31)],
@@ -99,6 +103,7 @@ async fn with_submissions() -> (IqStore, i64) {
                 competition.id,
                 message,
                 UserId::new(user),
+                &[],
                 "Drunken Kraken",
                 5,
                 AT_MS,
@@ -228,6 +233,7 @@ async fn an_existing_competition_keeps_its_judging_emoji() {
     .await
     .unwrap();
     apply(&pool, MARKS_MIGRATION).await;
+    apply(&pool, PLAYERS_MIGRATION).await;
     let store = IqStore::with_pool(pool).await.unwrap();
     let competition = store
         .competition(id)
@@ -259,7 +265,7 @@ async fn a_deleted_post_leaves_the_rescan() {
     assert_eq!(
         store.award(11, JUDGE, AT_MS).await.unwrap(),
         AwardOutcome::Awarded {
-            user: UserId::new(31),
+            players: vec![UserId::new(31)],
             points: 5
         }
     );

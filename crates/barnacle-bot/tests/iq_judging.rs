@@ -149,7 +149,7 @@ fn the_award_line_names_judge_player_criterion_and_post() {
     assert_eq!(
         iq_text::judge_log_award(
             UserId::new(21),
-            UserId::new(31),
+            &[UserId::new(31)],
             "Drunken Kraken",
             5,
             "https://discord.com/channels/5/42/1000"

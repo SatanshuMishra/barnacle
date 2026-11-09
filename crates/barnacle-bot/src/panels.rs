@@ -25,20 +25,33 @@ struct Opened<D> {
 #[derive(Debug)]
 pub struct Drafts<D> {
     open: Mutex<HashMap<u64, Opened<D>>>,
+    lifetime_ms: Option<u64>,
 }
 
 impl<D> Default for Drafts<D> {
     fn default() -> Self {
+        Self::lasting(Some(PANEL_LIFETIME_MS))
+    }
+}
+
+impl<D> Drafts<D> {
+    pub fn without_expiry() -> Self {
+        Self::lasting(None)
+    }
+
+    fn lasting(lifetime_ms: Option<u64>) -> Self {
         Self {
             open: Mutex::new(HashMap::new()),
+            lifetime_ms,
         }
     }
 }
 
 impl<D: Owned + Clone> Drafts<D> {
     pub fn open(&self, panel: u64, draft: D, now_ms: u64) {
+        let lifetime_ms = self.lifetime_ms;
         let mut open = self.held();
-        open.retain(|_, opened| !expired(opened, now_ms));
+        open.retain(|_, opened| !expired(opened, lifetime_ms, now_ms));
         open.insert(
             panel,
             Opened {
@@ -49,12 +62,13 @@ impl<D: Owned + Clone> Drafts<D> {
     }
 
     pub fn with(&self, panel: u64, user: UserId, now_ms: u64) -> Result<D, Refusal> {
-        usable(self.held().get(&panel), user, now_ms).map(|opened| opened.draft.clone())
+        usable(self.held().get(&panel), user, self.lifetime_ms, now_ms)
+            .map(|opened| opened.draft.clone())
     }
 
     pub fn take(&self, panel: u64, user: UserId, now_ms: u64) -> Result<D, Refusal> {
         let mut open = self.held();
-        usable(open.get(&panel), user, now_ms)?;
+        usable(open.get(&panel), user, self.lifetime_ms, now_ms)?;
         open.remove(&panel)
             .map(|opened| opened.draft)
             .ok_or(Refusal::PanelUnknown)
@@ -74,18 +88,19 @@ impl<D: Owned + Clone> Drafts<D> {
 fn usable<D: Owned>(
     opened: Option<&Opened<D>>,
     user: UserId,
+    lifetime_ms: Option<u64>,
     now_ms: u64,
 ) -> Result<&Opened<D>, Refusal> {
     let opened = opened.ok_or(Refusal::PanelUnknown)?;
     if opened.draft.owner() != user {
         return Err(Refusal::PanelNotYours);
     }
-    if expired(opened, now_ms) {
+    if expired(opened, lifetime_ms, now_ms) {
         return Err(Refusal::PanelExpired);
     }
     Ok(opened)
 }
 
-fn expired<D>(opened: &Opened<D>, now_ms: u64) -> bool {
-    now_ms.saturating_sub(opened.opened_at_ms) > PANEL_LIFETIME_MS
+fn expired<D>(opened: &Opened<D>, lifetime_ms: Option<u64>, now_ms: u64) -> bool {
+    lifetime_ms.is_some_and(|lifetime_ms| now_ms.saturating_sub(opened.opened_at_ms) > lifetime_ms)
 }

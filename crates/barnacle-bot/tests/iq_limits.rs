@@ -6,6 +6,7 @@ use barnacle_bot::ids::ChannelId;
 use barnacle_bot::ids::GuildId;
 use barnacle_bot::ids::RoleId;
 use barnacle_bot::iq::Criterion;
+use barnacle_bot::iq::CriterionKind;
 use barnacle_bot::iq::JudgingMarks;
 use barnacle_bot::iq::Status;
 use barnacle_bot::iq::adjustment;
@@ -21,6 +22,7 @@ use sqlx::sqlite::SqlitePool;
 
 const IQ_MIGRATION: &str = "0009_iq_competition.sql";
 const MARKS_MIGRATION: &str = "0012_iq_marks_and_judge_log.sql";
+const PLAYERS_MIGRATION: &str = "0013_iq_players_and_rejections.sql";
 const CLI_DIRECTIVE: &str = ".bail on\n";
 const DISCORD_EPOCH_MS: i64 = 1_420_070_400_000;
 const LAST_SNOWFLAKE_SECOND: i64 = 3_619_093_655;
@@ -43,6 +45,7 @@ async fn iq_pool() -> SqlitePool {
     let pool = attendance_pool().await;
     apply(&pool, IQ_MIGRATION).await;
     apply(&pool, MARKS_MIGRATION).await;
+    apply(&pool, PLAYERS_MIGRATION).await;
     pool
 }
 
@@ -61,6 +64,7 @@ async fn stopped_competition() -> (IqStore, Competition) {
             name: "Drunken Kraken".to_owned(),
             description: "Five kills in one battle.".to_owned(),
             points: 5,
+            kind: CriterionKind::Single,
         }],
         rules: "Post your own battles only.".to_owned(),
         roles: vec![RoleId::new(31)],
