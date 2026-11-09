@@ -1,6 +1,6 @@
 # iq-leaderboard-and-judging-round-three: Guess leaderboard rename, IQ leaderboard rework, multi-player criteria, private rejections, /iq reject, 12-hour leaderboard
-Status: parked
-Updated: 2026-11-09T01:54:35.473Z
+Status: done
+Updated: 2026-11-09T01:54:36.723Z
 Next ids: c9 D4 R4 S1
 
 ## Goal
