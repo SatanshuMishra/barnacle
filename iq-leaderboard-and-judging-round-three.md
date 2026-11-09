@@ -1,6 +1,6 @@
 # iq-leaderboard-and-judging-round-three: Guess leaderboard rename, IQ leaderboard rework, multi-player criteria, private rejections, /iq reject, 12-hour leaderboard
-Status: active
-Updated: 2026-11-09T01:25:54.004Z
+Status: parked
+Updated: 2026-11-09T01:25:57.744Z
 Next ids: c9 D4 R4 S1
 
 ## Goal
@@ -24,7 +24,9 @@ The spec is handed off and `pipeline drive` is building it unattended on feat/iq
 
 ## Next step
 
-The drive entered awaiting-merge: pull requests are ready to merge; it resumes on pipeline drive event --name merged.
+The owner merges pull request 62 and says the MSP pull requests merged; then run pipeline drive event with --name merged to start Integration.
+
+Needs: R1, R2.
 
 ## Decisions in force
 
