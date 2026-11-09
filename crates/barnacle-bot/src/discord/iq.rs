@@ -2425,14 +2425,31 @@ async fn judge_message(
             content_type: attachment.content_type.clone(),
         })
         .collect();
-    match iq::check_submission(&message.content, &attachments, &competition.criteria) {
-        Checked::Valid { criterion, points } => {
+    let bots: Vec<UserId> = message
+        .mentions
+        .iter()
+        .filter(|mentioned| mentioned.bot)
+        .map(|mentioned| UserId::new(mentioned.id.get()))
+        .collect();
+    let post = iq::Post {
+        text: &message.content,
+        attachments: &attachments,
+        author: UserId::new(message.author.id.get()),
+        bots: &bots,
+    };
+    match iq::check_submission(&post, &competition.criteria) {
+        Checked::Valid {
+            criterion,
+            points,
+            partners,
+        } => {
             let recorded = data
                 .iq
                 .record_submission(
                     competition.id,
                     message.id.get(),
-                    UserId::new(message.author.id.get()),
+                    post.author,
+                    &partners,
                     &criterion,
                     points,
                     i64::try_from(sent_ms).unwrap_or(i64::MAX),
@@ -2640,7 +2657,7 @@ async fn award(
         return;
     };
     match data.iq.award(message, judge, now_ms).await {
-        Ok(AwardOutcome::Awarded { user, points }) => {
+        Ok(AwardOutcome::Awarded { players, points }) => {
             failure::record(
                 "iq.award.given",
                 "a judge's reaction awarded a submission's points",
@@ -2651,7 +2668,7 @@ async fn award(
                 serenity_context,
                 competition,
                 message,
-                (judge, user, points),
+                (judge, &players, points),
                 scope,
             )
             .await;
@@ -2688,7 +2705,7 @@ async fn awarded(
     serenity_context: &serenity::Context,
     competition: &Competition,
     message: u64,
-    (judge, player, points): (UserId, UserId, u32),
+    (judge, players, points): (UserId, &[UserId], u32),
     scope: &Scope,
 ) {
     let http = &serenity_context.http;
@@ -2726,7 +2743,7 @@ async fn awarded(
         competition.guild.get(),
         competition.submissions.get()
     );
-    let line = iq_text::judge_log_award(judge, player, &criterion, i64::from(points), &link);
+    let line = iq_text::judge_log_award(judge, players, &criterion, i64::from(points), &link);
     log_judging(data, serenity_context, competition, &line, scope).await;
 }
 

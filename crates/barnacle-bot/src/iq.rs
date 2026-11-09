@@ -16,6 +16,8 @@ use crate::schedule::Zone;
 use crate::wiring::same_name;
 
 const SCREENSHOTS: usize = 2;
+const MOST_PARTNERS: usize = 2;
+const PING_OPEN: &str = "<@";
 const TYPED_LIMIT: usize = 100;
 const ELLIPSIS: char = '\u{2026}';
 const BOARD_LINES: usize = 10;
@@ -63,12 +65,27 @@ pub enum Problem {
     UnknownName { typed: String, closest: String },
     ScreenshotCount(usize),
     NotAnImage,
+    NoPartners { criterion: String },
+    TooManyPlayers { criterion: String },
+    SinglePlayerPing { criterion: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Checked {
-    Valid { criterion: String, points: u32 },
+    Valid {
+        criterion: String,
+        points: u32,
+        partners: Vec<UserId>,
+    },
     Invalid(Vec<Problem>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Post<'a> {
+    pub text: &'a str,
+    pub attachments: &'a [Attachment],
+    pub author: UserId,
+    pub bots: &'a [UserId],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -395,8 +412,11 @@ impl CaughtUp {
     }
 }
 
-pub fn check_submission(text: &str, attachments: &[Attachment], criteria: &[Criterion]) -> Checked {
-    let typed = text.trim();
+pub fn check_submission(post: &Post, criteria: &[Criterion]) -> Checked {
+    let (typed, pinged) = split_pings(post.text);
+    let typed = typed.as_str();
+    let partners = partners_of(&pinged, post.author, post.bots);
+    let attachments = post.attachments;
     let matched = criteria
         .iter()
         .find(|criterion| same_name(&criterion.name, typed));
@@ -410,13 +430,14 @@ pub fn check_submission(text: &str, attachments: &[Attachment], criteria: &[Crit
             closest: closest.name.clone(),
         }),
     };
+    let player_problem = matched.and_then(|criterion| players_problem(criterion, &partners));
     let images = attachments
         .iter()
         .filter(|attachment| attachment.is_image())
         .count();
     let count_problem = (images != SCREENSHOTS).then_some(Problem::ScreenshotCount(images));
     let type_problem = (images != attachments.len()).then_some(Problem::NotAnImage);
-    let problems: Vec<Problem> = [name_problem, count_problem, type_problem]
+    let problems: Vec<Problem> = [name_problem, player_problem, count_problem, type_problem]
         .into_iter()
         .flatten()
         .collect();
@@ -424,9 +445,70 @@ pub fn check_submission(text: &str, attachments: &[Attachment], criteria: &[Crit
         (Some(criterion), true) => Checked::Valid {
             criterion: criterion.name.clone(),
             points: criterion.points,
+            partners,
         },
         _ => Checked::Invalid(problems),
     }
+}
+
+fn players_problem(criterion: &Criterion, partners: &[UserId]) -> Option<Problem> {
+    let named = || criterion.name.clone();
+    match (criterion.kind, partners.len()) {
+        (CriterionKind::Single, 0) => None,
+        (CriterionKind::Single, _) => Some(Problem::SinglePlayerPing { criterion: named() }),
+        (CriterionKind::Multi, 0) => Some(Problem::NoPartners { criterion: named() }),
+        (CriterionKind::Multi, count) if count > MOST_PARTNERS => {
+            Some(Problem::TooManyPlayers { criterion: named() })
+        }
+        (CriterionKind::Multi, _) => None,
+    }
+}
+
+fn partners_of(pinged: &[UserId], author: UserId, bots: &[UserId]) -> Vec<UserId> {
+    pinged
+        .iter()
+        .enumerate()
+        .filter(|(position, user)| {
+            **user != author && !bots.contains(user) && !pinged[..*position].contains(user)
+        })
+        .map(|(_, user)| *user)
+        .collect()
+}
+
+fn split_pings(text: &str) -> (String, Vec<UserId>) {
+    let (rest, pinged) = strip_pings(text, String::new(), Vec::new());
+    let name = match pinged.is_empty() {
+        true => text.trim().to_owned(),
+        false => rest.split_whitespace().collect::<Vec<_>>().join(" "),
+    };
+    (name, pinged)
+}
+
+fn strip_pings(text: &str, kept: String, pinged: Vec<UserId>) -> (String, Vec<UserId>) {
+    let Some(start) = text.find(PING_OPEN) else {
+        return (kept + text, pinged);
+    };
+    let after = &text[start + PING_OPEN.len()..];
+    match ping_at(after) {
+        Some((user, length)) => strip_pings(
+            &after[length..],
+            kept + &text[..start] + " ",
+            pinged.into_iter().chain([user]).collect(),
+        ),
+        None => strip_pings(after, kept + &text[..start + PING_OPEN.len()], pinged),
+    }
+}
+
+fn ping_at(after: &str) -> Option<(UserId, usize)> {
+    let bang = usize::from(after.starts_with('!'));
+    let digits = after[bang..]
+        .find(|c: char| !c.is_ascii_digit())
+        .filter(|end| after[bang + end..].starts_with('>'))?;
+    let raw = &after[bang..bang + digits];
+    raw.parse::<u64>()
+        .ok()
+        .filter(|id| *id > 0 && id.to_string() == raw)
+        .map(|id| (UserId::new(id), bang + digits + 1))
 }
 
 fn cut(typed: &str) -> String {

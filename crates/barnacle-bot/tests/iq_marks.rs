@@ -103,6 +103,7 @@ async fn with_submissions() -> (IqStore, i64) {
                 competition.id,
                 message,
                 UserId::new(user),
+                &[],
                 "Drunken Kraken",
                 5,
                 AT_MS,
@@ -264,7 +265,7 @@ async fn a_deleted_post_leaves_the_rescan() {
     assert_eq!(
         store.award(11, JUDGE, AT_MS).await.unwrap(),
         AwardOutcome::Awarded {
-            user: UserId::new(31),
+            players: vec![UserId::new(31)],
             points: 5
         }
     );

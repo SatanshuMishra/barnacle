@@ -140,7 +140,7 @@ async fn a_removal_down_to_zero_is_allowed() {
 async fn awarded_points_count_toward_the_total() {
     let (store, id) = running_competition().await;
     let recorded = store
-        .record_submission(id, 1000, PLAYER, "Drunken Kraken", 5, AT_MS)
+        .record_submission(id, 1000, PLAYER, &[], "Drunken Kraken", 5, AT_MS)
         .await
         .unwrap();
     assert!(recorded);

@@ -28,6 +28,12 @@ const DISCORD_EPOCH_MS: i64 = 1_420_070_400_000;
 const SNOWFLAKE_TIME_SHIFT: u32 = 22;
 const SNOWFLAKE_TIME_LIMIT: u64 = 1 << 41;
 const TEMPLATE_LIMIT: i64 = 10;
+
+macro_rules! player_points {
+    () => {
+        "SELECT user_id, points FROM iq_submissions WHERE competition_id = ? AND awarded_by IS NOT NULL UNION ALL SELECT p.user_id, s.points FROM iq_submission_partners p JOIN iq_submissions s ON s.message_id = p.message_id WHERE s.competition_id = ? AND s.awarded_by IS NOT NULL UNION ALL SELECT user_id, points FROM iq_adjustments WHERE competition_id = ?"
+    };
+}
 pub const REASON_LIMIT: usize = 200;
 
 const COMPETITIONS: &str = "iq_competitions";
@@ -340,9 +346,9 @@ pub enum AdjustOutcome {
     BelowZero { total: i64 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AwardOutcome {
-    Awarded { user: UserId, points: u32 },
+    Awarded { players: Vec<UserId>, points: u32 },
     AlreadyAwarded,
     NotASubmission,
     Closed,
@@ -644,27 +650,48 @@ impl IqStore {
         rows.into_iter().map(to_unsigned).collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_submission(
         &self,
         id: i64,
         message: u64,
         user: UserId,
+        partners: &[UserId],
         criterion: &str,
         points: u32,
         at_ms: i64,
     ) -> Result<bool, IqStoreError> {
+        let message = to_integer(message.into())?;
+        let partners = partners
+            .iter()
+            .map(|partner| to_integer(partner.get().into()))
+            .collect::<Result<Vec<i64>, IqStoreError>>()?;
+        let mut transaction = self.pool.begin().await?;
         let recorded = sqlx::query(
             "INSERT INTO iq_submissions (message_id, competition_id, user_id, criterion, points, posted_at_ms, awarded_by, awarded_at_ms) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL) ON CONFLICT (message_id) DO NOTHING",
         )
-        .bind(to_integer(message.into())?)
+        .bind(message)
         .bind(id)
         .bind(to_integer(user.get().into())?)
         .bind(criterion)
         .bind(i64::from(points))
         .bind(at_ms)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
-        Ok(recorded.rows_affected() == 1)
+        let inserted = recorded.rows_affected() == 1;
+        if inserted {
+            for partner in partners {
+                sqlx::query(
+                    "INSERT INTO iq_submission_partners (message_id, user_id) VALUES (?, ?) ON CONFLICT (message_id, user_id) DO NOTHING",
+                )
+                .bind(message)
+                .bind(partner)
+                .execute(&mut *transaction)
+                .await?;
+            }
+        }
+        transaction.commit().await?;
+        Ok(inserted)
     }
 
     pub async fn award(
@@ -674,20 +701,33 @@ impl IqStore {
         at_ms: i64,
     ) -> Result<AwardOutcome, IqStoreError> {
         let message = to_integer(message.into())?;
+        let mut transaction = self.pool.begin().await?;
         let awarded: Option<(i64, i64)> = sqlx::query_as(
             "UPDATE iq_submissions SET awarded_by = ?, awarded_at_ms = ? WHERE message_id = ? AND awarded_by IS NULL AND competition_id IN (SELECT id FROM iq_competitions WHERE status IN ('running', 'stopped')) RETURNING user_id, points",
         )
         .bind(to_integer(judge.get().into())?)
         .bind(at_ms)
         .bind(message)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *transaction)
         .await?;
         if let Some((user, points)) = awarded {
+            let partners: Vec<i64> = sqlx::query_scalar(
+                "SELECT user_id FROM iq_submission_partners WHERE message_id = ? ORDER BY rowid",
+            )
+            .bind(message)
+            .fetch_all(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+            let players = std::iter::once(user)
+                .chain(partners)
+                .map(to_user)
+                .collect::<Result<Vec<UserId>, IqStoreError>>()?;
             return Ok(AwardOutcome::Awarded {
-                user: to_user(user)?,
+                players,
                 points: to_points(points)?,
             });
         }
+        transaction.rollback().await?;
         let found: Option<String> = sqlx::query_scalar(
             "SELECT c.status FROM iq_submissions s JOIN iq_competitions c ON c.id = s.competition_id WHERE s.message_id = ?",
         )
@@ -735,13 +775,23 @@ impl IqStore {
     }
 
     pub async fn forget(&self, competition: i64, message: u64) -> Result<(), IqStoreError> {
+        let message = to_integer(message.into())?;
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query(
+            "DELETE FROM iq_submission_partners WHERE message_id IN (SELECT message_id FROM iq_submissions WHERE competition_id = ? AND message_id = ? AND awarded_by IS NULL)",
+        )
+        .bind(competition)
+        .bind(message)
+        .execute(&mut *transaction)
+        .await?;
         sqlx::query(
             "DELETE FROM iq_submissions WHERE competition_id = ? AND message_id = ? AND awarded_by IS NULL",
         )
         .bind(competition)
-        .bind(to_integer(message.into())?)
-        .execute(&self.pool)
+        .bind(message)
+        .execute(&mut *transaction)
         .await?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -765,11 +815,13 @@ impl IqStore {
         let user = to_integer(user.get().into())?;
         let judge = to_integer(judge.get().into())?;
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let current: i64 = sqlx::query_scalar(
-            "SELECT coalesce(sum(points), 0) FROM (SELECT points FROM iq_submissions WHERE competition_id = ? AND user_id = ? AND awarded_by IS NOT NULL UNION ALL SELECT points FROM iq_adjustments WHERE competition_id = ? AND user_id = ?)",
-        )
+        let current: i64 = sqlx::query_scalar(concat!(
+            "SELECT coalesce(sum(points), 0) FROM (",
+            player_points!(),
+            ") WHERE user_id = ?"
+        ))
         .bind(id)
-        .bind(user)
+        .bind(id)
         .bind(id)
         .bind(user)
         .fetch_one(&mut *transaction)
@@ -795,9 +847,12 @@ impl IqStore {
     }
 
     pub async fn scores(&self, id: i64) -> Result<Vec<Score>, IqStoreError> {
-        let rows: Vec<(i64, i64)> = sqlx::query_as(
-            "SELECT user_id, SUM(points) FROM (SELECT user_id, points FROM iq_submissions WHERE competition_id = ? AND awarded_by IS NOT NULL UNION ALL SELECT user_id, points FROM iq_adjustments WHERE competition_id = ?) GROUP BY user_id ORDER BY user_id",
-        )
+        let rows: Vec<(i64, i64)> = sqlx::query_as(concat!(
+            "SELECT user_id, SUM(points) FROM (",
+            player_points!(),
+            ") GROUP BY user_id ORDER BY user_id"
+        ))
+        .bind(id)
         .bind(id)
         .bind(id)
         .fetch_all(&self.pool)

@@ -106,6 +106,18 @@ fn problem_line(problem: &Problem) -> String {
         Problem::NotAnImage => {
             "Only images count as screenshots. Leave other files out.".to_owned()
         }
+        Problem::NoPartners { criterion } => format!(
+            "{} is a multi-player criterion. Ping the 1 or 2 players you played with after the name.",
+            escape(criterion)
+        ),
+        Problem::TooManyPlayers { criterion } => format!(
+            "{} counts {MULTI_PLAYERS}, so ping at most 2 others.",
+            escape(criterion)
+        ),
+        Problem::SinglePlayerPing { criterion } => format!(
+            "{} is a single-player criterion. Write just the name, with no pings.",
+            escape(criterion)
+        ),
     }
 }
 
@@ -385,15 +397,21 @@ pub fn points_done(member: UserId, total: i64) -> String {
 
 pub fn judge_log_award(
     judge: UserId,
-    player: UserId,
+    players: &[UserId],
     criterion: &str,
     points: i64,
     link: &str,
 ) -> String {
+    let mentions: Vec<String> = players.iter().map(|player| user(*player)).collect();
+    let mention_refs: Vec<&str> = mentions.iter().map(String::as_str).collect();
+    let each = match players.len() {
+        0 | 1 => "",
+        _ => " each",
+    };
     format!(
-        "{} awarded {} {} for {}: {link}",
+        "{} awarded {} {}{each} for {}: {link}",
         user(judge),
-        user(player),
+        join_names(&mention_refs),
         points_text(points),
         escape(criterion)
     )

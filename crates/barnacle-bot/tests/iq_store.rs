@@ -157,7 +157,7 @@ async fn running(store: &IqStore) -> Competition {
 
 async fn kraken_posted(store: &IqStore, id: i64, message: u64, user: UserId) {
     store
-        .record_submission(id, message, user, "Drunken Kraken", 5, POSTED_AT_MS)
+        .record_submission(id, message, user, &[], "Drunken Kraken", 5, POSTED_AT_MS)
         .await
         .unwrap();
 }
@@ -178,7 +178,7 @@ async fn the_first_judge_reaction_awards_the_points() {
     assert_eq!(
         store.award(900, JUDGE, AWARDED_AT_MS).await.unwrap(),
         AwardOutcome::Awarded {
-            user: PLAYER,
+            players: vec![PLAYER],
             points: 5,
         }
     );
@@ -212,13 +212,13 @@ async fn a_judge_may_award_their_own_post() {
     let store = store().await;
     let november = running(&store).await;
     store
-        .record_submission(november.id, 901, JUDGE, "Double Down", 2, POSTED_AT_MS)
+        .record_submission(november.id, 901, JUDGE, &[], "Double Down", 2, POSTED_AT_MS)
         .await
         .unwrap();
     assert_eq!(
         store.award(901, JUDGE, AWARDED_AT_MS).await.unwrap(),
         AwardOutcome::Awarded {
-            user: JUDGE,
+            players: vec![JUDGE],
             points: 2,
         }
     );
@@ -266,6 +266,7 @@ async fn recording_a_submission_twice_keeps_the_first() {
             november.id,
             903,
             THIRD_PLAYER,
+            &[],
             "Double Down",
             2,
             POSTED_AT_MS,
@@ -277,6 +278,7 @@ async fn recording_a_submission_twice_keeps_the_first() {
             november.id,
             903,
             THIRD_PLAYER,
+            &[],
             "Drunken Kraken",
             5,
             POSTED_AT_MS + 1_000,
@@ -286,7 +288,7 @@ async fn recording_a_submission_twice_keeps_the_first() {
     assert_eq!(
         store.award(903, JUDGE, AWARDED_AT_MS).await.unwrap(),
         AwardOutcome::Awarded {
-            user: THIRD_PLAYER,
+            players: vec![THIRD_PLAYER],
             points: 2,
         }
     );
@@ -315,7 +317,7 @@ async fn points_are_kept_as_they_were_when_posted() {
     assert_eq!(
         store.award(900, JUDGE, AWARDED_AT_MS).await.unwrap(),
         AwardOutcome::Awarded {
-            user: PLAYER,
+            players: vec![PLAYER],
             points: 5,
         }
     );
