@@ -230,6 +230,44 @@ pub async fn run(
                         }
                     }
                 });
+                let boards = iq.clone();
+                let board_http = Arc::clone(&ctx.http);
+                tokio::spawn(async move {
+                    let mut beat = tokio::time::interval(TICK);
+                    beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        beat.tick().await;
+                        let Some(now_ms) = now_ms().and_then(|now_ms| i64::try_from(now_ms).ok())
+                        else {
+                            failure::report(
+                                "iq.tick.failed",
+                                "the clock reads before 1970, so this leaderboard beat was skipped",
+                                &Failure::internal("the clock reads before 1970"),
+                                &Scope::default(),
+                            );
+                            continue;
+                        };
+                        let printing = boards.clone();
+                        let http = Arc::clone(&board_http);
+                        let beat_result = tokio::spawn(async move {
+                            iq::print_boards(&printing, &http, now_ms).await
+                        })
+                        .await;
+                        match beat_result {
+                            Ok(()) => tracing::debug!(
+                                "event.name" = "iq.tick.completed",
+                                "event.outcome" = "success",
+                                "a leaderboard beat ran"
+                            ),
+                            Err(error) => failure::report(
+                                "iq.tick.failed",
+                                "a leaderboard beat died; the next beat will be attempted",
+                                &Failure::from_error(&error),
+                                &Scope::default(),
+                            ),
+                        }
+                    }
+                });
                 let voice = VoiceRooms::new(
                     DiscordRooms::new(Arc::clone(&ctx.http), ready.user.id),
                     voice,

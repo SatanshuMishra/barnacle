@@ -30,6 +30,7 @@ const DENIED_DEFAULT: &str = "\u{274C}";
 const AWARDED_DEFAULT: &str = "\u{1F3C6}";
 const CONFIRM_DEFAULT: &str = "\u{2705}";
 pub const MULTI_PLAYERS: &str = "2 or 3 players";
+pub const BOARD_INTERVAL_MS: i64 = 43_200_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CriterionKind {
@@ -266,6 +267,13 @@ pub struct BoardRow {
     pub user: UserId,
     pub points: i64,
     pub requester: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardDue {
+    NotYet,
+    Unchanged,
+    Print,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -585,6 +593,37 @@ pub fn top_rows(standings: &[Standing]) -> Vec<BoardRow> {
             requester: false,
         })
         .collect()
+}
+
+pub fn board_mark(created_at_ms: i64, now_ms: i64) -> i64 {
+    now_ms
+        .saturating_sub(created_at_ms)
+        .max(0)
+        .div_euclid(BOARD_INTERVAL_MS)
+}
+
+pub fn board_digest(standings: &[Standing]) -> String {
+    standings
+        .iter()
+        .map(|standing| format!("{}:{}", standing.user.get(), standing.points))
+        .collect::<Vec<String>>()
+        .join(",")
+}
+
+pub fn board_due(
+    mark: i64,
+    last_mark: Option<i64>,
+    last_digest: Option<&str>,
+    digest: &str,
+) -> BoardDue {
+    let past_last = last_mark.is_none_or(|last| mark > last);
+    if mark <= 0 || !past_last {
+        return BoardDue::NotYet;
+    }
+    match last_digest.unwrap_or("") == digest {
+        true => BoardDue::Unchanged,
+        false => BoardDue::Print,
+    }
 }
 
 pub fn board_rows(standings: &[Standing], requester: UserId) -> Vec<BoardRow> {

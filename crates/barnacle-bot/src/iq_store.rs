@@ -181,6 +181,7 @@ const LIVE_IN_GUILD: &str = "SELECT id, guild_id, name, first_day, last_day, tim
 const LIVE_BY_SUBMISSIONS: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE submissions_id = ? AND status <> 'archived' ORDER BY id DESC LIMIT 1";
 const BY_ID: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE id = ?";
 const LAST_ARCHIVED: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE guild_id = ? AND status = 'archived' ORDER BY created_at_ms DESC, id DESC LIMIT 1";
+const RUNNING: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE status = 'running' ORDER BY id";
 const NEWEST_IN_GUILD: &str = "SELECT id, guild_id, name, first_day, last_day, time_zone, status, category_id, announcements_id, submissions_id, judge_log_channel_id, denied_mark, awarded_mark, confirm_mark, rules, last_seen_message, created_by, created_at_ms FROM iq_competitions WHERE guild_id = ? ORDER BY created_at_ms DESC, id DESC LIMIT ?";
 
 struct CompetitionRow {
@@ -278,6 +279,8 @@ pub enum IqStoreError {
     UnknownCompetition { id: i64 },
     #[error("IQ Competition {id} is completed or archived, so it cannot resume")]
     NotResumable { id: i64 },
+    #[error("IQ Competition {id} has no claimed leaderboard mark to record a print against")]
+    UnclaimedBoard { id: i64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -360,6 +363,13 @@ pub enum RejectOutcome {
     Rejected,
     AlreadyRejected,
     AlreadyAwarded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoardPost {
+    pub mark: i64,
+    pub digest: String,
+    pub message: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -501,6 +511,63 @@ impl IqStore {
             .fetch_optional(&self.pool)
             .await?;
         self.complete(row).await
+    }
+
+    pub async fn running(&self) -> Result<Vec<Competition>, IqStoreError> {
+        let rows = sqlx::query(RUNNING).fetch_all(&self.pool).await?;
+        let mut running = Vec::with_capacity(rows.len());
+        for row in rows {
+            running.push(self.with_config(CompetitionRow::read(&row)?).await?);
+        }
+        Ok(running)
+    }
+
+    pub async fn board_post(&self, id: i64) -> Result<Option<BoardPost>, IqStoreError> {
+        let row: Option<(i64, String, Option<i64>)> = sqlx::query_as(
+            "SELECT mark, digest, message_id FROM iq_board_posts WHERE competition_id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|(mark, digest, message)| {
+            Ok(BoardPost {
+                mark,
+                digest,
+                message: message.map(to_unsigned).transpose()?,
+            })
+        })
+        .transpose()
+    }
+
+    pub async fn claim_board_mark(&self, id: i64, mark: i64) -> Result<bool, IqStoreError> {
+        let claimed = sqlx::query(
+            "INSERT INTO iq_board_posts (competition_id, mark) VALUES (?, ?) ON CONFLICT (competition_id) DO UPDATE SET mark = excluded.mark WHERE excluded.mark > iq_board_posts.mark",
+        )
+        .bind(id)
+        .bind(mark)
+        .execute(&self.pool)
+        .await?;
+        Ok(claimed.rows_affected() == 1)
+    }
+
+    pub async fn record_board_post(
+        &self,
+        id: i64,
+        digest: &str,
+        message: u64,
+    ) -> Result<(), IqStoreError> {
+        let recorded = sqlx::query(
+            "UPDATE iq_board_posts SET digest = ?, message_id = ? WHERE competition_id = ?",
+        )
+        .bind(digest)
+        .bind(to_integer(message.into())?)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        match recorded.rows_affected() {
+            1 => Ok(()),
+            _ => Err(IqStoreError::UnclaimedBoard { id }),
+        }
     }
 
     pub async fn revert_completed(&self, id: i64, to: Status) -> Result<bool, IqStoreError> {

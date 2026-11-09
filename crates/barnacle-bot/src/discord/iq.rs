@@ -25,6 +25,7 @@ use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::RoleId;
 use crate::iq;
+use crate::iq::BoardDue;
 use crate::iq::CheckPath;
 use crate::iq::Checked;
 use crate::iq::CleanupRefusal;
@@ -53,6 +54,7 @@ use crate::iq_store::AdjustOutcome;
 use crate::iq_store::AwardOutcome;
 use crate::iq_store::Competition;
 use crate::iq_store::CreateOutcome;
+use crate::iq_store::IqStore;
 use crate::iq_store::IqStoreError;
 use crate::iq_store::RejectOutcome;
 use crate::iq_text;
@@ -86,6 +88,7 @@ const PAGE_SIZE: u8 = 100;
 const CATCH_UP_PAGES: usize = 500;
 const SHOWN_END_OFFSET: i64 = 60;
 const MILLIS_PER_SECOND: u64 = 1_000;
+const BOARD_MILLIS_PER_SECOND: i64 = 1_000;
 const DISCORD_WAIT: Duration = Duration::from_secs(30);
 const MARK_WAIT: Duration = Duration::from_secs(120);
 const RESCAN_LIMIT: u32 = 500;
@@ -698,6 +701,137 @@ pub(super) async fn iq_leaderboard(ctx: Context<'_>) -> Result<(), Error> {
     };
     ctx.send(board_reply(description)).await?;
     Ok(())
+}
+
+pub async fn print_boards(iq: &IqStore, http: &serenity::Http, now_ms: i64) {
+    let running = match iq.running().await {
+        Ok(running) => running,
+        Err(error) => {
+            failure::report(
+                "iq.board.failed",
+                "the running IQ Competitions could not be read, so no leaderboard was printed",
+                &Failure::from_error(&error),
+                &Scope::default(),
+            );
+            return;
+        }
+    };
+    for competition in running {
+        let scope = Scope::default()
+            .guild(competition.guild)
+            .channel(competition.announcements);
+        if let Err(error) = print_board(iq, http, &competition, now_ms, &scope).await {
+            failure::report(
+                "iq.board.failed",
+                "a 12-hour IQ leaderboard could not be printed, so the next mark will try again",
+                &Failure::from_error(&error),
+                &scope,
+            );
+        }
+    }
+}
+
+async fn print_board(
+    iq: &IqStore,
+    http: &serenity::Http,
+    competition: &Competition,
+    now_ms: i64,
+    scope: &Scope,
+) -> Result<(), IqError> {
+    let mark = iq::board_mark(competition.created_at_ms, now_ms);
+    let last = iq.board_post(competition.id).await?;
+    let standings = iq::standings(&iq.scores(competition.id).await?);
+    let digest = iq::board_digest(&standings);
+    let due = iq::board_due(
+        mark,
+        last.as_ref().map(|post| post.mark),
+        last.as_ref().map(|post| post.digest.as_str()),
+        &digest,
+    );
+    match due {
+        BoardDue::NotYet => Ok(()),
+        BoardDue::Unchanged => {
+            if iq.claim_board_mark(competition.id, mark).await? {
+                failure::record(
+                    "iq.board.skipped",
+                    "the scores have not changed since the last 12-hour IQ leaderboard",
+                    scope,
+                );
+            }
+            Ok(())
+        }
+        BoardDue::Print => {
+            if !iq.claim_board_mark(competition.id, mark).await? {
+                return Ok(());
+            }
+            let rows = iq::top_rows(&standings);
+            let users: Vec<UserId> = rows.iter().map(|row| row.user).collect();
+            let names = names_of(http, competition.guild, &users).await;
+            let named: Vec<(iq::BoardRow, String)> = rows
+                .iter()
+                .map(|row| (*row, iq_text::name_of(row.user, &names).to_owned()))
+                .collect();
+            let description = iq_text::leaderboard(
+                &competition.name,
+                end_unix(competition)?,
+                now_ms.div_euclid(BOARD_MILLIS_PER_SECOND),
+                &named,
+                standings.len(),
+            );
+            let channel = discord_channel(competition.announcements)?;
+            let sent = bounded(
+                channel.send_message(
+                    http,
+                    serenity::CreateMessage::new()
+                        .embed(board_embed(description))
+                        .allowed_mentions(serenity::CreateAllowedMentions::new()),
+                ),
+            )
+            .await?;
+            iq.record_board_post(competition.id, &digest, sent.id.get())
+                .await?;
+            failure::record(
+                "iq.board.printed",
+                "a 12-hour IQ leaderboard was printed",
+                &scope.clone().message(Snowflake::new(sent.id.get())),
+            );
+            if let Some(previous) = last.and_then(|post| post.message) {
+                remove_board(http, channel, previous, scope).await;
+            }
+            Ok(())
+        }
+    }
+}
+
+async fn remove_board(
+    http: &serenity::Http,
+    channel: serenity::ChannelId,
+    previous: u64,
+    scope: &Scope,
+) {
+    let scope = scope.clone().message(Snowflake::new(previous));
+    let message = match nonzero(previous) {
+        Ok(message) => serenity::MessageId::from(message),
+        Err(error) => {
+            failure::report(
+                "iq.board.delete_failed",
+                "the previous 12-hour IQ leaderboard has a stored ID of 0, so it was left",
+                &Failure::from_error(&error),
+                &scope,
+            );
+            return;
+        }
+    };
+    match bounded(channel.delete_message(http, message)).await {
+        Ok(()) => {}
+        Err(error) if is_kind(&error, Kind::UnknownMessage) => {}
+        Err(error) => failure::report(
+            "iq.board.delete_failed",
+            "the previous 12-hour IQ leaderboard could not be deleted",
+            &Failure::from_error(&error),
+            &scope,
+        ),
+    }
 }
 
 pub fn board_embed(description: String) -> serenity::CreateEmbed {
