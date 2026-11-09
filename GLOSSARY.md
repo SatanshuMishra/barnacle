@@ -41,8 +41,16 @@ A named feat worth a fixed number of points that a player can claim by submissio
 _Avoid_: Challenge, task
 
 **Submission**:
-A message in the submissions channel naming one criterion, with exactly 2 screenshots attached.
+A message in the submissions channel naming one criterion, with exactly 2 screenshots attached, and pinging the other players when the criterion is a multi-player criterion.
 _Avoid_: Entry, claim
+
+**Multi-player criterion**:
+A criterion completed by a division of 2 or 3 players, whose submission pings the 1 or 2 players who played with the poster; an award gives each of them the full points.
+_Avoid_: Team criterion, division criterion
+
+**Rejected submission**:
+A submission a judge ruled out with a reason through /iq reject, which can never earn points.
+_Avoid_: Denied submission
 
 **Judge**:
 A member holding the IQ-Judge role, who awards points by reacting with the Awarded mark and adjusts points by command with a reason.
@@ -52,7 +60,11 @@ A competition's three different emojis: Denied, which the bot puts on a malforme
 _Avoid_: Judging reaction
 
 **Judge log**:
-The competition's third channel, readable only by judges, where the bot records every award, every points change with its reason and new total, and every change to the judges.
+The competition's third channel, readable only by judges, where the bot records every award, every rejection with its reason, every points change with its reason and new total, and every change to the judges.
+
+**Leaderboard print**:
+The IQ Competition's standings posted by the bot to the announcements channel at a 12-hour mark after the competition's creation, skipped when the scores have not changed since the last print.
+_Avoid_: Scheduled leaderboard
 
 **Target role**:
 A role whose members can see the competition's channels and are pinged by its announcements.
