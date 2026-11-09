@@ -87,7 +87,7 @@ fn a_leaderboard_row_bolds_its_rank_and_the_whole_requester_row() {
     assert_eq!(board_line(&halyard, "Halyard"), "**1.** Halyard \u{b7} 27");
     assert_eq!(
         board_line(&captain, "Captain_Ranger"),
-        "**14. Captain_Ranger \u{b7} 5**"
+        "**14.** **Captain_Ranger \u{b7} 5**"
     );
 }
 
@@ -101,7 +101,7 @@ fn a_no_points_row_shows_dashes() {
     };
     assert_eq!(
         board_line(&newcomer, "Newcomer"),
-        "**--. Newcomer \u{b7} 0**"
+        "**--.** **Newcomer \u{b7} 0**"
     );
 }
 

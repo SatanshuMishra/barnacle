@@ -33,7 +33,7 @@ fn one_row() -> Vec<(BoardRow, String)> {
 fn the_board_opens_with_the_new_header() {
     let board = iq_text::leaderboard("November IQ", 2000, 1000, &one_row(), 1);
     assert!(
-        board.starts_with("# IQ COMPETITION LEADERBOARD\nNOVEMBER IQ \u{2022} <t:1940:R>\n\n"),
+        board.starts_with("IQ COMPETITION LEADERBOARD\nNOVEMBER IQ \u{2022} <t:1940:R>\n\n"),
         "{board}"
     );
 }
@@ -74,11 +74,11 @@ fn board_rows_are_not_lists_and_the_caller_is_bold() {
     );
     assert_eq!(
         iq_text::board_line(&caller, "Malphus"),
-        "**3. Malphus \u{b7} 28**"
+        "**3.** **Malphus \u{b7} 28**"
     );
     assert_eq!(
         iq_text::board_line(&unranked, "Newcomer"),
-        "**--. Newcomer \u{b7} 0**"
+        "**--.** **Newcomer \u{b7} 0**"
     );
 }
 

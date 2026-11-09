@@ -173,3 +173,49 @@ fn a_mistyped_name_is_judged_without_its_pings() {
         }])
     );
 }
+
+#[test]
+fn a_role_ping_on_a_multi_player_criterion_is_refused_with_the_reason() {
+    let result = checked("Leaderboard Lockout <@&77>", &[]);
+    assert_eq!(
+        result,
+        Checked::Invalid(vec![Problem::RolePing {
+            criterion: LOCKOUT.to_owned()
+        }])
+    );
+    let reply = submission_reply(&problems(&result));
+    assert!(
+        reply.contains("Ping the 1 or 2 players you played with directly, not a role."),
+        "{reply}"
+    );
+}
+
+#[test]
+fn a_role_ping_beside_a_bot_ping_names_the_role_problem_alone() {
+    assert_eq!(
+        checked("Leaderboard Lockout <@&77> <@9>", &[UserId::new(9)]),
+        Checked::Invalid(vec![Problem::RolePing {
+            criterion: LOCKOUT.to_owned()
+        }])
+    );
+}
+
+#[test]
+fn a_role_ping_beside_a_real_player_is_still_refused() {
+    assert_eq!(
+        checked("Leaderboard Lockout <@&77> <@2>", &[]),
+        Checked::Invalid(vec![Problem::RolePing {
+            criterion: LOCKOUT.to_owned()
+        }])
+    );
+}
+
+#[test]
+fn a_role_ping_on_a_single_player_criterion_says_no_pings() {
+    assert_eq!(
+        checked("Solo <@&77>", &[]),
+        Checked::Invalid(vec![Problem::SinglePlayerPing {
+            criterion: "Solo".to_owned()
+        }])
+    );
+}

@@ -24,7 +24,7 @@ const TOP_LINES: usize = 10;
 const OPTION_LABEL_LIMIT: usize = 100;
 const SHOWN_END_OFFSET: i64 = 60;
 const UNKNOWN_MEMBER: &str = "Unknown member";
-const BOARD_HEADING: &str = "# IQ COMPETITION LEADERBOARD";
+const BOARD_HEADING: &str = "IQ COMPETITION LEADERBOARD";
 const MULTI_PLAYER_HOW: &str = "For a multi-player criterion, put the name and then ping the 1 or 2 players you played with, such as Leaderboard Lockout @Player.";
 
 pub const ONLY_JUDGES: &str = "Only members with @IQ-Judge can change points.";
@@ -123,6 +123,10 @@ fn problem_line(problem: &Problem) -> String {
             "{} counts {MULTI_PLAYERS}, so ping at most 2 others.",
             escape(criterion)
         ),
+        Problem::RolePing { criterion } => format!(
+            "{} is a multi-player criterion. Ping the 1 or 2 players you played with directly, not a role.",
+            escape(criterion)
+        ),
         Problem::SinglePlayerPing { criterion } => format!(
             "{} is a single-player criterion. Write just the name, with no pings.",
             escape(criterion)
@@ -136,7 +140,7 @@ pub fn board_line(row: &BoardRow, name: &str) -> String {
         None => "--".to_owned(),
     };
     match row.requester {
-        true => format!("**{rank}. {name} \u{b7} {}**", row.points),
+        true => format!("**{rank}.** **{name} \u{b7} {}**", row.points),
         false => format!("**{rank}.** {name} \u{b7} {}", row.points),
     }
 }

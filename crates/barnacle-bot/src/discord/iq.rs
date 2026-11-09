@@ -662,13 +662,7 @@ pub(super) async fn iq_leaderboard(ctx: Context<'_>) -> Result<(), Error> {
     let description = match data.iq.live(guild).await? {
         Some(competition) => {
             let standings = iq::standings(&data.iq.scores(competition.id).await?);
-            let rows = iq::board_rows(&standings, requester);
-            let users: Vec<UserId> = rows.iter().map(|row| row.user).collect();
-            let names = names_of(http, guild, &users).await;
-            let named: Vec<(iq::BoardRow, String)> = rows
-                .iter()
-                .map(|row| (*row, iq_text::name_of(row.user, &names).to_owned()))
-                .collect();
+            let named = named_board(http, guild, &standings, Some(requester)).await;
             iq_text::leaderboard(
                 &competition.name,
                 end_unix(&competition)?,
@@ -752,13 +746,7 @@ async fn print_board(
             if !iq.claim_board_mark(competition.id, mark).await? {
                 return Ok(());
             }
-            let rows = iq::top_rows(&standings);
-            let users: Vec<UserId> = rows.iter().map(|row| row.user).collect();
-            let names = names_of(http, competition.guild, &users).await;
-            let named: Vec<(iq::BoardRow, String)> = rows
-                .iter()
-                .map(|row| (*row, iq_text::name_of(row.user, &names).to_owned()))
-                .collect();
+            let named = named_board(http, competition.guild, &standings, None).await;
             let description = iq_text::leaderboard(
                 &competition.name,
                 end_unix(competition)?,
@@ -1085,6 +1073,23 @@ async fn named_winners(
         .map(|user| iq_text::name_of(*user, &names).to_owned())
         .collect();
     (named, winners.first().map_or(0, |standing| standing.points))
+}
+
+async fn named_board(
+    http: &serenity::Http,
+    guild: GuildId,
+    standings: &[iq::Standing],
+    requester: Option<UserId>,
+) -> Vec<(iq::BoardRow, String)> {
+    let names = names_of(http, guild, &iq::players_to_name(standings, requester)).await;
+    let ordered = iq::board_order(standings, &names);
+    let rows = match requester {
+        Some(requester) => iq::board_rows(&ordered, requester),
+        None => iq::top_rows(&ordered),
+    };
+    rows.iter()
+        .map(|row| (*row, iq_text::name_of(row.user, &names).to_owned()))
+        .collect()
 }
 
 async fn names_of(

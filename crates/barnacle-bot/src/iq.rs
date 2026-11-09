@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::num::NonZeroU64;
@@ -18,6 +19,7 @@ use crate::wiring::same_name;
 const SCREENSHOTS: usize = 2;
 const MOST_PARTNERS: usize = 2;
 const PING_OPEN: &str = "<@";
+const ROLE_MARK: char = '&';
 const TYPED_LIMIT: usize = 100;
 const ELLIPSIS: char = '\u{2026}';
 const BOARD_LINES: usize = 10;
@@ -69,6 +71,7 @@ pub enum Problem {
     NoPartners { criterion: String },
     TooManyPlayers { criterion: String },
     SinglePlayerPing { criterion: String },
+    RolePing { criterion: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -423,7 +426,7 @@ impl CaughtUp {
 pub fn check_submission(post: &Post, criteria: &[Criterion]) -> Checked {
     let (typed, pinged) = split_pings(post.text);
     let typed = typed.as_str();
-    let partners = partners_of(&pinged, post.author, post.bots);
+    let partners = partners_of(&pinged.players, post.author, post.bots);
     let attachments = post.attachments;
     let matched = criteria
         .iter()
@@ -438,7 +441,8 @@ pub fn check_submission(post: &Post, criteria: &[Criterion]) -> Checked {
             closest: closest.name.clone(),
         }),
     };
-    let player_problem = matched.and_then(|criterion| players_problem(criterion, &partners));
+    let player_problem =
+        matched.and_then(|criterion| players_problem(criterion, &partners, pinged.role));
     let images = attachments
         .iter()
         .filter(|attachment| attachment.is_image())
@@ -459,9 +463,17 @@ pub fn check_submission(post: &Post, criteria: &[Criterion]) -> Checked {
     }
 }
 
-fn players_problem(criterion: &Criterion, partners: &[UserId]) -> Option<Problem> {
+fn players_problem(
+    criterion: &Criterion,
+    partners: &[UserId],
+    role_pinged: bool,
+) -> Option<Problem> {
     let named = || criterion.name.clone();
     match (criterion.kind, partners.len()) {
+        (CriterionKind::Multi, _) if role_pinged => Some(Problem::RolePing { criterion: named() }),
+        (CriterionKind::Single, _) if role_pinged => {
+            Some(Problem::SinglePlayerPing { criterion: named() })
+        }
         (CriterionKind::Single, 0) => None,
         (CriterionKind::Single, _) => Some(Problem::SinglePlayerPing { criterion: named() }),
         (CriterionKind::Multi, 0) => Some(Problem::NoPartners { criterion: named() }),
@@ -483,16 +495,22 @@ fn partners_of(pinged: &[UserId], author: UserId, bots: &[UserId]) -> Vec<UserId
         .collect()
 }
 
-fn split_pings(text: &str) -> (String, Vec<UserId>) {
-    let (rest, pinged) = strip_pings(text, String::new(), Vec::new());
-    let name = match pinged.is_empty() {
+#[derive(Debug, Clone, Default)]
+struct Pings {
+    players: Vec<UserId>,
+    role: bool,
+}
+
+fn split_pings(text: &str) -> (String, Pings) {
+    let (rest, pinged) = strip_pings(text, String::new(), Pings::default());
+    let name = match pinged.players.is_empty() && !pinged.role {
         true => text.trim().to_owned(),
         false => rest.split_whitespace().collect::<Vec<_>>().join(" "),
     };
     (name, pinged)
 }
 
-fn strip_pings(text: &str, kept: String, pinged: Vec<UserId>) -> (String, Vec<UserId>) {
+fn strip_pings(text: &str, kept: String, pinged: Pings) -> (String, Pings) {
     let Some(start) = text.find(PING_OPEN) else {
         return (kept + text, pinged);
     };
@@ -501,10 +519,29 @@ fn strip_pings(text: &str, kept: String, pinged: Vec<UserId>) -> (String, Vec<Us
         Some((user, length)) => strip_pings(
             &after[length..],
             kept + &text[..start] + " ",
-            pinged.into_iter().chain([user]).collect(),
+            Pings {
+                players: pinged.players.into_iter().chain([user]).collect(),
+                role: pinged.role,
+            },
         ),
-        None => strip_pings(after, kept + &text[..start + PING_OPEN.len()], pinged),
+        None => match role_ping_length(after) {
+            Some(length) => strip_pings(
+                &after[length..],
+                kept + &text[..start] + " ",
+                Pings {
+                    role: true,
+                    ..pinged
+                },
+            ),
+            None => strip_pings(after, kept + &text[..start + PING_OPEN.len()], pinged),
+        },
     }
+}
+
+fn role_ping_length(after: &str) -> Option<usize> {
+    let digits = after.strip_prefix(ROLE_MARK)?;
+    let end = digits.find(|c: char| !c.is_ascii_digit())?;
+    (end > 0 && digits[end..].starts_with('>')).then_some(ROLE_MARK.len_utf8() + end + 1)
 }
 
 fn ping_at(after: &str) -> Option<(UserId, usize)> {
@@ -579,6 +616,50 @@ pub fn standings(scores: &[Score]) -> Vec<Standing> {
                 points: score.points,
             }
         })
+        .collect()
+}
+
+pub fn board_order(standings: &[Standing], names: &[(UserId, String)]) -> Vec<Standing> {
+    let sort_key = |standing: &Standing| {
+        let name = names
+            .iter()
+            .find(|(user, _)| *user == standing.user)
+            .map(|(_, name)| name.replace('\\', "").to_lowercase());
+        (
+            Reverse(standing.points),
+            name.is_none(),
+            name,
+            standing.user,
+        )
+    };
+    let mut ordered = standings.to_vec();
+    ordered.sort_by_cached_key(sort_key);
+    ordered
+        .into_iter()
+        .enumerate()
+        .map(|(position, standing)| Standing {
+            rank: position + 1,
+            ..standing
+        })
+        .collect()
+}
+
+pub fn players_to_name(standings: &[Standing], requester: Option<UserId>) -> Vec<UserId> {
+    let visible: Vec<i64> = standings
+        .iter()
+        .take(BOARD_LINES)
+        .map(|standing| standing.points)
+        .collect();
+    let own = standings
+        .iter()
+        .find(|standing| Some(standing.user) == requester)
+        .map(|standing| standing.points);
+    let missing = requester.filter(|user| standings.iter().all(|standing| standing.user != *user));
+    standings
+        .iter()
+        .filter(|standing| visible.contains(&standing.points) || Some(standing.points) == own)
+        .map(|standing| standing.user)
+        .chain(missing)
         .collect()
 }
 
