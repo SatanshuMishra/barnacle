@@ -1,6 +1,6 @@
 # iq-leaderboard-and-judging-round-three: Guess leaderboard rename, IQ leaderboard rework, multi-player criteria, private rejections, /iq reject, 12-hour leaderboard
 Status: active
-Updated: 2026-11-09T01:14:16.340Z
+Updated: 2026-11-09T01:20:14.600Z
 Next ids: c9 D4 R4 S1
 
 ## Goal
@@ -24,7 +24,7 @@ The spec is handed off and `pipeline drive` is building it unattended on feat/iq
 
 ## Next step
 
-The drive entered review and runs it next.
+The drive entered validate and runs it next.
 
 ## Decisions in force
 
