@@ -87,8 +87,7 @@ const MENU_MAX: u8 = 25;
 const PAGE_SIZE: u8 = 100;
 const CATCH_UP_PAGES: usize = 500;
 const SHOWN_END_OFFSET: i64 = 60;
-const MILLIS_PER_SECOND: u64 = 1_000;
-const BOARD_MILLIS_PER_SECOND: i64 = 1_000;
+const MILLIS_PER_SECOND: u32 = 1_000;
 const DISCORD_WAIT: Duration = Duration::from_secs(30);
 const MARK_WAIT: Duration = Duration::from_secs(120);
 const RESCAN_LIMIT: u32 = 500;
@@ -611,26 +610,15 @@ pub(super) async fn iq_reject(
         Err(error) => return Err(error.into()),
     }
     let scope = Scope::of_command(ctx).message(Snowflake::new(message));
-    mark(
+    deny_post(
         http,
-        post.channel_id,
-        post.id,
+        &post,
         &competition.marks.denied,
+        iq_text::rejection_reply(&reason),
+        "the reply to a rejected submission could not be sent",
         &scope,
     )
     .await;
-    let reply = serenity::CreateMessage::new()
-        .content(iq_text::rejection_reply(&reason))
-        .reference_message(&post)
-        .allowed_mentions(serenity::CreateAllowedMentions::new().replied_user(true));
-    if let Err(error) = bounded(post.channel_id.send_message(http, reply)).await {
-        failure::report(
-            "iq.submission.reply_failed",
-            "the reply to a rejected submission could not be sent",
-            &Failure::from_error(&error),
-            &scope,
-        );
-    }
     let replied = commands::private(ctx, iq_text::REJECTED).await;
     failure::record(
         "iq.submission.rejected",
@@ -774,7 +762,7 @@ async fn print_board(
             let description = iq_text::leaderboard(
                 &competition.name,
                 end_unix(competition)?,
-                now_ms.div_euclid(BOARD_MILLIS_PER_SECOND),
+                now_ms.div_euclid(i64::from(MILLIS_PER_SECOND)),
                 &named,
                 standings.len(),
             );
@@ -2649,7 +2637,7 @@ async fn judge_message(
     scope: &Scope,
 ) -> Judged {
     let sent_ms = Snowflake::new(message.id.get()).unix_millis();
-    let sent_unix = i64::try_from(sent_ms / MILLIS_PER_SECOND).unwrap_or(i64::MAX);
+    let sent_unix = i64::try_from(sent_ms / u64::from(MILLIS_PER_SECOND)).unwrap_or(i64::MAX);
     let end = match end_unix(competition) {
         Ok(end) => end,
         Err(error) => {
@@ -2715,29 +2703,41 @@ async fn judge_message(
             Judged::Valid
         }
         Checked::Invalid(problems) => {
-            mark(
+            deny_post(
                 http,
-                message.channel_id,
-                message.id,
+                message,
                 &competition.marks.denied,
+                iq_text::submission_reply(&problems),
+                "the reply to an invalid submission could not be sent",
                 scope,
             )
             .await;
-            let reply = serenity::CreateMessage::new()
-                .content(iq_text::submission_reply(&problems))
-                .reference_message(message)
-                .allowed_mentions(serenity::CreateAllowedMentions::new().replied_user(true));
-            if let Err(error) = bounded(message.channel_id.send_message(http, reply)).await {
-                failure::report(
-                    "iq.submission.reply_failed",
-                    "the reply to an invalid submission could not be sent",
-                    &Failure::from_error(&error),
-                    scope,
-                );
-            }
             failure::record("iq.submission.invalid", "a submission was invalid", scope);
             Judged::Invalid
         }
+    }
+}
+
+async fn deny_post(
+    http: &serenity::Http,
+    post: &serenity::Message,
+    denied: &Mark,
+    reply: String,
+    reply_failed: &'static str,
+    scope: &Scope,
+) {
+    mark(http, post.channel_id, post.id, denied, scope).await;
+    let reply = serenity::CreateMessage::new()
+        .content(reply)
+        .reference_message(post)
+        .allowed_mentions(serenity::CreateAllowedMentions::new().replied_user(true));
+    if let Err(error) = bounded(post.channel_id.send_message(http, reply)).await {
+        failure::report(
+            "iq.submission.reply_failed",
+            reply_failed,
+            &Failure::from_error(&error),
+            scope,
+        );
     }
 }
 
