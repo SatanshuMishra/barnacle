@@ -1,6 +1,6 @@
 # event-announce-and-cleanup-timing: Event announcement lead time, sign-up clean-up delay, and past dates allowed
 Status: active
-Updated: 2026-11-19T23:58:29.313Z
+Updated: 2026-11-19T23:58:29.805Z
 Next ids: c6 D2 R1 S1
 
 ## Goal
@@ -21,7 +21,7 @@ Interphase handed off the spec unattended: 13 criteria at 7 seams, 4 Steps in ms
 
 ## Next step
 
-The drive entered diagnose and runs it next.
+The drive entered validate and runs it next.
 
 ## Decisions in force
 
