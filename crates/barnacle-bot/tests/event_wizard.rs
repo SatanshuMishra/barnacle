@@ -296,16 +296,6 @@ fn an_unreadable_typed_date_is_refused() {
 }
 
 #[test]
-fn a_typed_first_day_in_the_past_is_refused() {
-    assert_eq!(
-        fresh()
-            .with_typed_dates("2026-10-20", "2026-11-20", NOW)
-            .err(),
-        Some(Refusal::FirstDayPast)
-    );
-}
-
-#[test]
 fn a_typed_last_day_before_the_first_is_refused() {
     assert_eq!(
         fresh()

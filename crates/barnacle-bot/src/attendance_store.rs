@@ -14,8 +14,10 @@ use sqlx::sqlite::SqlitePoolOptions;
 use crate::ids::ChannelId;
 use crate::ids::GuildId;
 use crate::ids::RoleId;
+use crate::schedule::CleanUpDelay;
 use crate::schedule::Hour;
 use crate::schedule::Hours;
+use crate::schedule::PostLead;
 use crate::schedule::SECONDS_PER_HOUR;
 use crate::schedule::Schedule;
 use crate::schedule::Session;
@@ -70,6 +72,22 @@ const SEASONS_BEFORE_EVENTS: [ColumnSpec; 11] = [
     ("every_day", "INTEGER", true, false),
 ];
 
+const SEASONS_BEFORE_POST_TIMING: [ColumnSpec; 13] = [
+    ("id", "INTEGER", false, true),
+    ("guild_id", "INTEGER", true, false),
+    ("channel_id", "INTEGER", true, false),
+    ("name", "TEXT", true, false),
+    ("first_day", "TEXT", true, false),
+    ("last_day", "TEXT", true, false),
+    ("weekdays", "INTEGER", true, false),
+    ("start_minute", "INTEGER", true, false),
+    ("time_zone", "TEXT", true, false),
+    ("hours", "INTEGER", true, false),
+    ("created_by", "INTEGER", true, false),
+    ("created_at_ms", "INTEGER", true, false),
+    ("ended_at_ms", "INTEGER", false, false),
+];
+
 const EXPECTED_COLUMNS: [TableSpec; 5] = [
     (
         CB_SEASONS,
@@ -87,6 +105,8 @@ const EXPECTED_COLUMNS: [TableSpec; 5] = [
             ("created_by", "INTEGER", true, false),
             ("created_at_ms", "INTEGER", true, false),
             ("ended_at_ms", "INTEGER", false, false),
+            ("post_lead_days", "INTEGER", true, false),
+            ("clean_up_minutes", "INTEGER", true, false),
         ],
     ),
     (
@@ -128,12 +148,12 @@ const EXPECTED_COLUMNS: [TableSpec; 5] = [
     ),
 ];
 
-const EVENT_BY_ID: &str = "SELECT id, guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms, ended_at_ms, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE id = ?";
-const EVENT_LIVE_BY_ID: &str = "SELECT id, guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms, ended_at_ms, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE guild_id = ? AND id = ? AND ended_at_ms IS NULL";
-const EVENT_LIVE_BY_CREATION: &str = "SELECT id, guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms, ended_at_ms, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE guild_id = ? AND id = ? AND created_at_ms = ? AND ended_at_ms IS NULL";
-const EVENTS_IN_GUILD: &str = "SELECT id, guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms, ended_at_ms, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE guild_id = ? AND ended_at_ms IS NULL ORDER BY first_day, id";
-const EVENTS_IN_GUILD_ANY_STATE: &str = "SELECT id, guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms, ended_at_ms, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE guild_id = ? ORDER BY first_day, id";
-const EVENTS_LIVE: &str = "SELECT id, guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms, ended_at_ms, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE ended_at_ms IS NULL AND (last_day >= ? OR EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed')) ORDER BY first_day, id";
+const EVENT_BY_ID: &str = "SELECT id, guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms, ended_at_ms, post_lead_days, clean_up_minutes, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE id = ?";
+const EVENT_LIVE_BY_ID: &str = "SELECT id, guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms, ended_at_ms, post_lead_days, clean_up_minutes, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE guild_id = ? AND id = ? AND ended_at_ms IS NULL";
+const EVENT_LIVE_BY_CREATION: &str = "SELECT id, guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms, ended_at_ms, post_lead_days, clean_up_minutes, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE guild_id = ? AND id = ? AND created_at_ms = ? AND ended_at_ms IS NULL";
+const EVENTS_IN_GUILD: &str = "SELECT id, guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms, ended_at_ms, post_lead_days, clean_up_minutes, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE guild_id = ? AND ended_at_ms IS NULL ORDER BY first_day, id";
+const EVENTS_IN_GUILD_ANY_STATE: &str = "SELECT id, guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms, ended_at_ms, post_lead_days, clean_up_minutes, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE guild_id = ? ORDER BY first_day, id";
+const EVENTS_LIVE: &str = "SELECT id, guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms, ended_at_ms, post_lead_days, clean_up_minutes, EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed') FROM cb_seasons WHERE ended_at_ms IS NULL AND (last_day >= ? OR EXISTS (SELECT 1 FROM cb_posts WHERE cb_posts.season_id = cb_seasons.id AND cb_posts.state <> 'removed')) ORDER BY first_day, id";
 
 type EventRow = (
     i64,
@@ -149,6 +169,8 @@ type EventRow = (
     i64,
     i64,
     Option<i64>,
+    i64,
+    i64,
     i64,
 );
 
@@ -175,6 +197,8 @@ pub enum AttendanceError {
     MissingPingRoles,
     #[error("the attendance database keeps season numbers in cb_seasons and has no event columns")]
     BeforeEvents,
+    #[error("the attendance database has no sign-up timing columns in cb_seasons")]
+    BeforePostTiming,
     #[error("{value} does not fit in a SQLite integer")]
     OutOfRange { value: u128 },
     #[error("the attendance database holds a negative value, {value}")]
@@ -197,6 +221,12 @@ pub enum AttendanceError {
     BadZone { value: String },
     #[error("the attendance database holds {value}, which is not an hour count from 1 to 24")]
     BadHours { value: i64 },
+    #[error("the attendance database holds {value}, which is not a post lead from 1 to 7 days")]
+    BadPostLead { value: i64 },
+    #[error(
+        "the attendance database holds {value}, which is not a clean-up delay from 0 to 240 minutes in steps of 30"
+    )]
+    BadCleanUp { value: i64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -314,6 +344,8 @@ pub struct EventChange {
     pub hours: Option<Hours>,
     pub channel: Option<ChannelId>,
     pub ping_roles: Option<Vec<RoleId>>,
+    pub post_lead: Option<PostLead>,
+    pub clean_up: Option<CleanUpDelay>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -375,6 +407,9 @@ impl Attendance {
         if seasons == expected_columns(&SEASONS_BEFORE_EVENTS) {
             return Err(AttendanceError::BeforeEvents);
         }
+        if seasons == expected_columns(&SEASONS_BEFORE_POST_TIMING) {
+            return Err(AttendanceError::BeforePostTiming);
+        }
         for (table, expected) in EXPECTED_COLUMNS {
             let found = columns(&pool, table).await?;
             if found.is_empty() {
@@ -419,7 +454,7 @@ impl Attendance {
             .all(|read| read.as_ref().is_ok_and(|event| !event.running(now_unix)));
         end_finished(&mut transaction, &holders.namesakes, created_at).await?;
         let inserted = sqlx::query(
-            "INSERT INTO cb_seasons (guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO cb_seasons (guild_id, channel_id, name, first_day, last_day, weekdays, start_minute, time_zone, hours, created_by, created_at_ms, post_lead_days, clean_up_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(guild)
         .bind(channel)
@@ -432,6 +467,8 @@ impl Attendance {
         .bind(i64::from(schedule.hours().get()))
         .bind(created_by)
         .bind(created_at)
+        .bind(i64::from(schedule.post_lead().days()))
+        .bind(i64::from(schedule.clean_up().minutes()))
         .execute(&mut *transaction)
         .await?;
         let id = inserted.last_insert_rowid();
@@ -639,7 +676,7 @@ impl Attendance {
         }
         let schedule = after.span.schedule();
         sqlx::query(
-            "UPDATE cb_seasons SET channel_id = ?, name = ?, first_day = ?, last_day = ?, weekdays = ?, start_minute = ?, time_zone = ?, hours = ? WHERE id = ?",
+            "UPDATE cb_seasons SET channel_id = ?, name = ?, first_day = ?, last_day = ?, weekdays = ?, start_minute = ?, time_zone = ?, hours = ?, post_lead_days = ?, clean_up_minutes = ? WHERE id = ?",
         )
         .bind(to_integer(after.channel.get().into())?)
         .bind(&after.name)
@@ -649,6 +686,8 @@ impl Attendance {
         .bind(schedule.start().minutes())
         .bind(schedule.zone().name())
         .bind(i64::from(schedule.hours().get()))
+        .bind(i64::from(schedule.post_lead().days()))
+        .bind(i64::from(schedule.clean_up().minutes()))
         .bind(after.id)
         .execute(&mut *transaction)
         .await?;
@@ -1040,7 +1079,9 @@ async fn plan_edit(
         change.start.unwrap_or(held.start()),
         change.zone.clone().unwrap_or_else(|| held.zone().clone()),
         change.hours.unwrap_or(held.hours()),
-    );
+    )
+    .with_post_lead(change.post_lead.unwrap_or(held.post_lead()))
+    .with_clean_up(change.clean_up.unwrap_or(held.clean_up()));
     let Some(span) = Span::new(
         change.first_day.unwrap_or(before.span.first_day()),
         change.last_day.unwrap_or(before.span.last_day()),
@@ -1131,6 +1172,8 @@ fn to_event(row: EventRow, roles: Vec<i64>) -> Result<Event, AttendanceError> {
         created_by,
         created_at_ms,
         ended_at_ms,
+        post_lead_days,
+        clean_up_minutes,
         posts_up,
     ) = row;
     let schedule = Schedule::new(
@@ -1140,7 +1183,9 @@ fn to_event(row: EventRow, roles: Vec<i64>) -> Result<Event, AttendanceError> {
         })?,
         Zone::find(&time_zone).ok_or(AttendanceError::BadZone { value: time_zone })?,
         Hours::new(hours).ok_or(AttendanceError::BadHours { value: hours })?,
-    );
+    )
+    .with_post_lead(to_post_lead(post_lead_days)?)
+    .with_clean_up(to_clean_up(clean_up_minutes)?);
     let span = Span::new(to_day(&first_day)?, to_day(&last_day)?, schedule)
         .ok_or(AttendanceError::BadNight { value: last_day })?;
     Ok(Event {
@@ -1189,6 +1234,20 @@ fn to_session(value: &str, schedule: &Schedule) -> Result<Session, AttendanceErr
         .ok_or_else(|| AttendanceError::BadNight {
             value: value.to_owned(),
         })
+}
+
+fn to_post_lead(value: i64) -> Result<PostLead, AttendanceError> {
+    u8::try_from(value)
+        .ok()
+        .and_then(PostLead::from_days)
+        .ok_or(AttendanceError::BadPostLead { value })
+}
+
+fn to_clean_up(value: i64) -> Result<CleanUpDelay, AttendanceError> {
+    u16::try_from(value)
+        .ok()
+        .and_then(CleanUpDelay::from_minutes)
+        .ok_or(AttendanceError::BadCleanUp { value })
 }
 
 fn to_day(value: &str) -> Result<Date, AttendanceError> {

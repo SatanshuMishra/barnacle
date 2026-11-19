@@ -177,6 +177,14 @@ pub enum StartupError {
         #[source]
         source: IqStoreError,
     },
+    #[error(
+        "the sign-up timing columns are missing from {path}; back the file up, then add them with `sqlite3 {path} < migrations/0014_event_post_timing.sql`"
+    )]
+    PostTiming {
+        path: PathBuf,
+        #[source]
+        source: AttendanceError,
+    },
 }
 
 fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
@@ -186,6 +194,7 @@ fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
         AttendanceError::BeforeEvents | AttendanceError::MissingIndex { .. } => {
             StartupError::Events { path, source }
         }
+        AttendanceError::BeforePostTiming => StartupError::PostTiming { path, source },
         AttendanceError::UnexpectedColumns { .. } => StartupError::SeasonControls { path, source },
         source => StartupError::Attendance { path, source },
     }

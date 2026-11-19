@@ -30,6 +30,8 @@ const IQ_MARKS_DOWN: &str =
 const IQ_PLAYERS: &str = include_str!("../../../migrations/0013_iq_players_and_rejections.sql");
 const IQ_PLAYERS_DOWN: &str =
     include_str!("../../../migrations/0013_iq_players_and_rejections.down.sql");
+const POST_TIMING: &str = include_str!("../../../migrations/0014_event_post_timing.sql");
+const POST_TIMING_DOWN: &str = include_str!("../../../migrations/0014_event_post_timing.down.sql");
 
 struct Layout {
     _dir: tempfile::TempDir,
@@ -436,7 +438,7 @@ async fn a_database_without_the_live_name_index_is_told_to_apply_0008() {
     );
     let through_0008: Vec<&str> = THROUGH_0007
         .into_iter()
-        .chain([common::CB_EVENTS])
+        .chain([common::CB_EVENTS, POST_TIMING])
         .collect();
     migrated(&layout, &through_0008, "DROP INDEX cb_seasons_live_name;").await;
     let error = startup::open_stores(&layout.config.database)
@@ -456,7 +458,7 @@ async fn a_database_before_0009_is_told_to_apply_it() {
     );
     let through_0008: Vec<&str> = THROUGH_0007
         .into_iter()
-        .chain([common::CB_EVENTS])
+        .chain([common::CB_EVENTS, POST_TIMING])
         .collect();
     migrated(&layout, &through_0008, "").await;
     let error = startup::open_stores(&layout.config.database)
@@ -482,7 +484,7 @@ async fn a_database_without_the_live_competition_index_is_told_to_apply_0009() {
     );
     let through_0009: Vec<&str> = THROUGH_0007
         .into_iter()
-        .chain([common::CB_EVENTS, IQ_COMPETITION])
+        .chain([common::CB_EVENTS, POST_TIMING, IQ_COMPETITION])
         .collect();
     migrated(&layout, &through_0009, "DROP INDEX iq_competitions_live;").await;
     let error = startup::open_stores(&layout.config.database)
@@ -513,9 +515,12 @@ async fn a_database_rolled_back_from_0009_is_told_to_apply_it_again() {
             MEMBER_ZONES,
             IQ_MARKS,
             IQ_PLAYERS,
+            POST_TIMING,
+            POST_TIMING_DOWN,
             IQ_PLAYERS_DOWN,
             IQ_MARKS_DOWN,
             IQ_COMPETITION_DOWN,
+            POST_TIMING,
         ])
         .collect();
     migrated(&layout, &rolled_back, "").await;
@@ -537,7 +542,7 @@ async fn a_database_before_0010_is_told_to_apply_it() {
     );
     let through_0009: Vec<&str> = THROUGH_0007
         .into_iter()
-        .chain([common::CB_EVENTS, IQ_COMPETITION])
+        .chain([common::CB_EVENTS, POST_TIMING, IQ_COMPETITION])
         .collect();
     migrated(&layout, &through_0009, "").await;
     let error = startup::open_stores(&layout.config.database)
@@ -563,7 +568,12 @@ async fn a_database_before_0011_is_told_to_apply_it() {
     );
     let through_0010: Vec<&str> = THROUGH_0007
         .into_iter()
-        .chain([common::CB_EVENTS, IQ_COMPETITION, ORGANISER_ROLES])
+        .chain([
+            common::CB_EVENTS,
+            POST_TIMING,
+            IQ_COMPETITION,
+            ORGANISER_ROLES,
+        ])
         .collect();
     migrated(&layout, &through_0010, "").await;
     let error = startup::open_stores(&layout.config.database)
@@ -591,6 +601,7 @@ async fn a_database_before_0012_is_told_to_apply_it() {
         .into_iter()
         .chain([
             common::CB_EVENTS,
+            POST_TIMING,
             IQ_COMPETITION,
             ORGANISER_ROLES,
             MEMBER_ZONES,
@@ -622,6 +633,7 @@ async fn a_database_at_0012_is_told_to_apply_0013() {
         .into_iter()
         .chain([
             common::CB_EVENTS,
+            POST_TIMING,
             IQ_COMPETITION,
             ORGANISER_ROLES,
             MEMBER_ZONES,
@@ -659,6 +671,7 @@ async fn a_database_at_0013_opens() {
             MEMBER_ZONES,
             IQ_MARKS,
             IQ_PLAYERS,
+            POST_TIMING,
         ])
         .collect();
     migrated(&layout, &through_0013, "").await;
@@ -681,7 +694,10 @@ async fn a_database_rolled_back_from_0010_is_told_to_apply_it_again() {
             MEMBER_ZONES,
             IQ_MARKS,
             IQ_PLAYERS,
+            POST_TIMING,
+            POST_TIMING_DOWN,
             ORGANISER_ROLES_DOWN,
+            POST_TIMING,
         ])
         .collect();
     migrated(&layout, &rolled_back, "").await;

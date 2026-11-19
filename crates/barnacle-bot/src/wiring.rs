@@ -265,10 +265,12 @@ pub enum PanelPart {
     Back,
     DatesModal,
     TimeModal,
+    PostLead,
+    CleanUp,
 }
 
 impl PanelPart {
-    const ALL: [PanelPart; 11] = [
+    const ALL: [PanelPart; 13] = [
         PanelPart::Days,
         PanelPart::Roles,
         PanelPart::Everyone,
@@ -280,6 +282,8 @@ impl PanelPart {
         PanelPart::Back,
         PanelPart::DatesModal,
         PanelPart::TimeModal,
+        PanelPart::PostLead,
+        PanelPart::CleanUp,
     ];
 
     fn text(self) -> &'static str {
@@ -295,6 +299,8 @@ impl PanelPart {
             PanelPart::Back => "back",
             PanelPart::DatesModal => "dates-modal",
             PanelPart::TimeModal => "time-modal",
+            PanelPart::PostLead => "post-lead",
+            PanelPart::CleanUp => "clean-up",
         }
     }
 }
