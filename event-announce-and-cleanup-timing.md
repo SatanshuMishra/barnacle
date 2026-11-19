@@ -1,6 +1,6 @@
 # event-announce-and-cleanup-timing: Event announcement lead time, sign-up clean-up delay, and past dates allowed
 Status: active
-Updated: 2026-11-19T23:13:03.638Z
+Updated: 2026-11-19T23:13:36.049Z
 Next ids: c6 D1 R1 S1
 
 ## Goal
@@ -17,7 +17,7 @@ Let an event's creator choose on the notification/ping page when the announcemen
 
 ## Where things stand
 
-Interphase spec written unattended in the full feature pathway: 12 criteria at 6 seams, 4 Steps in one msp post-timing, record checks, probes and lock feasibility pass; the one spec review is running.
+Interphase spec written unattended in the full feature pathway: 12 criteria at 6 seams, 4 Steps in one msp post-timing, record checks, probes and lock feasibility pass; the one spec review is running. Run home ~/.mitosis/barnacle/event-announce-and-cleanup-timing holds facts.json; the drive supervisor job is loaded.
 
 ## Next step
 
