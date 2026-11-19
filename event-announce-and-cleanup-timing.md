@@ -1,7 +1,7 @@
 # event-announce-and-cleanup-timing: Event announcement lead time, sign-up clean-up delay, and past dates allowed
 Status: active
-Updated: 2026-11-19T23:13:36.049Z
-Next ids: c6 D1 R1 S1
+Updated: 2026-11-19T23:27:21.477Z
+Next ids: c6 D2 R1 S1
 
 ## Goal
 
@@ -24,6 +24,8 @@ Interphase spec written unattended in the full feature pathway: 12 criteria at 6
 Apply the interphase spec reviewer's fixes once, rerender and recheck the spec and items, finish interphase Phase 10 hand-off, then record the hand-off decision and run pipeline setup and drive start.
 
 ## Decisions in force
+
+- D1 hand-off: build the post-timing spec unattended through mitosis: Hand the spec to the drive now: pipeline setup, then drive start, ending in a pull request the owner merges.
 
 ## Open risks
 
