@@ -1,6 +1,6 @@
 # event-announce-and-cleanup-timing: Event announcement lead time, sign-up clean-up delay, and past dates allowed
 Status: active
-Updated: 2026-11-19T23:00:15.662Z
+Updated: 2026-11-19T23:13:03.638Z
 Next ids: c6 D1 R1 S1
 
 ## Goal
@@ -17,11 +17,11 @@ Let an event's creator choose on the notification/ping page when the announcemen
 
 ## Where things stand
 
-Not started.
+Interphase spec written unattended in the full feature pathway: 12 criteria at 6 seams, 4 Steps in one msp post-timing, record checks, probes and lock feasibility pass; the one spec review is running.
 
 ## Next step
 
-Run interphase:feature in the standard lane with "Work autonomously." on the three event changes, then pipeline setup and drive start.
+Apply the interphase spec reviewer's fixes once, rerender and recheck the spec and items, finish interphase Phase 10 hand-off, then record the hand-off decision and run pipeline setup and drive start.
 
 ## Decisions in force
 
@@ -30,3 +30,8 @@ Run interphase:feature in the standard lane with "Work autonomously." on the thr
 ## Settled, do not reopen
 
 ## Where the details live
+
+- Spec: docs/specs/event-announce-and-cleanup-timing.md
+- Steps: docs/specs/event-announce-and-cleanup-timing.items.json
+- Intent and decisions: docs/specs/event-announce-and-cleanup-timing.decisions.md
+- Interview record: docs/specs/event-announce-and-cleanup-timing.record.json
