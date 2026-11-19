@@ -1,6 +1,6 @@
 # event-announce-and-cleanup-timing: Event announcement lead time, sign-up clean-up delay, and past dates allowed
 Status: active
-Updated: 2026-11-19T23:27:27.283Z
+Updated: 2026-11-19T23:27:46.815Z
 Next ids: c6 D2 R1 S1
 
 ## Goal
@@ -21,9 +21,7 @@ Interphase handed off the spec unattended: 13 criteria at 7 seams, 4 Steps in ms
 
 ## Next step
 
-Run pipeline setup --repo /Users/satanshumishra/Documents/DevLabs/barnacle --slug event-announce-and-cleanup-timing --facts ~/.mitosis/barnacle/event-announce-and-cleanup-timing/facts.json, then pipeline drive start and one background pipeline drive wait.
-
-Needs: D1.
+The drive entered plan and runs it next.
 
 ## Decisions in force
 
