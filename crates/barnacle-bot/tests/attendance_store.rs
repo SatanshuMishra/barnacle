@@ -913,7 +913,7 @@ async fn a_missing_table_is_named() {
     ));
     let pool = memory_pool().await;
     sqlx::raw_sql(
-        "CREATE TABLE cb_seasons (id INTEGER PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL, name TEXT NOT NULL, first_day TEXT NOT NULL, last_day TEXT NOT NULL, weekdays INTEGER NOT NULL, start_minute INTEGER NOT NULL, time_zone TEXT NOT NULL, hours INTEGER NOT NULL, created_by INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, ended_at_ms INTEGER) STRICT; CREATE TABLE cb_season_ping_roles (season_id INTEGER NOT NULL, position INTEGER NOT NULL, role_id INTEGER NOT NULL, PRIMARY KEY (season_id, position)) STRICT",
+        "CREATE TABLE cb_seasons (id INTEGER PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL, name TEXT NOT NULL, first_day TEXT NOT NULL, last_day TEXT NOT NULL, weekdays INTEGER NOT NULL, start_minute INTEGER NOT NULL, time_zone TEXT NOT NULL, hours INTEGER NOT NULL, created_by INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, ended_at_ms INTEGER, post_lead_days INTEGER NOT NULL DEFAULT 1, clean_up_minutes INTEGER NOT NULL DEFAULT 30) STRICT; CREATE TABLE cb_season_ping_roles (season_id INTEGER NOT NULL, position INTEGER NOT NULL, role_id INTEGER NOT NULL, PRIMARY KEY (season_id, position)) STRICT",
     )
     .execute(&pool)
     .await
@@ -1295,6 +1295,7 @@ async fn a_database_without_the_rehearsal_clock_is_named() {
         .unwrap();
     run_script(&pool, common::CB_PING_ROLES).await.unwrap();
     run_script(&pool, common::CB_EVENTS).await.unwrap();
+    run_script(&pool, common::CB_POST_TIMING).await.unwrap();
     let error = Attendance::with_pool(pool).await.err().unwrap();
     assert!(matches!(
         error,
@@ -1380,6 +1381,7 @@ async fn migration_0006_moves_each_ping_role_to_position_one() {
         .unwrap();
     run_script(&pool, common::CB_PING_ROLES).await.unwrap();
     run_script(&pool, common::CB_EVENTS).await.unwrap();
+    run_script(&pool, common::CB_POST_TIMING).await.unwrap();
     let store = Attendance::with_pool(pool).await.unwrap();
     assert_eq!(
         store.event(1).await.unwrap().unwrap().ping_roles,
@@ -1498,6 +1500,7 @@ async fn migration_0008_names_each_season_after_its_title() {
         .await
         .unwrap();
     run_script(&pool, common::CB_EVENTS).await.unwrap();
+    run_script(&pool, common::CB_POST_TIMING).await.unwrap();
     let store = Attendance::with_pool(pool).await.unwrap();
     let season_35 = store.event(1).await.unwrap().unwrap();
     assert_eq!(season_35.name, "Clan Battles · Season 35");
@@ -1521,6 +1524,7 @@ async fn migration_0008_keeps_ended_and_every_day_seasons() {
         .await
         .unwrap();
     run_script(&pool, common::CB_EVENTS).await.unwrap();
+    run_script(&pool, common::CB_POST_TIMING).await.unwrap();
     let store = Attendance::with_pool(pool).await.unwrap();
     let ended = store.event(1).await.unwrap().unwrap();
     assert_eq!(ended.ended_at_ms, Some(1_700_000_900_000));
@@ -1551,6 +1555,7 @@ async fn migration_0008_keeps_ping_roles_posts_and_answers() {
         .await
         .unwrap();
     run_script(&pool, common::CB_EVENTS).await.unwrap();
+    run_script(&pool, common::CB_POST_TIMING).await.unwrap();
     let store = Attendance::with_pool(pool).await.unwrap();
     let event = store.event(1).await.unwrap().unwrap();
     assert_eq!(event.ping_roles, vec![RESERVES, CREWMATES]);
@@ -1599,6 +1604,7 @@ async fn the_0008_rollback_restores_seasons() {
         .await
         .unwrap();
     run_script(&pool, common::CB_EVENTS).await.unwrap();
+    run_script(&pool, common::CB_POST_TIMING).await.unwrap();
     let store = Attendance::with_pool(pool.clone()).await.unwrap();
     let seven_days = created(
         &store,
@@ -1627,6 +1633,9 @@ async fn the_0008_rollback_restores_seasons() {
         .unwrap();
     let season_before = posts_and_answers(&pool, 1).await;
     let seven_days_before = posts_and_answers(&pool, seven_days.id).await;
+    run_script(&pool, common::CB_POST_TIMING_DOWN)
+        .await
+        .unwrap();
     run_script(&pool, common::CB_EVENTS_DOWN).await.unwrap();
     assert_eq!(table_columns(&pool, "cb_seasons").await, SEASONS_AT_0007);
     let rows: Vec<(i64, i64, Option<String>, i64)> =
@@ -1683,8 +1692,12 @@ async fn the_0008_rollback_refuses_what_0007_cannot_hold() {
     .await;
     let denver_before = event_state(&pool, denver.id).await;
     let answers_before = every_answer(&pool).await;
+    run_script(&pool, common::CB_POST_TIMING_DOWN)
+        .await
+        .unwrap();
     assert!(run_script(&pool, common::CB_EVENTS_DOWN).await.is_err());
     rolled_back(&pool).await;
+    run_script(&pool, common::CB_POST_TIMING).await.unwrap();
     assert_eq!(event_state(&pool, denver.id).await, denver_before);
     assert_eq!(every_answer(&pool).await, answers_before);
     assert_eq!(store.event(denver.id).await.unwrap(), Some(denver));
@@ -1732,8 +1745,12 @@ async fn the_0008_rollback_refuses_what_0007_cannot_hold() {
         .unwrap();
     let long_before = event_state(&pool, long.id).await;
     let answers_before = every_answer(&pool).await;
+    run_script(&pool, common::CB_POST_TIMING_DOWN)
+        .await
+        .unwrap();
     assert!(run_script(&pool, common::CB_EVENTS_DOWN).await.is_err());
     rolled_back(&pool).await;
+    run_script(&pool, common::CB_POST_TIMING).await.unwrap();
     assert_eq!(event_state(&pool, long.id).await, long_before);
     assert_eq!(every_answer(&pool).await, answers_before);
     assert_eq!(store.event(long.id).await.unwrap(), Some(with_posts(&long)));
@@ -1760,8 +1777,12 @@ async fn the_0008_rollback_refuses_an_answer_above_hour_4_on_a_4_hour_event() {
         )
         .await
         .unwrap();
+    run_script(&pool, common::CB_POST_TIMING_DOWN)
+        .await
+        .unwrap();
     assert!(run_script(&pool, common::CB_EVENTS_DOWN).await.is_err());
     rolled_back(&pool).await;
+    run_script(&pool, common::CB_POST_TIMING).await.unwrap();
     assert_eq!(counted(&pool, MARKS_OF_EVENT, event.id).await, 5);
     assert!(
         table_columns(&pool, "cb_seasons")

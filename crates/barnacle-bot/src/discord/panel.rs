@@ -94,7 +94,9 @@ pub(super) async fn pressed(
         | PanelPart::Next
         | PanelPart::Back
         | PanelPart::DatesModal
-        | PanelPart::TimeModal => {
+        | PanelPart::TimeModal
+        | PanelPart::PostLead
+        | PanelPart::CleanUp => {
             match changed(
                 &data.drafts,
                 panel,
@@ -174,7 +176,9 @@ pub(super) async fn submitted(
         | PanelPart::TypeDates
         | PanelPart::SetTime
         | PanelPart::Next
-        | PanelPart::Back => data
+        | PanelPart::Back
+        | PanelPart::PostLead
+        | PanelPart::CleanUp => data
             .drafts
             .with(panel, user, now_ms)
             .and(Err(Refusal::PanelUnknown)),
@@ -211,6 +215,12 @@ fn changed(
         (PanelPart::Roles, serenity::ComponentInteractionDataKind::RoleSelect { values }) => {
             let roles: Vec<RoleId> = values.iter().map(|role| RoleId::new(role.get())).collect();
             event_draft::roles_picked(drafts, panel, user, &roles, now_ms)
+        }
+        (PanelPart::PostLead, serenity::ComponentInteractionDataKind::StringSelect { values }) => {
+            event_draft::post_lead_picked(drafts, panel, user, values, now_ms)
+        }
+        (PanelPart::CleanUp, serenity::ComponentInteractionDataKind::StringSelect { values }) => {
+            event_draft::clean_up_picked(drafts, panel, user, values, now_ms)
         }
         (PanelPart::Everyone, serenity::ComponentInteractionDataKind::Button) => {
             event_draft::everyone_pressed(drafts, panel, user, now_ms)

@@ -24,7 +24,9 @@ use crate::ids::RoleId;
 use crate::panels;
 use crate::panels::Owned;
 use crate::schedule;
+use crate::schedule::CleanUpDelay;
 use crate::schedule::Hours;
+use crate::schedule::PostLead;
 use crate::schedule::Schedule;
 use crate::schedule::Span;
 use crate::schedule::StartTime;
@@ -156,6 +158,8 @@ pub struct Changed {
     pub hours: bool,
     pub channel: bool,
     pub pings: bool,
+    pub post_lead: bool,
+    pub clean_up: bool,
 }
 
 impl Changed {
@@ -164,7 +168,13 @@ impl Changed {
     }
 
     fn any(self) -> bool {
-        self.schedule() || self.name || self.hours || self.channel || self.pings
+        self.schedule()
+            || self.name
+            || self.hours
+            || self.channel
+            || self.pings
+            || self.post_lead
+            || self.clean_up
     }
 }
 
@@ -182,7 +192,8 @@ pub struct Draft {
     start: Option<StartTime>,
     hours: Option<Hours>,
     zone: Option<Zone>,
-    today_zone: Zone,
+    post_lead: PostLead,
+    clean_up: CleanUpDelay,
     everyone: bool,
     roles: Vec<RoleId>,
     changed: Changed,
@@ -300,7 +311,12 @@ impl Draft {
             weekdays: template.as_ref().map(Schedule::weekdays),
             start: template.as_ref().map(Schedule::start),
             hours: template.as_ref().map(Schedule::hours),
-            today_zone: options.zone.clone().unwrap_or_else(|| zone.clone()),
+            post_lead: template
+                .as_ref()
+                .map_or_else(PostLead::default, Schedule::post_lead),
+            clean_up: template
+                .as_ref()
+                .map_or_else(CleanUpDelay::default, Schedule::clean_up),
             zone: Some(zone),
             everyone: false,
             roles: Vec::new(),
@@ -343,7 +359,8 @@ impl Draft {
             weekdays: Some(held.weekdays()),
             start: Some(held.start()),
             hours: Some(held.hours()),
-            today_zone: zone.clone(),
+            post_lead: held.post_lead(),
+            clean_up: held.clean_up(),
             zone: Some(zone),
             everyone: event.ping_roles.contains(&everyone),
             roles: event
@@ -403,14 +420,28 @@ impl Draft {
         self.zone.as_ref()
     }
 
+    pub fn post_lead(&self) -> PostLead {
+        self.post_lead
+    }
+
+    pub fn clean_up(&self) -> CleanUpDelay {
+        self.clean_up
+    }
+
     pub fn span(&self) -> Option<Span> {
         let (first_day, last_day, weekdays) = self.picked_days().ok()?;
         let (start, hours, zone) = self.picked_time().ok()?;
         Span::new(
             first_day,
             last_day,
-            Schedule::new(weekdays, start, zone, hours),
+            self.timed(Schedule::new(weekdays, start, zone, hours)),
         )
+    }
+
+    fn timed(&self, schedule: Schedule) -> Schedule {
+        schedule
+            .with_post_lead(self.post_lead)
+            .with_clean_up(self.clean_up)
     }
 
     pub fn everyone(&self) -> bool {
@@ -449,13 +480,6 @@ impl Draft {
     ) -> Result<Draft, Refusal> {
         let first_day = read_day(first)?;
         let last_day = read_day(last)?;
-        let today = self
-            .today_zone
-            .today(now_unix)
-            .ok_or(Refusal::DatesTooFar)?;
-        if self.purpose == Purpose::Create && first_day < today {
-            return Err(Refusal::FirstDayPast);
-        }
         if last_day < first_day {
             return Err(Refusal::LastDayBeforeFirst);
         }
@@ -504,6 +528,36 @@ impl Draft {
             weekdays: Some(weekdays),
             changed: Changed {
                 weekdays: self.changed.weekdays || self.weekdays != Some(weekdays),
+                ..self.changed
+            },
+            ..self.clone()
+        })
+    }
+
+    pub fn with_post_lead(&self, values: &[String]) -> Result<Draft, Refusal> {
+        let post_lead = only_number(values)
+            .and_then(|days| u8::try_from(days).ok())
+            .and_then(PostLead::from_days)
+            .ok_or(Refusal::PostTimingInvalid)?;
+        Ok(Draft {
+            post_lead,
+            changed: Changed {
+                post_lead: self.changed.post_lead || self.post_lead != post_lead,
+                ..self.changed
+            },
+            ..self.clone()
+        })
+    }
+
+    pub fn with_clean_up(&self, values: &[String]) -> Result<Draft, Refusal> {
+        let clean_up = only_number(values)
+            .and_then(|minutes| u16::try_from(minutes).ok())
+            .and_then(CleanUpDelay::from_minutes)
+            .ok_or(Refusal::PostTimingInvalid)?;
+        Ok(Draft {
+            clean_up,
+            changed: Changed {
+                clean_up: self.changed.clean_up || self.clean_up != clean_up,
                 ..self.changed
             },
             ..self.clone()
@@ -642,7 +696,7 @@ impl Draft {
         let span = Span::new(
             first_day,
             last_day,
-            Schedule::new(weekdays, start, zone, hours),
+            self.timed(Schedule::new(weekdays, start, zone, hours)),
         )
         .ok_or(Refusal::LastDayBeforeFirst)?;
         if !within_window(&span, now_unix) {
@@ -721,6 +775,8 @@ impl Draft {
             hours: self.changed.hours.then(|| schedule.hours()),
             channel: self.changed.channel.then_some(self.channel),
             ping_roles: self.changed.pings.then(|| self.ping_roles()),
+            post_lead: self.changed.post_lead.then(|| schedule.post_lead()),
+            clean_up: self.changed.clean_up.then(|| schedule.clean_up()),
         }
     }
 
@@ -772,7 +828,9 @@ impl Draft {
         let first_session = self
             .span()
             .and_then(|span| text::first_session_line(&span, now_unix));
-        let pings = (self.step == Step::Pings).then(|| text::pings_summary(&self.pings()));
+        let on_pings = self.step == Step::Pings;
+        let pings = on_pings.then(|| text::pings_summary(&self.pings()));
+        let post_timing = on_pings.then(|| text::post_timing_line(self.post_lead, self.clean_up));
         [
             Some(text::panel_heading(&self.name, self.channel)),
             Some(text::step_line(self.step.number(), self.step.name())),
@@ -786,6 +844,7 @@ impl Draft {
             time,
             first_session,
             pings,
+            post_timing,
             self.problem(now_unix).map(str::to_owned),
         ]
         .into_iter()
@@ -890,6 +949,8 @@ impl Draft {
         let save_blocked = self.span().is_none() || self.nothing_ahead(now_unix);
         vec![
             serenity::CreateActionRow::SelectMenu(roles),
+            serenity::CreateActionRow::SelectMenu(self.post_lead_menu(panel)),
+            serenity::CreateActionRow::SelectMenu(self.clean_up_menu(panel)),
             serenity::CreateActionRow::Buttons(vec![
                 back_button(panel),
                 serenity::CreateButton::new(wiring::panel_id(panel, PanelPart::Save))
@@ -902,6 +963,65 @@ impl Draft {
                 cancel_button(panel),
             ]),
         ]
+    }
+}
+
+impl Draft {
+    fn post_lead_menu(&self, panel: u64) -> serenity::CreateSelectMenu {
+        single_choice_menu(
+            wiring::panel_id(panel, PanelPart::PostLead),
+            PostLead::choices()
+                .into_iter()
+                .map(|lead| {
+                    serenity::CreateSelectMenuOption::new(
+                        text::post_lead_label(lead),
+                        lead.days().to_string(),
+                    )
+                    .default_selection(lead == self.post_lead)
+                })
+                .collect(),
+            text::POST_LEAD_PLACEHOLDER,
+        )
+    }
+
+    fn clean_up_menu(&self, panel: u64) -> serenity::CreateSelectMenu {
+        single_choice_menu(
+            wiring::panel_id(panel, PanelPart::CleanUp),
+            CleanUpDelay::choices()
+                .into_iter()
+                .map(|delay| {
+                    serenity::CreateSelectMenuOption::new(
+                        text::clean_up_label(delay),
+                        delay.minutes().to_string(),
+                    )
+                    .default_selection(delay == self.clean_up)
+                })
+                .collect(),
+            text::CLEAN_UP_PLACEHOLDER,
+        )
+    }
+}
+
+fn single_choice_menu(
+    custom_id: String,
+    options: Vec<serenity::CreateSelectMenuOption>,
+    placeholder: &str,
+) -> serenity::CreateSelectMenu {
+    serenity::CreateSelectMenu::new(
+        custom_id,
+        serenity::CreateSelectMenuKind::String { options },
+    )
+    .placeholder(placeholder)
+    .min_values(1)
+    .max_values(1)
+}
+
+fn only_number(values: &[String]) -> Option<u32> {
+    match values {
+        [value] if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) => {
+            value.parse().ok()
+        }
+        _ => None,
     }
 }
 
@@ -971,6 +1091,30 @@ pub fn weekdays_picked(
 ) -> Result<PanelView, Refusal> {
     redrawn(drafts, panel, user, now_ms, |draft| {
         draft.with_weekdays(values)
+    })
+}
+
+pub fn post_lead_picked(
+    drafts: &Drafts,
+    panel: u64,
+    user: UserId,
+    values: &[String],
+    now_ms: u64,
+) -> Result<PanelView, Refusal> {
+    redrawn(drafts, panel, user, now_ms, |draft| {
+        draft.with_post_lead(values)
+    })
+}
+
+pub fn clean_up_picked(
+    drafts: &Drafts,
+    panel: u64,
+    user: UserId,
+    values: &[String],
+    now_ms: u64,
+) -> Result<PanelView, Refusal> {
+    redrawn(drafts, panel, user, now_ms, |draft| {
+        draft.with_clean_up(values)
     })
 }
 

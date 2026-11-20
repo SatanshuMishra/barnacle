@@ -45,6 +45,9 @@ pub const CB_PING_ROLES_DOWN: &str =
     include_str!("../../../../migrations/0006_cb_ping_roles.down.sql");
 pub const CB_EVENTS: &str = include_str!("../../../../migrations/0008_events.sql");
 pub const CB_EVENTS_DOWN: &str = include_str!("../../../../migrations/0008_events.down.sql");
+pub const CB_POST_TIMING: &str = include_str!("../../../../migrations/0014_event_post_timing.sql");
+pub const CB_POST_TIMING_DOWN: &str =
+    include_str!("../../../../migrations/0014_event_post_timing.down.sql");
 const CLI_DIRECTIVE: &str = ".bail on\n";
 pub const BUILD: u32 = 13187581;
 pub type StoredPost = (i64, String, i64, String, i64);
@@ -189,6 +192,10 @@ pub async fn attendance_pool() -> SqlitePool {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(CB_POST_TIMING.trim_start_matches(CLI_DIRECTIVE))
+        .execute(&pool)
+        .await
+        .unwrap();
     pool
 }
 
@@ -240,7 +247,6 @@ pub fn every_refusal() -> Vec<Refusal> {
         Refusal::RepostSuperseded,
         Refusal::SeriesRoundsOutOfRange,
         Refusal::TemplateUnknown,
-        Refusal::FirstDayPast,
         Refusal::MissingOptions(vec!["name", "first_day"]),
         Refusal::WeekdaysInvalid,
         Refusal::TooManyRoles,
@@ -251,6 +257,7 @@ pub fn every_refusal() -> Vec<Refusal> {
         Refusal::ZoneNeeded,
         Refusal::LengthNotWholeHours,
         Refusal::TimeFormat,
+        Refusal::PostTimingInvalid,
     ];
     for refusal in &refusals {
         match refusal {
@@ -284,7 +291,6 @@ pub fn every_refusal() -> Vec<Refusal> {
             | Refusal::RepostSuperseded
             | Refusal::SeriesRoundsOutOfRange
             | Refusal::TemplateUnknown
-            | Refusal::FirstDayPast
             | Refusal::MissingOptions(_)
             | Refusal::WeekdaysInvalid
             | Refusal::TooManyRoles
@@ -294,7 +300,8 @@ pub fn every_refusal() -> Vec<Refusal> {
             | Refusal::ChannelUnknown
             | Refusal::ZoneNeeded
             | Refusal::LengthNotWholeHours
-            | Refusal::TimeFormat => {}
+            | Refusal::TimeFormat
+            | Refusal::PostTimingInvalid => {}
         }
     }
     refusals

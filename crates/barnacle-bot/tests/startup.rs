@@ -30,6 +30,8 @@ const IQ_MARKS_DOWN: &str =
 const IQ_PLAYERS: &str = include_str!("../../../migrations/0013_iq_players_and_rejections.sql");
 const IQ_PLAYERS_DOWN: &str =
     include_str!("../../../migrations/0013_iq_players_and_rejections.down.sql");
+const POST_TIMING: &str = include_str!("../../../migrations/0014_event_post_timing.sql");
+const POST_TIMING_DOWN: &str = include_str!("../../../migrations/0014_event_post_timing.down.sql");
 
 struct Layout {
     _dir: tempfile::TempDir,
@@ -513,6 +515,8 @@ async fn a_database_rolled_back_from_0009_is_told_to_apply_it_again() {
             MEMBER_ZONES,
             IQ_MARKS,
             IQ_PLAYERS,
+            POST_TIMING,
+            POST_TIMING_DOWN,
             IQ_PLAYERS_DOWN,
             IQ_MARKS_DOWN,
             IQ_COMPETITION_DOWN,
@@ -524,7 +528,12 @@ async fn a_database_rolled_back_from_0009_is_told_to_apply_it_again() {
         .err()
         .unwrap();
     assert!(matches!(error, StartupError::Iq { .. }));
-    migrated(&layout, &[IQ_COMPETITION, IQ_MARKS, IQ_PLAYERS], "").await;
+    migrated(
+        &layout,
+        &[IQ_COMPETITION, IQ_MARKS, IQ_PLAYERS, POST_TIMING],
+        "",
+    )
+    .await;
     assert!(startup::open_stores(&layout.config.database).await.is_ok());
 }
 
@@ -644,13 +653,13 @@ async fn a_database_at_0012_is_told_to_apply_0013() {
 }
 
 #[tokio::test]
-async fn a_database_at_0013_opens() {
+async fn a_database_at_0014_opens() {
     let layout = layout(
         &yamato_catalog(),
         &["PJSB018", "PJSB019"],
         &curation_text(""),
     );
-    let through_0013: Vec<&str> = THROUGH_0007
+    let through_0014: Vec<&str> = THROUGH_0007
         .into_iter()
         .chain([
             common::CB_EVENTS,
@@ -659,9 +668,10 @@ async fn a_database_at_0013_opens() {
             MEMBER_ZONES,
             IQ_MARKS,
             IQ_PLAYERS,
+            POST_TIMING,
         ])
         .collect();
-    migrated(&layout, &through_0013, "").await;
+    migrated(&layout, &through_0014, "").await;
     assert!(startup::open_stores(&layout.config.database).await.is_ok());
 }
 
@@ -681,6 +691,7 @@ async fn a_database_rolled_back_from_0010_is_told_to_apply_it_again() {
             MEMBER_ZONES,
             IQ_MARKS,
             IQ_PLAYERS,
+            POST_TIMING,
             ORGANISER_ROLES_DOWN,
         ])
         .collect();

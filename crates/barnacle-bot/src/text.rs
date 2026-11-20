@@ -31,8 +31,10 @@ use crate::failure::join_names;
 use crate::ids::ChannelId;
 use crate::ids::Ping;
 use crate::panels::PANEL_LIFETIME_MINUTES;
+use crate::schedule::CleanUpDelay;
 use crate::schedule::Hour;
 use crate::schedule::Hours;
+use crate::schedule::PostLead;
 use crate::schedule::Session;
 use crate::schedule::Span;
 use crate::schedule::StartTime;
@@ -100,6 +102,9 @@ pub const CREATE_LABEL: &str = "Create";
 pub const SAVE_LABEL: &str = "Save";
 pub const EVENT_DAYS_PLACEHOLDER: &str = "Event days";
 pub const ROLES_PLACEHOLDER: &str = "Roles to ping";
+const MINUTES_IN_AN_HOUR: u16 = 60;
+pub const POST_LEAD_PLACEHOLDER: &str = "When sign-up posts go up";
+pub const CLEAN_UP_PLACEHOLDER: &str = "When sign-up posts are removed";
 pub const NEXT_TIME_LABEL: &str = "Next: time";
 pub const NEXT_PINGS_LABEL: &str = "Next: pings";
 pub const BACK_LABEL: &str = "Back";
@@ -436,7 +441,6 @@ pub enum Refusal {
     RepostSuperseded,
     SeriesRoundsOutOfRange,
     TemplateUnknown,
-    FirstDayPast,
     MissingOptions(Vec<&'static str>),
     WeekdaysInvalid,
     TooManyRoles,
@@ -447,6 +451,7 @@ pub enum Refusal {
     ZoneNeeded,
     LengthNotWholeHours,
     TimeFormat,
+    PostTimingInvalid,
 }
 
 impl Refusal {
@@ -482,7 +487,6 @@ impl Refusal {
             Refusal::RepostSuperseded => "repost_superseded",
             Refusal::SeriesRoundsOutOfRange => "series_rounds_out_of_range",
             Refusal::TemplateUnknown => "template_unknown",
-            Refusal::FirstDayPast => "first_day_past",
             Refusal::MissingOptions(_) => "missing_options",
             Refusal::WeekdaysInvalid => "weekdays_invalid",
             Refusal::TooManyRoles => "too_many_roles",
@@ -493,6 +497,7 @@ impl Refusal {
             Refusal::ZoneNeeded => "zone_needed",
             Refusal::LengthNotWholeHours => "length_not_whole_hours",
             Refusal::TimeFormat => "time_format",
+            Refusal::PostTimingInvalid => "post_timing_invalid",
         }
     }
 
@@ -605,9 +610,6 @@ impl Refusal {
                 "Barnacle offers one template, {}. Pick it from the list, or leave template out and pick the days and time in the panel.",
                 Template::ClanBattles.name()
             ),
-            Refusal::FirstDayPast => {
-                "The first day is in the past. Pick today or a later day.".to_owned()
-            }
             Refusal::MissingOptions(names) => format!(
                 "The panel still needs {}. Use Set dates, Event days and Set time, then press the button again.",
                 join_names(names)
@@ -639,6 +641,7 @@ impl Refusal {
                 "End must be a whole number of hours after Start, such as 19:00 to 21:00.".to_owned()
             }
             Refusal::TimeFormat => "Type times as 24-hour HH:MM, such as 19:00.".to_owned(),
+            Refusal::PostTimingInvalid => "Pick one choice from the menu.".to_owned(),
         }
     }
 }
@@ -1105,6 +1108,64 @@ pub fn pings_summary(pings: &[Ping]) -> String {
     } else {
         format!("Pings {}.", ping_mentions(pings))
     }
+}
+
+pub fn post_lead_label(lead: PostLead) -> String {
+    let label = format!("Post sign-ups {} before each session", days_phrase(lead));
+    if lead == PostLead::default() {
+        format!("{label} (default)")
+    } else {
+        label
+    }
+}
+
+pub fn clean_up_label(delay: CleanUpDelay) -> String {
+    let label = match delay.minutes() {
+        0 => "Remove sign-ups as soon as the session ends".to_owned(),
+        _ => format!(
+            "Remove sign-ups {} after the session ends",
+            duration_phrase(delay)
+        ),
+    };
+    if delay == CleanUpDelay::default() {
+        format!("{label} (default)")
+    } else {
+        label
+    }
+}
+
+pub fn post_timing_line(lead: PostLead, delay: CleanUpDelay) -> String {
+    let removed = match delay.minutes() {
+        0 => "as soon as it ends".to_owned(),
+        _ => format!("{} after it ends", duration_phrase(delay)),
+    };
+    format!(
+        "Sign-up posts go up {} before each session and are removed {removed}.",
+        days_phrase(lead)
+    )
+}
+
+fn days_phrase(lead: PostLead) -> String {
+    match lead.days() {
+        1 => "1 day".to_owned(),
+        days => format!("{days} days"),
+    }
+}
+
+fn duration_phrase(delay: CleanUpDelay) -> String {
+    let hours = delay.minutes() / MINUTES_IN_AN_HOUR;
+    let minutes = delay.minutes() % MINUTES_IN_AN_HOUR;
+    let hour_part = match hours {
+        0 => None,
+        1 => Some("1 hour".to_owned()),
+        hours => Some(format!("{hours} hours")),
+    };
+    let minute_part = (minutes > 0).then(|| format!("{minutes} minutes"));
+    [hour_part, minute_part]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<String>>()
+        .join(" ")
 }
 
 pub fn day_label(date: Date) -> String {

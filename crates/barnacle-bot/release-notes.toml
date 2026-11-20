@@ -1,4 +1,18 @@
 [[release]]
+version = "0.4.0"
+summary = "This update lets organisers choose when event sign-up posts go up and come down, and start an event in the past."
+
+[[release.change]]
+title = "Event sign-up posts"
+before = "A sign-up post went up 24 hours before each session and came down 30 minutes after it ended."
+now = "Organisers pick on the Pings step when it goes up (1 to 7 days before) and when it is removed (up to 4 hours after)."
+
+[[release.change]]
+title = "Event first day"
+before = "An event's first day had to be today or later."
+now = "An event's first day can now be in the past, and sign-up posts go up only for sessions still ahead."
+
+[[release]]
 version = "0.3.0"
 summary = "This update lets servers schedule any event with sign-ups, not only Clan Battles."
 
