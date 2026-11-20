@@ -1,6 +1,6 @@
 # event-announce-and-cleanup-timing: Event announcement lead time, sign-up clean-up delay, and past dates allowed
 Status: parked
-Updated: 2026-11-20T00:26:25.409Z
+Updated: 2026-11-20T00:27:50.235Z
 Next ids: c6 D2 R1 S1
 
 ## Goal
@@ -21,7 +21,7 @@ Pull request 69 (msp post-timing) is merged into feat/event-announce-and-cleanup
 
 ## Next step
 
-The drive entered feature-pr and runs it next.
+The drive entered draft-pr and the run has ended: draft FEATURE pull request; unmet checks: lighthouse verdict unproven: the container image applies migration 0014 and starts, sign-up posts go up and come down on each event's timing in a live server, neighbour container image, neighbour live Discord bot. After the owner merges it, pipeline drive event --name feature-merged runs clean-up. The project's version was left alone: Cargo.toml sets its version under [workspace.package], which the recogniser does not bump.
 
 ## Decisions in force
 
