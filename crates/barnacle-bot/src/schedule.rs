@@ -12,8 +12,6 @@ use jiff::tz::TimeZoneDatabase;
 
 pub const MAX_HOURS: u8 = 24;
 pub const SECONDS_PER_HOUR: i64 = 3600;
-pub const POST_LEAD_SECONDS: i64 = 24 * SECONDS_PER_HOUR;
-pub const REMOVE_AFTER_END_SECONDS: i64 = 30 * 60;
 
 pub const RANGE_MONTHS: i32 = 6;
 pub const REHEARSAL_SESSIONS: u32 = 3;
@@ -24,6 +22,14 @@ pub const ZONE_NAME_LIMIT: usize = 64;
 const DAY_TEXT_LENGTH: usize = 10;
 const UTC_NAME: &str = "UTC";
 const MINUTES_PER_HOUR: i64 = 60;
+const SECONDS_PER_MINUTE: i64 = 60;
+const SECONDS_PER_DAY: i64 = 86_400;
+const POST_LEAD_DAYS_MIN: u8 = 1;
+const POST_LEAD_DAYS_MAX: u8 = 7;
+const POST_LEAD_DAYS_DEFAULT: u8 = 1;
+const CLEAN_UP_MINUTES_MAX: u16 = 240;
+const CLEAN_UP_MINUTES_STEP: u16 = 30;
+const CLEAN_UP_MINUTES_DEFAULT: u16 = 30;
 const MINUTES_PER_DAY: i64 = 24 * MINUTES_PER_HOUR;
 const LAST_HOUR_OF_DAY: i8 = 23;
 const LAST_MINUTE_OF_HOUR: i8 = 59;
@@ -82,6 +88,68 @@ impl Hours {
 
     pub fn holds(self, hour: Hour) -> bool {
         hour.get() <= self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PostLead(u8);
+
+impl PostLead {
+    pub fn from_days(days: u8) -> Option<Self> {
+        (POST_LEAD_DAYS_MIN..=POST_LEAD_DAYS_MAX)
+            .contains(&days)
+            .then_some(Self(days))
+    }
+
+    pub fn days(self) -> u8 {
+        self.0
+    }
+
+    pub fn choices() -> Vec<Self> {
+        (POST_LEAD_DAYS_MIN..=POST_LEAD_DAYS_MAX)
+            .map(Self)
+            .collect()
+    }
+
+    fn seconds(self) -> i64 {
+        i64::from(self.0) * SECONDS_PER_DAY
+    }
+}
+
+impl Default for PostLead {
+    fn default() -> Self {
+        Self(POST_LEAD_DAYS_DEFAULT)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CleanUpDelay(u16);
+
+impl CleanUpDelay {
+    pub fn from_minutes(minutes: u16) -> Option<Self> {
+        (minutes <= CLEAN_UP_MINUTES_MAX && minutes.is_multiple_of(CLEAN_UP_MINUTES_STEP))
+            .then_some(Self(minutes))
+    }
+
+    pub fn minutes(self) -> u16 {
+        self.0
+    }
+
+    pub fn choices() -> Vec<Self> {
+        (0..=CLEAN_UP_MINUTES_MAX)
+            .step_by(usize::from(CLEAN_UP_MINUTES_STEP))
+            .map(Self)
+            .collect()
+    }
+
+    fn seconds(self) -> i64 {
+        i64::from(self.0) * SECONDS_PER_MINUTE
+    }
+}
+
+impl Default for CleanUpDelay {
+    fn default() -> Self {
+        Self(CLEAN_UP_MINUTES_DEFAULT)
     }
 }
 
@@ -327,6 +395,8 @@ pub struct Schedule {
     start: StartTime,
     zone: Zone,
     hours: Hours,
+    post_lead: PostLead,
+    clean_up: CleanUpDelay,
 }
 
 impl Schedule {
@@ -336,7 +406,31 @@ impl Schedule {
             start,
             zone,
             hours,
+            post_lead: PostLead::default(),
+            clean_up: CleanUpDelay::default(),
         }
+    }
+
+    pub fn with_post_lead(&self, post_lead: PostLead) -> Self {
+        Self {
+            post_lead,
+            ..self.clone()
+        }
+    }
+
+    pub fn with_clean_up(&self, clean_up: CleanUpDelay) -> Self {
+        Self {
+            clean_up,
+            ..self.clone()
+        }
+    }
+
+    pub fn post_lead(&self) -> PostLead {
+        self.post_lead
+    }
+
+    pub fn clean_up(&self) -> CleanUpDelay {
+        self.clean_up
     }
 
     pub fn clan_battles() -> Self {
@@ -382,6 +476,8 @@ impl Schedule {
             date,
             start_unix: start.timestamp().as_second(),
             hours: self.hours,
+            post_lead: self.post_lead,
+            clean_up: self.clean_up,
         })
     }
 }
@@ -391,6 +487,8 @@ pub struct Session {
     date: Date,
     start_unix: i64,
     hours: Hours,
+    post_lead: PostLead,
+    clean_up: CleanUpDelay,
 }
 
 impl Session {
@@ -423,7 +521,7 @@ impl Session {
     }
 
     pub fn post_at_unix(self) -> i64 {
-        self.start_unix - POST_LEAD_SECONDS
+        self.start_unix - self.post_lead.seconds()
     }
 
     pub fn close_unix(self) -> i64 {
@@ -431,7 +529,7 @@ impl Session {
     }
 
     pub fn remove_at_unix(self) -> i64 {
-        self.end_unix() + REMOVE_AFTER_END_SECONDS
+        self.end_unix() + self.clean_up.seconds()
     }
 }
 

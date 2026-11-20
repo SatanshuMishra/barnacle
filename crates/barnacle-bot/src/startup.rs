@@ -177,6 +177,14 @@ pub enum StartupError {
         #[source]
         source: IqStoreError,
     },
+    #[error(
+        "the sign-up timing columns are missing from {path}; back the file up, then add them with `sqlite3 {path} < migrations/0014_event_post_timing.sql`"
+    )]
+    PostTiming {
+        path: PathBuf,
+        #[source]
+        source: AttendanceError,
+    },
 }
 
 fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
@@ -186,6 +194,7 @@ fn attendance_error(path: &Path, source: AttendanceError) -> StartupError {
         AttendanceError::BeforeEvents | AttendanceError::MissingIndex { .. } => {
             StartupError::Events { path, source }
         }
+        AttendanceError::BeforePostTiming => StartupError::PostTiming { path, source },
         AttendanceError::UnexpectedColumns { .. } => StartupError::SeasonControls { path, source },
         source => StartupError::Attendance { path, source },
     }
@@ -305,7 +314,9 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
     let attendance = match Attendance::with_pool(pool.clone()).await {
         Ok(attendance) => Ok(attendance),
         Err(source) => match attendance_error(path, source) {
-            events @ StartupError::Events { .. } => Err(events),
+            deferred @ (StartupError::Events { .. } | StartupError::PostTiming { .. }) => {
+                Err(deferred)
+            }
             other => return Err(other),
         },
     };
@@ -321,7 +332,10 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
             path: path.to_owned(),
             source,
         })?;
-    let attendance = attendance?;
+    let attendance = match attendance {
+        Err(events @ StartupError::Events { .. }) => return Err(events),
+        later => later,
+    };
     let iq = match IqStore::with_pool(pool.clone()).await {
         Ok(iq) => Ok(iq),
         Err(source @ IqStoreError::BeforeMarks) => Err(StartupError::IqMarks {
@@ -352,6 +366,7 @@ pub async fn open_stores(path: &Path) -> Result<Stores, StartupError> {
             source,
         })?;
     let iq = iq?;
+    let attendance = attendance?;
     Ok(Stores {
         solves,
         attendance,

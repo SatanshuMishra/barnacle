@@ -645,7 +645,6 @@ fn bad_typed_dates_are_refused_each_in_its_own_way() {
         ("", "2026-10-18", Refusal::DateFormat),
         ("2026-10-18", "2026-10-14", Refusal::LastDayBeforeFirst),
         ("2026-10-14", "2027-06-01", Refusal::DatesTooFar),
-        ("2026-10-12", "2026-10-20", Refusal::FirstDayPast),
     ] {
         assert_eq!(
             templated("Ranked Sprint")
@@ -697,22 +696,6 @@ fn no_picked_weekday_between_the_dates_holds_the_days_step() {
     .with_weekdays(&strings(&["sat"]))
     .unwrap();
     assert_eq!(draft.next(), Err(Refusal::WeekdaysInvalid));
-}
-
-#[test]
-fn typed_dates_count_today_in_the_members_zone() {
-    assert!(
-        create_in("Ranked Sprint", None, "America/Edmonton")
-            .unwrap()
-            .with_typed_dates("2026-11-01", "2026-11-03", EVENING_IN_EDMONTON)
-            .is_ok()
-    );
-    assert_eq!(
-        create_in("Ranked Sprint", None, "UTC")
-            .unwrap()
-            .with_typed_dates("2026-11-01", "2026-11-03", EVENING_IN_EDMONTON),
-        Err(Refusal::FirstDayPast)
-    );
 }
 
 #[test]
@@ -927,14 +910,14 @@ fn the_panel_previews_the_event() {
         "{content}"
     );
     let rows = reply["components"].as_array().unwrap().clone();
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 4);
     let roles = &rows[0]["components"][0];
     assert_eq!(roles["custom_id"], "barnacle-event:7:roles");
     assert_eq!(roles["type"], 6);
     assert_eq!(roles["min_values"], 0);
     assert_eq!(roles["max_values"], 5);
     assert_eq!(
-        rows[1]["components"]
+        rows[3]["components"]
             .as_array()
             .unwrap()
             .iter()

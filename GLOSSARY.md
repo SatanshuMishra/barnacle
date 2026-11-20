@@ -15,6 +15,18 @@ _Avoid_: Match, game night
 The days of the week an event runs on, chosen only from the days that occur between its first and last day.
 _Avoid_: Weekdays
 
+**Sign-up post**:
+The message for one session where members mark the hours they will play; it goes up with the event's pings, closes when the session starts and is removed after the session ends.
+_Avoid_: Announcement, sign-up sheet
+
+**Post lead**:
+How many whole days, from 1 to 7, before a session starts its sign-up post goes up; 1 day unless the organiser picks another.
+_Avoid_: Announcement time, notice period
+
+**Clean-up delay**:
+How long after a session ends its sign-up post is removed, from 0 minutes to 4 hours in 30-minute steps; 30 minutes unless the organiser picks another.
+_Avoid_: Linger time, retention
+
 **Template**:
 A preset that fills an event's event days, start, length and zone, such as Clan Battles.
 

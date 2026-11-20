@@ -278,10 +278,10 @@ fn variant(refusal: &Refusal) -> usize {
         Refusal::PanelNotYours => 34,
         Refusal::PanelExpired => 35,
         Refusal::ChannelUnknown => 36,
-        Refusal::FirstDayPast => 37,
-        Refusal::ZoneNeeded => 38,
-        Refusal::LengthNotWholeHours => 39,
-        Refusal::TimeFormat => 40,
+        Refusal::ZoneNeeded => 37,
+        Refusal::LengthNotWholeHours => 38,
+        Refusal::TimeFormat => 39,
+        Refusal::PostTimingInvalid => 40,
     }
 }
 
@@ -324,7 +324,6 @@ fn every_refusal_code_is_unique_and_snake_case() {
     assert_eq!(Refusal::DateFormat.code(), "date_format");
     assert_eq!(Refusal::EventNotFound.code(), "event_not_found");
     assert_eq!(Refusal::NoSessionsLeft.code(), "no_sessions_left");
-    assert_eq!(Refusal::FirstDayPast.code(), "first_day_past");
     assert_eq!(
         Refusal::NameTaken("Ranked Sprint".to_owned()).code(),
         "name_taken"
@@ -368,10 +367,6 @@ fn every_refusal_says_what_to_do_next() {
     assert_eq!(
         Refusal::DateFormat.message(),
         "Write each day as 2026-12-14. A day name in brackets after it is fine too."
-    );
-    assert_eq!(
-        Refusal::FirstDayPast.message(),
-        "The first day is in the past. Pick today or a later day."
     );
     assert_eq!(
         Refusal::LastDayBeforeFirst.message(),

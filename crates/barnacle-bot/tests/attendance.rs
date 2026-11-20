@@ -2968,6 +2968,9 @@ async fn a_button_from_before_0008_still_records() {
         .await
         .unwrap();
     common::run_script(&pool, common::CB_EVENTS).await.unwrap();
+    common::run_script(&pool, common::CB_POST_TIMING)
+        .await
+        .unwrap();
     let store = Attendance::with_pool(pool).await.unwrap();
     let signups = Signups::new(FakeBoard::new(), store.clone());
     let pressed = wiring::signup_click("barnacle-cb:1:2026-10-14:all:in").unwrap();

@@ -1,0 +1,321 @@
+{
+  "version": 1,
+  "sources": [
+    "Cargo.toml",
+    "crates/barnacle-bot/Cargo.toml",
+    "crates/barnacle-catalog/Cargo.toml",
+    "crates/barnacle-data/Cargo.toml",
+    "crates/barnacle-guess/Cargo.toml",
+    "rust-toolchain.toml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/image.yml",
+    ".github/scripts/smoke.sh",
+    "Dockerfile",
+    "docker/entrypoint.sh",
+    "compose.yaml",
+    "barnacle.example.toml",
+    "env.example",
+    ".gitignore",
+    "receipts.config.json",
+    "README.md"
+  ],
+  "setup": {
+    "command": "cargo fetch --locked"
+  },
+  "build": {
+    "command": "cargo build --workspace --locked"
+  },
+  "suite": {
+    "command": "cargo test --workspace",
+    "junit": null,
+    "rerun": null,
+    "isolated": true
+  },
+  "test_data": "Tests seed their own data through crates/barnacle-bot/tests/common, on in-memory SQLite pools or temporary database files migrated with migrations/, and drive the Discord side through the FakeBoard fake; the real-catalog tests skip unless BARNACLE_TEST_CATALOG_DIR names a built catalog",
+  "surfaces": [
+    {
+      "name": "event sign-ups and their post and clean-up timing",
+      "kind": "Discord slash commands /event create, edit, repost, end and list, the three-step event panel, and the sign-up timer that posts, closes and deletes sign-up posts",
+      "paths": [
+        "crates/barnacle-bot/src/schedule.rs",
+        "crates/barnacle-bot/src/event_draft.rs",
+        "crates/barnacle-bot/src/panels.rs",
+        "crates/barnacle-bot/src/wiring.rs",
+        "crates/barnacle-bot/src/attendance.rs",
+        "crates/barnacle-bot/src/attendance_store.rs",
+        "crates/barnacle-bot/src/discord/events.rs",
+        "crates/barnacle-bot/src/discord/panel.rs",
+        "crates/barnacle-bot/src/discord/board.rs",
+        "crates/barnacle-bot/src/discord/commands.rs",
+        "migrations/0014_event_post_timing.sql"
+      ],
+      "driver": "cargo test -p barnacle-bot with the project's own tests (event_*, post_timing_*, schedule, attendance*, wiring) over the pure panel builders, the store on a migrated SQLite pool and the sign-up beat with FakeBoard",
+      "available": true,
+      "reach": "cargo --version",
+      "sign_in": {
+        "method": "none",
+        "command": null
+      },
+      "credentials": [],
+      "trials": 1
+    },
+    {
+      "name": "rehearsal clock",
+      "kind": "Discord slash commands /rehearse start, next and reset in a rehearsal server",
+      "paths": [
+        "crates/barnacle-bot/src/attendance.rs",
+        "crates/barnacle-bot/src/discord/commands.rs",
+        "migrations/0004_cb_rehearsal_harness.sql"
+      ],
+      "driver": "cargo test -p barnacle-bot --test attendance and the attendance store tests, which step the rehearsal clock with FakeBoard",
+      "available": true,
+      "reach": "cargo --version",
+      "sign_in": {
+        "method": "none",
+        "command": null
+      },
+      "credentials": [],
+      "trials": 1
+    },
+    {
+      "name": "bot updates and release notes",
+      "kind": "Discord slash command /updates and the release notes built into the bot",
+      "paths": [
+        "crates/barnacle-bot/src/release_notes.rs",
+        "crates/barnacle-bot/release-notes.toml",
+        "crates/barnacle-bot/src/updates.rs",
+        "crates/barnacle-bot/src/updates_store.rs",
+        "crates/barnacle-bot/src/discord/announcer.rs",
+        "docs/release-notes.md"
+      ],
+      "driver": "cargo test -p barnacle-bot --test release_notes --test updates --test updates_store",
+      "available": true,
+      "reach": "cargo --version",
+      "sign_in": {
+        "method": "none",
+        "command": null
+      },
+      "credentials": [],
+      "trials": 1
+    },
+    {
+      "name": "bot startup checks",
+      "kind": "the barnacle-bot binary's checks of config, catalog, curation and database schema before it connects",
+      "paths": [
+        "crates/barnacle-bot/src/startup.rs",
+        "crates/barnacle-bot/src/config.rs",
+        "crates/barnacle-bot/src/main.rs",
+        "migrations"
+      ],
+      "driver": "cargo test -p barnacle-bot --test startup --test config --test migration_order",
+      "available": true,
+      "reach": "cargo --version",
+      "sign_in": {
+        "method": "none",
+        "command": null
+      },
+      "credentials": [],
+      "trials": 1
+    },
+    {
+      "name": "container image",
+      "kind": "the Docker image and its entrypoint, which applies migrations and starts the bot",
+      "paths": [
+        "Dockerfile",
+        "docker/entrypoint.sh",
+        ".github/scripts/smoke.sh",
+        "migrations"
+      ],
+      "driver": "docker build with a built catalog archive, then .github/scripts/smoke.sh <image>, as .github/workflows/image.yml does",
+      "available": false,
+      "reach": "docker info >/dev/null 2>&1 && test -f catalog.tar.gz",
+      "sign_in": {
+        "method": "none",
+        "command": null
+      },
+      "credentials": [],
+      "trials": 1
+    },
+    {
+      "name": "silhouette game",
+      "kind": "Discord slash commands for the ship silhouette guessing game and its solves",
+      "paths": [
+        "crates/barnacle-guess/src",
+        "crates/barnacle-bot/src/solves.rs",
+        "crates/barnacle-bot/src/lookup.rs"
+      ],
+      "driver": "cargo test -p barnacle-guess and cargo test -p barnacle-bot --test guess_commands --test solves --test lookup --test series",
+      "available": true,
+      "reach": "cargo --version",
+      "sign_in": {
+        "method": "none",
+        "command": null
+      },
+      "credentials": [],
+      "trials": 1
+    },
+    {
+      "name": "IQ competition",
+      "kind": "Discord slash commands and panels for the IQ competition, its judging and its board",
+      "paths": [
+        "crates/barnacle-bot/src/iq.rs",
+        "crates/barnacle-bot/src/iq_setup.rs",
+        "crates/barnacle-bot/src/iq_store.rs",
+        "crates/barnacle-bot/src/iq_text.rs",
+        "crates/barnacle-bot/src/discord/iq.rs"
+      ],
+      "driver": "cargo test -p barnacle-bot with the iq_* tests",
+      "available": true,
+      "reach": "cargo --version",
+      "sign_in": {
+        "method": "none",
+        "command": null
+      },
+      "credentials": [],
+      "trials": 1
+    },
+    {
+      "name": "Join to Create voice rooms",
+      "kind": "Discord voice channels the bot opens and moves members into",
+      "paths": [
+        "crates/barnacle-bot/src/voice.rs",
+        "crates/barnacle-bot/src/voice_store.rs",
+        "crates/barnacle-bot/src/voice_text.rs",
+        "crates/barnacle-bot/src/discord/rooms.rs"
+      ],
+      "driver": "cargo test -p barnacle-bot --test voice --test voice_store",
+      "available": true,
+      "reach": "cargo --version",
+      "sign_in": {
+        "method": "none",
+        "command": null
+      },
+      "credentials": [],
+      "trials": 1
+    },
+    {
+      "name": "game data pipeline",
+      "kind": "the barnacle-data command line: sync, diff and use of the ship catalog",
+      "paths": [
+        "crates/barnacle-data/src",
+        "crates/barnacle-catalog/src",
+        "curation/ships.toml",
+        "catalog.version"
+      ],
+      "driver": "cargo test -p barnacle-data -p barnacle-catalog over the project's fixtures",
+      "available": true,
+      "reach": "cargo --version",
+      "sign_in": {
+        "method": "none",
+        "command": null
+      },
+      "credentials": [],
+      "trials": 1
+    },
+    {
+      "name": "live Discord bot",
+      "kind": "the running bot in a Discord test server, as a member sees its posts, panels and pings",
+      "paths": [
+        "crates/barnacle-bot/src/discord.rs",
+        "crates/barnacle-bot/src/discord"
+      ],
+      "driver": "cargo run --release -p barnacle-bot with the dev bot token, driven by a person in the Discord client in a rehearsal test server",
+      "available": false,
+      "reach": "test -f .env && test -f barnacle.toml && test -d /Applications/Discord.app",
+      "sign_in": {
+        "method": "none",
+        "command": null
+      },
+      "credentials": [
+        "DISCORD_TOKEN"
+      ],
+      "trials": 1
+    }
+  ],
+  "credentials": {
+    "file": ".env",
+    "names": {
+      "DISCORD_TOKEN": {
+        "production": false
+      }
+    }
+  },
+  "facts": {
+    "no local start": {
+      "value": "the bot has no local start step lighthouse can run: starting it connects to Discord with a bot token and registers slash commands in the servers barnacle.toml lists",
+      "confirmed": true,
+      "recheck": "read the Running the bot section of README.md and crates/barnacle-bot/src/main.rs"
+    },
+    "dev bot token": {
+      "value": "the .env token is a dev bot that may be run locally against a test server for probes",
+      "confirmed": false,
+      "recheck": "read agent.residue.access in receipts.config.json and ask the owner"
+    },
+    "rehearsal server": {
+      "value": "no rehearsal test server ID is recorded in the repository",
+      "confirmed": false,
+      "recheck": "read [rehearsal] in a local barnacle.toml"
+    },
+    "catalog": {
+      "value": "the container image and real-catalog tests need a built catalog, which the repository does not hold",
+      "confirmed": true,
+      "recheck": "read catalog.version, .gitignore and crates/barnacle-guess/tests/real_catalog.rs"
+    }
+  },
+  "off_limits": [
+    "starting the bot with a real Discord token, which registers slash commands and posts in real servers",
+    "running /rehearse reset or /event end in any server not confirmed to be a throwaway test server",
+    "running barnacle-data sync, which downloads game data from Wargaming's servers",
+    "pushing or publishing the container image"
+  ],
+  "measured": {
+    "commit": "33d65cf2200feaec39e6849c4d144eaeec651e99",
+    "measured_at": "2026-11-20T00:17:00.630Z",
+    "setup_seconds": 0.514,
+    "build_seconds": 50.497,
+    "start_seconds": null,
+    "ready": null,
+    "drivers": {
+      "event sign-ups and their post and clean-up timing": {
+        "seconds": 0.076,
+        "exit": 0
+      },
+      "rehearsal clock": {
+        "seconds": 0.078,
+        "exit": 0
+      },
+      "bot updates and release notes": {
+        "seconds": 0.079,
+        "exit": 0
+      },
+      "bot startup checks": {
+        "seconds": 0.074,
+        "exit": 0
+      },
+      "container image": {
+        "seconds": 0.724,
+        "exit": 1
+      },
+      "silhouette game": {
+        "seconds": 0.077,
+        "exit": 0
+      },
+      "IQ competition": {
+        "seconds": 0.074,
+        "exit": 0
+      },
+      "Join to Create voice rooms": {
+        "seconds": 0.076,
+        "exit": 0
+      },
+      "game data pipeline": {
+        "seconds": 0.078,
+        "exit": 0
+      },
+      "live Discord bot": {
+        "seconds": 0.076,
+        "exit": 1
+      }
+    }
+  }
+}

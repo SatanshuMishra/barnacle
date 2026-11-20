@@ -110,7 +110,19 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 
     It adds the IQ Competition's tables without touching the others, and carries the same run-once guard.
 
-15. Put the bot's token where the bot can find it. Copy `env.example` to `.env` and fill in the one value:
+15. Apply the later migrations once each, in this order, with the bot stopped and the database backed up as above:
+
+    ```bash
+    sqlite3 data/barnacle.sqlite3 < migrations/0010_organiser_roles.sql
+    sqlite3 data/barnacle.sqlite3 < migrations/0011_member_zones.sql
+    sqlite3 data/barnacle.sqlite3 < migrations/0012_iq_marks_and_judge_log.sql
+    sqlite3 data/barnacle.sqlite3 < migrations/0013_iq_players_and_rejections.sql
+    sqlite3 data/barnacle.sqlite3 < migrations/0014_event_post_timing.sql
+    ```
+
+    Each file carries the same run-once guard. When one is missing, the bot names the earliest missing file at startup.
+
+16. Put the bot's token where the bot can find it. Copy `env.example` to `.env` and fill in the one value:
 
     ```bash
     cp env.example .env && chmod 600 .env
@@ -118,7 +130,7 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 
     `.env` is ignored by git. A `DISCORD_TOKEN` already exported in your shell wins over the file, so you can override it for one run without editing anything.
 
-16. Start the bot:
+17. Start the bot:
 
     ```bash
     cargo run --release -p barnacle-bot
@@ -168,7 +180,7 @@ Every guess game action is a subcommand of `/guess`.
 
 Create a channel that only the bot can post in, and run `/event create` there. The bot needs View Channel, Send Messages, Embed Links and Read Message History in that channel, all of which the invite link above already grants. Every `/event` command needs Manage Server, and every reply is visible only to the person who ran it.
 
-An event holds one session on each of its weekdays from its first day to its last. For each session, the bot posts the sign-up message 24 hours ahead, closes it when the session starts, and deletes it 30 minutes after it ends. The bot has to be running for each of these steps: if it is down when a session's start passes, that session gets no sign-up post. Every time in a sign-up post is a Discord timestamp, so each member sees it in their own time zone.
+An event holds one session on each of its weekdays from its first day to its last. For each session, the bot posts the sign-up message, closes it when the session starts, and deletes it after it ends. By default the post goes up 24 hours ahead and is deleted 30 minutes after the session ends, and each event picks when its post goes up, 1 to 7 days ahead, and when it is deleted, from as soon as the session ends to 4 hours after. A post whose time has already passed goes up at once when its session is still ahead. The bot has to be running for each of these steps: if it is down when a session's start passes, that session gets no sign-up post. Every time in a sign-up post is a Discord timestamp, so each member sees it in their own time zone.
 
 `/event create` takes:
 - `name`, from 1 to 100 characters once surrounding spaces are trimmed. Two running events in one server cannot share a name, whatever its case; an event that has ended, or whose last post has been deleted, gives its name up.
@@ -176,9 +188,9 @@ An event holds one session on each of its weekdays from its first day to its las
 
 `/event create` saves nothing yet. It opens a private panel that walks through three steps, and the top of the panel always says which step it is on and sums up what has been picked so far: the days and how many sessions they hold, the start and length, and the first session still ahead.
 
-1. Days. A first-day menu lists today and the next 24 days, each with its weekday and how far off it is, and a last-day menu lists 25 days from the first day picked. "Today" is the date in the time zone of the server's most recently used event, or UTC when the server has none. A weekday menu picks the days of the week the event runs on; nothing is picked for you. Type dates further out opens a form for a first and last day written `YYYY-MM-DD`, with or without the weekday in brackets after it, such as `2026-11-06 (Friday)`. A typed first day before today, a last day before the first, and dates more than six months either side of today are refused. Next: time stays greyed out until a first day, a last day not before it, and at least one weekday that falls between them are picked.
+1. Days. A first-day menu lists today and the next 24 days, each with its weekday and how far off it is, and a last-day menu lists 25 days from the first day picked. "Today" is the date in the time zone of the server's most recently used event, or UTC when the server has none. A weekday menu picks the days of the week the event runs on; nothing is picked for you. Type dates further out opens a form for a first and last day written `YYYY-MM-DD`, with or without the weekday in brackets after it, such as `2026-11-06 (Friday)`. A first day in the past is kept; a last day before the first, and dates more than six months either side of today, are refused. Next: time stays greyed out until a first day, a last day not before it, and at least one weekday that falls between them are picked.
 2. Time. Menus pick the start hour, from 00:00 to 23:00, the start minute, on the hour or at :15, :30 or :45, how many hours each session runs, from 1 to 24, and the time zone. The zone menu lists the zones of the server's running events first, then a fixed list of common zones, and ends with Another zone, which opens a form for any place name such as `Asia/Tokyo`. An abbreviation such as `MDT`, an offset such as `UTC-6` and a name without a place such as `EST` are refused: they do not follow the place's own daylight saving changes, so a start written with one drifts by an hour twice a year. Next: pings stays greyed out until all four are picked.
-3. Pings. A role menu picks up to five roles to ping, empty at first, and a Ping @everyone button is off at first. Create checks the event again and saves it. Create stays greyed out, and the panel says so, when every session in the picked dates has already started.
+3. Pings. A role menu picks up to five roles to ping, empty at first, and a Ping @everyone button is off at first. After the role menu, a post lead menu picks how many days before each session the sign-up post goes up, from 1 to 7 days, with 1 day picked at first, and a clean-up menu picks how long after each session ends the post is deleted, from 0 minutes to 4 hours in 30-minute steps, with 30 minutes picked at first. Create checks the event again and saves it. Create stays greyed out, and the panel says so, when every session in the picked dates has already started.
 
 Back returns to the step before with every value kept, and Cancel closes the panel and saves nothing.
 

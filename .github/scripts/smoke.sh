@@ -89,7 +89,7 @@ ledger="$(docker run --rm \
 
 printf '\n=== checks ===\n'
 
-for migration in 0001_guess_solves 0002_cb_attendance 0003_cb_season_controls 0004_cb_rehearsal_harness 0005_voice_rooms 0006_cb_ping_roles 0007_bot_updates 0008_events 0009_iq_competition 0010_organiser_roles 0011_member_zones 0012_iq_marks_and_judge_log 0013_iq_players_and_rejections; do
+for migration in 0001_guess_solves 0002_cb_attendance 0003_cb_season_controls 0004_cb_rehearsal_harness 0005_voice_rooms 0006_cb_ping_roles 0007_bot_updates 0008_events 0009_iq_competition 0010_organiser_roles 0011_member_zones 0012_iq_marks_and_judge_log 0013_iq_players_and_rejections 0014_event_post_timing; do
     expect_present "first start applies $migration" "$first" "applying $migration"
 done
 expect_present 'first start renders the config from the environment' "$first" \
@@ -117,6 +117,7 @@ for stage in "$first" "$second" "$third"; do
     expect_absent 'the updates table is present' "$stage" 'updates table is missing'
     expect_absent 'the event columns are present' "$stage" 'event columns are missing'
     expect_absent 'the IQ multi-player tables are present' "$stage" 'multi-player tables are missing'
+    expect_absent 'the sign-up timing columns are present' "$stage" 'sign-up timing columns are missing'
 done
 
 expected_ledger='0001_guess_solves
@@ -131,7 +132,8 @@ expected_ledger='0001_guess_solves
 0010_organiser_roles
 0011_member_zones
 0012_iq_marks_and_judge_log
-0013_iq_players_and_rejections'
+0013_iq_players_and_rejections
+0014_event_post_timing'
 
 if [ "$ledger" = "$expected_ledger" ]; then
     report pass 'the migration ledger holds every migration'
