@@ -1,6 +1,6 @@
 # event-announce-and-cleanup-timing: Event announcement lead time, sign-up clean-up delay, and past dates allowed
 Status: parked
-Updated: 2026-11-20T00:14:20.807Z
+Updated: 2026-11-20T00:14:27.005Z
 Next ids: c6 D2 R1 S1
 
 ## Goal
@@ -21,9 +21,7 @@ Pull request 69 (msp post-timing) is merged into feat/event-announce-and-cleanup
 
 ## Next step
 
-Wait for the drive to integrate the merged msp and open the FEATURE pull request from feat/event-announce-and-cleanup-timing to main; when it rests, give the owner its link and park the thread.
-
-Needs: D1.
+The drive entered integrate and runs it next.
 
 ## Decisions in force
 
