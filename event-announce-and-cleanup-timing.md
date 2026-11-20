@@ -1,6 +1,6 @@
 # event-announce-and-cleanup-timing: Event announcement lead time, sign-up clean-up delay, and past dates allowed
 Status: parked
-Updated: 2026-11-20T00:12:39.000Z
+Updated: 2026-11-20T00:14:16.428Z
 Next ids: c6 D2 R1 S1
 
 ## Goal
@@ -21,9 +21,7 @@ The drive built, reviewed and shipped msp post-timing as pull request 69 (mitosi
 
 ## Next step
 
-The owner merges SatanshuMishra/barnacle pull request 69 (mitosis/post-timing into feat/event-announce-and-cleanup-timing); then resume this thread and run pipeline drive event --repo /Users/satanshumishra/Documents/DevLabs/barnacle --slug event-announce-and-cleanup-timing --name merged, so the drive integrates and opens the FEATURE pull request to main.
-
-Needs: D1.
+The drive entered post-merge and runs it next.
 
 ## Decisions in force
 
