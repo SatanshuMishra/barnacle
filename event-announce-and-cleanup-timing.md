@@ -1,6 +1,6 @@
 # event-announce-and-cleanup-timing: Event announcement lead time, sign-up clean-up delay, and past dates allowed
 Status: parked
-Updated: 2026-11-20T00:42:52.692Z
+Updated: 2026-11-20T00:48:12.963Z
 Next ids: c6 D2 R2 S1
 
 ## Goal
@@ -21,7 +21,7 @@ Draft FEATURE pull request 70 (feat/event-announce-and-cleanup-timing to main) a
 
 ## Next step
 
-When the owner merges FEATURE pull request 70: sync main, run pipeline drive event --repo /Users/satanshumishra/Documents/DevLabs/barnacle --slug event-announce-and-cleanup-timing --name feature-merged, then pipeline drive wait, which runs clean-up; close the thread once the drive rests after clean-up.
+The drive entered clean-up and runs it next.
 
 ## Decisions in force
 
