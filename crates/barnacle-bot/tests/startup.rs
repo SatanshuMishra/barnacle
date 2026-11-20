@@ -438,7 +438,7 @@ async fn a_database_without_the_live_name_index_is_told_to_apply_0008() {
     );
     let through_0008: Vec<&str> = THROUGH_0007
         .into_iter()
-        .chain([common::CB_EVENTS, POST_TIMING])
+        .chain([common::CB_EVENTS])
         .collect();
     migrated(&layout, &through_0008, "DROP INDEX cb_seasons_live_name;").await;
     let error = startup::open_stores(&layout.config.database)
@@ -458,7 +458,7 @@ async fn a_database_before_0009_is_told_to_apply_it() {
     );
     let through_0008: Vec<&str> = THROUGH_0007
         .into_iter()
-        .chain([common::CB_EVENTS, POST_TIMING])
+        .chain([common::CB_EVENTS])
         .collect();
     migrated(&layout, &through_0008, "").await;
     let error = startup::open_stores(&layout.config.database)
@@ -484,7 +484,7 @@ async fn a_database_without_the_live_competition_index_is_told_to_apply_0009() {
     );
     let through_0009: Vec<&str> = THROUGH_0007
         .into_iter()
-        .chain([common::CB_EVENTS, POST_TIMING, IQ_COMPETITION])
+        .chain([common::CB_EVENTS, IQ_COMPETITION])
         .collect();
     migrated(&layout, &through_0009, "DROP INDEX iq_competitions_live;").await;
     let error = startup::open_stores(&layout.config.database)
@@ -520,7 +520,6 @@ async fn a_database_rolled_back_from_0009_is_told_to_apply_it_again() {
             IQ_PLAYERS_DOWN,
             IQ_MARKS_DOWN,
             IQ_COMPETITION_DOWN,
-            POST_TIMING,
         ])
         .collect();
     migrated(&layout, &rolled_back, "").await;
@@ -529,7 +528,12 @@ async fn a_database_rolled_back_from_0009_is_told_to_apply_it_again() {
         .err()
         .unwrap();
     assert!(matches!(error, StartupError::Iq { .. }));
-    migrated(&layout, &[IQ_COMPETITION, IQ_MARKS, IQ_PLAYERS], "").await;
+    migrated(
+        &layout,
+        &[IQ_COMPETITION, IQ_MARKS, IQ_PLAYERS, POST_TIMING],
+        "",
+    )
+    .await;
     assert!(startup::open_stores(&layout.config.database).await.is_ok());
 }
 
@@ -542,7 +546,7 @@ async fn a_database_before_0010_is_told_to_apply_it() {
     );
     let through_0009: Vec<&str> = THROUGH_0007
         .into_iter()
-        .chain([common::CB_EVENTS, POST_TIMING, IQ_COMPETITION])
+        .chain([common::CB_EVENTS, IQ_COMPETITION])
         .collect();
     migrated(&layout, &through_0009, "").await;
     let error = startup::open_stores(&layout.config.database)
@@ -568,12 +572,7 @@ async fn a_database_before_0011_is_told_to_apply_it() {
     );
     let through_0010: Vec<&str> = THROUGH_0007
         .into_iter()
-        .chain([
-            common::CB_EVENTS,
-            POST_TIMING,
-            IQ_COMPETITION,
-            ORGANISER_ROLES,
-        ])
+        .chain([common::CB_EVENTS, IQ_COMPETITION, ORGANISER_ROLES])
         .collect();
     migrated(&layout, &through_0010, "").await;
     let error = startup::open_stores(&layout.config.database)
@@ -601,7 +600,6 @@ async fn a_database_before_0012_is_told_to_apply_it() {
         .into_iter()
         .chain([
             common::CB_EVENTS,
-            POST_TIMING,
             IQ_COMPETITION,
             ORGANISER_ROLES,
             MEMBER_ZONES,
@@ -633,7 +631,6 @@ async fn a_database_at_0012_is_told_to_apply_0013() {
         .into_iter()
         .chain([
             common::CB_EVENTS,
-            POST_TIMING,
             IQ_COMPETITION,
             ORGANISER_ROLES,
             MEMBER_ZONES,
@@ -656,13 +653,13 @@ async fn a_database_at_0012_is_told_to_apply_0013() {
 }
 
 #[tokio::test]
-async fn a_database_at_0013_opens() {
+async fn a_database_at_0014_opens() {
     let layout = layout(
         &yamato_catalog(),
         &["PJSB018", "PJSB019"],
         &curation_text(""),
     );
-    let through_0013: Vec<&str> = THROUGH_0007
+    let through_0014: Vec<&str> = THROUGH_0007
         .into_iter()
         .chain([
             common::CB_EVENTS,
@@ -674,7 +671,7 @@ async fn a_database_at_0013_opens() {
             POST_TIMING,
         ])
         .collect();
-    migrated(&layout, &through_0013, "").await;
+    migrated(&layout, &through_0014, "").await;
     assert!(startup::open_stores(&layout.config.database).await.is_ok());
 }
 
@@ -695,9 +692,7 @@ async fn a_database_rolled_back_from_0010_is_told_to_apply_it_again() {
             IQ_MARKS,
             IQ_PLAYERS,
             POST_TIMING,
-            POST_TIMING_DOWN,
             ORGANISER_ROLES_DOWN,
-            POST_TIMING,
         ])
         .collect();
     migrated(&layout, &rolled_back, "").await;

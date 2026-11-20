@@ -407,10 +407,11 @@ impl Attendance {
         if seasons == expected_columns(&SEASONS_BEFORE_EVENTS) {
             return Err(AttendanceError::BeforeEvents);
         }
-        if seasons == expected_columns(&SEASONS_BEFORE_POST_TIMING) {
-            return Err(AttendanceError::BeforePostTiming);
-        }
-        for (table, expected) in EXPECTED_COLUMNS {
+        let before_post_timing = seasons == expected_columns(&SEASONS_BEFORE_POST_TIMING);
+        let tables_to_check = EXPECTED_COLUMNS
+            .into_iter()
+            .filter(|(table, _)| !(before_post_timing && *table == CB_SEASONS));
+        for (table, expected) in tables_to_check {
             let found = columns(&pool, table).await?;
             if found.is_empty() {
                 return Err(AttendanceError::MissingTable { table });
@@ -428,6 +429,9 @@ impl Attendance {
             return Err(AttendanceError::MissingIndex {
                 index: LIVE_NAME_INDEX,
             });
+        }
+        if before_post_timing {
+            return Err(AttendanceError::BeforePostTiming);
         }
         Ok(Self { pool })
     }

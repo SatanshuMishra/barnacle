@@ -110,7 +110,19 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 
     It adds the IQ Competition's tables without touching the others, and carries the same run-once guard.
 
-15. Put the bot's token where the bot can find it. Copy `env.example` to `.env` and fill in the one value:
+15. Apply the later migrations once each, in this order, with the bot stopped and the database backed up as above:
+
+    ```bash
+    sqlite3 data/barnacle.sqlite3 < migrations/0010_organiser_roles.sql
+    sqlite3 data/barnacle.sqlite3 < migrations/0011_member_zones.sql
+    sqlite3 data/barnacle.sqlite3 < migrations/0012_iq_marks_and_judge_log.sql
+    sqlite3 data/barnacle.sqlite3 < migrations/0013_iq_players_and_rejections.sql
+    sqlite3 data/barnacle.sqlite3 < migrations/0014_event_post_timing.sql
+    ```
+
+    Each file carries the same run-once guard. When one is missing, the bot names the earliest missing file at startup.
+
+16. Put the bot's token where the bot can find it. Copy `env.example` to `.env` and fill in the one value:
 
     ```bash
     cp env.example .env && chmod 600 .env
@@ -118,7 +130,7 @@ Barnacle runs on your own machine and serves the catalog that `use` selected.
 
     `.env` is ignored by git. A `DISCORD_TOKEN` already exported in your shell wins over the file, so you can override it for one run without editing anything.
 
-16. Start the bot:
+17. Start the bot:
 
     ```bash
     cargo run --release -p barnacle-bot
