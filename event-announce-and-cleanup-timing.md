@@ -1,7 +1,7 @@
 # event-announce-and-cleanup-timing: Event announcement lead time, sign-up clean-up delay, and past dates allowed
 Status: parked
-Updated: 2026-11-20T00:39:12.522Z
-Next ids: c6 D2 R1 S1
+Updated: 2026-11-20T00:42:45.669Z
+Next ids: c6 D2 R2 S1
 
 ## Goal
 
@@ -9,25 +9,27 @@ Let an event's creator choose on the notification/ping page when the announcemen
 
 ## Done when
 
-- [ ] c1 The notification/ping page offers an announcement lead time from 1 to 7 days, defaulting to 1 day, and the announcement goes out that long before the start.
-- [ ] c2 The notification/ping page offers a sign-up clean-up delay from 0 minutes to 4 hours after the end, and the sign-up disappears that long after the end; locking at start time is unchanged and the next occurrence's announcement timing is unaffected.
-- [ ] c3 An event can be created with a start date in the past, and an announcement time already past for a future occurrence sends the announcement immediately; past occurrences get no announcement.
-- [ ] c4 The change is on its own branch with an open pull request against main and is not merged.
-- [ ] c5 Formatting, clippy with warnings as errors and the full test suite pass on the branch.
+- [x] c1 The notification/ping page offers an announcement lead time from 1 to 7 days, defaulting to 1 day, and the announcement goes out that long before the start. evidence: acceptance checks C1.1 to C13.1 pass 41 of 41 on the FEATURE branch and fail 41 of 41 on main.
+- [x] c2 The notification/ping page offers a sign-up clean-up delay from 0 minutes to 4 hours after the end, and the sign-up disappears that long after the end; locking at start time is unchanged and the next occurrence's announcement timing is unaffected. evidence: the same 41 acceptance checks.
+- [x] c3 An event can be created with a start date in the past, and an announcement time already past for a future occurrence sends the announcement immediately; past occurrences get no announcement. evidence: the same 41 acceptance checks.
+- [x] c4 The change is on its own branch with an open pull request against main and is not merged. evidence: draft pull request 70 from feat/event-announce-and-cleanup-timing to main is open.
+- [x] c5 Formatting, clippy with warnings as errors and the full test suite pass on the branch. evidence: pull request 70's CI test job (cargo fmt --check, clippy -D warnings, cargo test --workspace) passes; the local image build and smoke.sh pass every check, migration 0014 included.
 
 ## Where things stand
 
-The drive rests at draft-pr with draft FEATURE pull request 70 (feat/event-announce-and-cleanup-timing to main), awaiting feature-merged; CI passes. Its unproven checks are the container image and a live Discord server. Docker is now reachable, so the FEATURE image is building in a scratchpad worktree with the release catalog, followed by the smoke script, which gains an uncommitted check that no start reports the sign-up timing columns missing. Run home: ~/.mitosis/barnacle/event-announce-and-cleanup-timing.
+Draft FEATURE pull request 70 (feat/event-announce-and-cleanup-timing to main) awaits the owner's merge; the drive rests at draft-pr, awaiting feature-merged. Run home: ~/.mitosis/barnacle/event-announce-and-cleanup-timing.
 
 ## Next step
 
-When the image build and smoke run finish, commit the smoke script's new sign-up timing check to feat/event-announce-and-cleanup-timing if the run passes, record the container result on FEATURE pull request 70, and park the thread for the owner to merge it.
+When the owner merges FEATURE pull request 70: sync main, run pipeline drive event --repo /Users/satanshumishra/Documents/DevLabs/barnacle --slug event-announce-and-cleanup-timing --name feature-merged, then pipeline drive wait, which runs clean-up; close the thread once the drive rests after clean-up.
 
 ## Decisions in force
 
 - D1 hand-off: build the post-timing spec unattended through mitosis: Hand the spec to the drive now: pipeline setup, then drive start, ending in a pull request the owner merges.
 
 ## Open risks
+
+- R1 Sign-up posts going up and coming down on each event's timing is unproven in a live Discord server; the owner can check it after deploy.
 
 ## Settled, do not reopen
 
