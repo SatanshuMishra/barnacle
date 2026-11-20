@@ -117,6 +117,7 @@ for stage in "$first" "$second" "$third"; do
     expect_absent 'the updates table is present' "$stage" 'updates table is missing'
     expect_absent 'the event columns are present' "$stage" 'event columns are missing'
     expect_absent 'the IQ multi-player tables are present' "$stage" 'multi-player tables are missing'
+    expect_absent 'the sign-up timing columns are present' "$stage" 'sign-up timing columns are missing'
 done
 
 expected_ledger='0001_guess_solves
