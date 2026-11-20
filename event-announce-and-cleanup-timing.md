@@ -1,6 +1,6 @@
 # event-announce-and-cleanup-timing: Event announcement lead time, sign-up clean-up delay, and past dates allowed
 Status: parked
-Updated: 2026-11-20T00:42:45.669Z
+Updated: 2026-11-20T00:42:52.692Z
 Next ids: c6 D2 R2 S1
 
 ## Goal
