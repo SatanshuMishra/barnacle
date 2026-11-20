@@ -1,6 +1,6 @@
 # event-announce-and-cleanup-timing: Event announcement lead time, sign-up clean-up delay, and past dates allowed
 Status: parked
-Updated: 2026-11-20T00:14:16.428Z
+Updated: 2026-11-20T00:14:20.807Z
 Next ids: c6 D2 R1 S1
 
 ## Goal
@@ -17,11 +17,13 @@ Let an event's creator choose on the notification/ping page when the announcemen
 
 ## Where things stand
 
-The drive built, reviewed and shipped msp post-timing as pull request 69 (mitosis/post-timing into feat/event-announce-and-cleanup-timing, 28 files) and rests in awaiting-merge; its CI was still running when it rested. Run home: ~/.mitosis/barnacle/event-announce-and-cleanup-timing.
+Pull request 69 (msp post-timing) is merged into feat/event-announce-and-cleanup-timing; the drive holds the run after the merged event, integrating toward the FEATURE pull request to main. Run home: ~/.mitosis/barnacle/event-announce-and-cleanup-timing.
 
 ## Next step
 
-The drive entered post-merge and runs it next.
+Wait for the drive to integrate the merged msp and open the FEATURE pull request from feat/event-announce-and-cleanup-timing to main; when it rests, give the owner its link and park the thread.
+
+Needs: D1.
 
 ## Decisions in force
 
